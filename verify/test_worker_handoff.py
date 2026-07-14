@@ -50,6 +50,7 @@ class WorkerHandoffContract(unittest.TestCase):
         events = []
         exported = {}
         self.mp.ensure_worker_doctrine = lambda cwd: events.append(os.path.realpath(cwd))
+        self.mp.compile_owner_task_spec = lambda _task_id: "/tmp/task-123.json"
         self.mp.window_exists = lambda _target: True
         self.mp.load_roster = lambda: []
         self.mp.update_roster = lambda _rec: None
@@ -71,6 +72,7 @@ class WorkerHandoffContract(unittest.TestCase):
             ))
             self.assertEqual(events, [os.path.realpath(tmp)])
             self.assertEqual(exported["OWNER_TASK_ID"], "task-123")
+            self.assertEqual(exported["MYPEOPLE_TASKSPEC_PATH"], "/tmp/task-123.json")
 
 
     def test_created_owner_worker_crosses_trust_gate_and_receives_handoff_contract(self):
@@ -83,6 +85,7 @@ class WorkerHandoffContract(unittest.TestCase):
         self.mp.recorder = lambda *_args: None
         self.mp.run_tmux = lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
         self.mp.ensure_worker_doctrine = lambda _cwd: None
+        self.mp.compile_owner_task_spec = lambda _task_id: "/tmp/task-ready.json"
         self.mp.wait_for_composer = lambda target: events.append(("wait", target)) or True
         self.mp.tmux_send_message = lambda target, message: events.append(("send", target, message)) or True
 
@@ -101,6 +104,9 @@ class WorkerHandoffContract(unittest.TestCase):
         self.assertIn(("wait", "mc-main:eng-ready"), events)
         sent = [event for event in events if event[0] == "send"]
         self.assertEqual(len(sent), 1)
+        self.assertIn("TaskSpec", sent[0][2])
+        self.assertIn("MYPEOPLE_TASKSPEC_PATH", sent[0][2])
+        self.assertLess(sent[0][2].index("TaskSpec"), sent[0][2].index("AGENTS.md"))
         self.assertIn("AGENTS.md", sent[0][2])
         self.assertIn("mp complete", sent[0][2])
         self.assertIn("task-ready", sent[0][2])

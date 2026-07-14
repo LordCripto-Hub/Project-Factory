@@ -8,8 +8,64 @@ from provider_profiles import (
     resolve_model,
     resolve_profile,
 )
+from project_context import (
+    ProfileError,
+    TaskSpecError,
+    compile_task_spec,
+    load_profile,
+    write_task_spec,
+)
 
 INSTALL_DIR = ROOT
+
+
+def compile_owner_task_spec(task_id):
+    started = time.monotonic()
+    todo_base = (
+        os.environ.get("MYPEOPLE_TODO_URL")
+        or os.environ.get("TODO_URL")
+        or f"http://127.0.0.1:{ENV.get('TODO_PORT', '9933')}"
+    )
+    try:
+        board = http_json(
+            "/todo/board", base=todo_base, token=ENV.get("QUEUE_SECRET", "")
+        )
+        task = (board.get("tasks") or {}).get(task_id)
+        if not isinstance(task, dict):
+            raise TaskSpecError("unknown_task")
+        slug = str(task.get("projectSlug") or "").strip()
+        if not slug:
+            raise TaskSpecError("project_slug_required")
+        profiles_dir = os.path.realpath(
+            ENV.get("PROJECT_PROFILES_DIR", os.path.join(ROOT, "run", "project-profiles"))
+        )
+        profile = load_profile(profiles_dir, slug)
+        spec = compile_task_spec(task, profile)
+        taskspecs_dir = os.path.realpath(
+            ENV.get("TASKSPECS_DIR", os.path.join(ROOT, "run", "taskspecs"))
+        )
+        taskspec_path = write_task_spec(taskspecs_dir, task_id, spec)
+    except ProfileError as error:
+        raise TaskSpecError(error.code) from error
+    event = {
+        "taskId": task_id,
+        "projectSlug": spec["projectSlug"],
+        "profileRevision": spec["profileRevision"],
+        "memoryStatus": spec["memoryStatus"],
+        "claimCount": len(spec["memoryClaims"]),
+        "elapsedMilliseconds": round((time.monotonic() - started) * 1000),
+        "responseCharacters": sum(len(x.get("content", "")) for x in spec["memoryClaims"]),
+        "aiUsage": "not_measured",
+    }
+    events_path = os.path.join(ROOT, "run", "taskspec-events.jsonl")
+    os.makedirs(os.path.dirname(events_path), exist_ok=True)
+    descriptor = os.open(events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(events_path, 0o600)
+    return taskspec_path
 
 CODEX_BOSS_POLICY = """
 ## Codex backend policy
@@ -163,6 +219,15 @@ def spawn(ns):
         result=http_json("/task/submit","POST",{"type":"spawn","target_agent":aid,"payload":payload})
         print(result["task_id"]); return
     boss = full_agent_id(raw_boss) if raw_boss is not None else ""
+    taskspec_path = ""
+    if ns.owner_task:
+        try:
+            taskspec_path = compile_owner_task_spec(ns.owner_task)
+        except TaskSpecError as error:
+            message = f"[taskspec] task {ns.owner_task} blocked: {error.code}. Fix the project/profile/context request and retry."
+            if boss:
+                notify_agent(boss, message)
+            raise SystemExit(message) from error
     target=f"mc-{session}:{tab}"
     model = ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL)
     profile_id = ""
@@ -212,6 +277,8 @@ def spawn(ns):
         pass
     launch_env={"AGENT_ID":aid,"QUEUE_URL":ENV.get("QUEUE_URL","http://127.0.0.1:9900"),"TODO_URL":os.environ.get("MYPEOPLE_TODO_URL") or os.environ.get("TODO_URL") or f"http://127.0.0.1:{ENV.get('TODO_PORT','9933')}","QUEUE_SECRET":ENV["QUEUE_SECRET"],
                 "HOST_ID":ENV["HOST_ID"],"INSTALL_DIR":ROOT,"BOSS_ID":boss or None,"OWNER_TASK_ID":ns.owner_task or "","LANG":"C.UTF-8","LC_ALL":"C.UTF-8"}
+    if taskspec_path:
+        launch_env["MYPEOPLE_TASKSPEC_PATH"] = taskspec_path
     if provider_home:
         launch_env["CODEX_HOME"] = provider_home
     if os.environ.get("VERIFY_RESERVED_OWNER_ID"):
@@ -238,6 +305,8 @@ def spawn(ns):
     rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"state":"alive",
          "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
          "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time())}
+    if taskspec_path:
+        rec["taskspec_path"] = taskspec_path
     if profile_id:
         rec["provider_profile"] = profile_id
     if ns.master: rec["summary"]="autonomous plan approve queue mp verify fire-and-forget"
@@ -253,7 +322,7 @@ def spawn(ns):
         tmux_send_message(target,f"Read {doctrine_name} and internalize the Nightwatch approve/edit/reject protocol. Reply with a concise nightwatch, CEO-equivalent, approve, WhatsApp, never-done readiness summary.")
     elif created and ns.owner_task and ns.backend == "codex":
         wait_for_composer(target)
-        tmux_send_message(target,f"Read AGENTS.md, work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
+        tmux_send_message(target,f"Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH, then read AGENTS.md. Work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
     print(aid)
 
 def notify_agent(agent_id, message):
