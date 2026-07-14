@@ -309,8 +309,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             item["used"]=True
         if kind=="nightwatch" and op=="set" and (d.get("state")=="done" or d.get("done") is True or d.get("workToDone") is True):return self.json({"ok":False,"error":"nightwatch_cannot_done"},403)
         try:
-            project_slug=validate_project_slug(d.get("projectSlug",""),allow_empty=True) if op in ("add","set") else ""
-            context_question=validate_context_question(d.get("contextQuestion","")) if op in ("add","set") else ""
+            project_slug=(validate_project_slug(d.get("projectSlug"),allow_empty=True) if "projectSlug" in d else None) if op=="set" else validate_project_slug(d.get("projectSlug",""),allow_empty=True) if op=="add" else None
+            context_question=(validate_context_question(d.get("contextQuestion")) if "contextQuestion" in d else None) if op=="set" else validate_context_question(d.get("contextQuestion","")) if op=="add" else None
         except ValueError as e:
             return self.json({"ok":False,"error":str(e)},400)
         with STORE_LOCK:
@@ -342,7 +342,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 t["state"]=desired;t["evidencePolicy"]=policy
                 for k in ("text","doneCondition","workToDone"):
                     if k in d:t[k]=d[k]
-                t["projectSlug"]=project_slug;t["contextQuestion"]=context_question
+                if project_slug is not None:t["projectSlug"]=project_slug
+                if context_question is not None:t["contextQuestion"]=context_question
                 t["verified"]=verified
                 t["updated"]=time.time();self.close_reopen(t,old,desired,d.get("by",d.get("actor","")))
                 if old!=desired and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {desired}",d.get("by",d.get("actor","")))

@@ -73,6 +73,32 @@ class TaskProjectFieldsContract(unittest.TestCase):
         (directory / "Bad Name.json").write_text("{}", encoding="utf-8")
         self.assertEqual(self.server.available_project_slugs(), ["mypeople"])
 
+    def test_partial_update_preserves_project_context(self):
+        board = self.server.default_board()
+        board["tasks"]["task-1"] = self.server.normalize_task({
+            "id": "task-1",
+            "text": "Original",
+            "projectSlug": "mypeople",
+            "contextQuestion": "Which constraint applies?",
+        })
+        board["order"] = ["task-1"]
+        self.server.save_board(board, allow_shrink=True)
+
+        class Response:
+            def json(self, body, status=200):
+                return status, body
+            def close_reopen(self, *_args):
+                return None
+
+        status, body = self.server.Handler.update(
+            Response(), "boss", {"op": "set", "id": "task-1", "text": "Changed"}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        task = self.server.load_board()["tasks"]["task-1"]
+        self.assertEqual(task["projectSlug"], "mypeople")
+        self.assertEqual(task["contextQuestion"], "Which constraint applies?")
+
     def test_priorities_exposes_project_and_context_controls(self):
         html = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
         for marker in (
