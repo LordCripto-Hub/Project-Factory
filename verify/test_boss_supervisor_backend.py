@@ -19,6 +19,15 @@ class SupervisorBackendContract(unittest.TestCase):
         self.assertIn('jq -e --arg aid "$boss_id"', self.source)
         self.assertIn('"$ROOT/bin/mp" revive "$boss_id"', self.source)
 
+    def test_provider_switch_lock_pauses_automatic_revival(self):
+        loop = self.source.index("while :; do")
+        guard = self.source.index('[[ -f "$ROOT/run/provider-switch.lock" ]]', loop)
+        pause = self.source.index("sleep 1", guard)
+        boss_check = self.source.index("tmux has-session -t mc-main:Boss", pause)
+        self.assertLess(loop, guard)
+        self.assertLess(guard, pause)
+        self.assertLess(pause, boss_check)
+
     def test_empty_roster_bootstraps_boss_with_codex_sol(self):
         roster_check = self.source.index('jq -e --arg aid "$boss_id"')
         revive = self.source.index('"$ROOT/bin/mp" revive "$boss_id"', roster_check)

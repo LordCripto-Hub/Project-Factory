@@ -6,6 +6,10 @@ log="$ROOT/run/boss-supervisor.log"
 boss_id="$HOST_ID/main:Boss"
 nightwatch_id="$HOST_ID/nightwatch:Nightwatch"
 while :; do
+  if [[ -f "$ROOT/run/provider-switch.lock" ]]; then
+    sleep 1
+    continue
+  fi
   if ! tmux has-session -t mc-main:Boss >/dev/null 2>&1; then
     if jq -e --arg aid "$boss_id" '.[] | select(.agent_id == $aid)' "$ROOT/run/roster.json" >/dev/null 2>&1; then
       if ! "$ROOT/bin/mp" revive "$boss_id" >>"$log" 2>&1; then

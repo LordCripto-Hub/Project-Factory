@@ -7,9 +7,12 @@ import copy
 import importlib.machinery
 import importlib.util
 import os
+from pathlib import Path
 import shlex
+import tempfile
 import tomllib
 import unittest
+from unittest import mock
 
 
 def load_runtime(path: str):
@@ -57,6 +60,67 @@ class CodexBossContract(unittest.TestCase):
         ])
         self.assertEqual(ns.backend, "codex")
         self.assertEqual(ns.model, "gpt-5.6-sol")
+
+    def test_spawn_exports_effective_provider_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bindings = root / "provider-bindings.json"
+            profiles = root / "provider-profiles.json"
+            provider_homes = root / "provider-homes"
+            cwd = root / "boss"
+            bindings.write_text(
+                '{"globalProfile":"codex-primary","agentProfiles":{}}',
+                encoding="utf-8",
+            )
+            profiles.write_text(
+                '{"codex-primary":{"defaultModel":"gpt-5.6-luna",'
+                '"roleModels":{"boss":"gpt-5.6-sol"}}}',
+                encoding="utf-8",
+            )
+            launch_env = {}
+            records = []
+
+            def capture_env(environment):
+                launch_env.update(environment)
+                return "true"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PROVIDER_BINDINGS_PATH": str(bindings),
+                    "PROVIDER_PROFILES_PATH": str(profiles),
+                    "PROVIDER_HOMES_DIR": str(provider_homes),
+                },
+                clear=False,
+            ):
+                with mock.patch.object(self.mp, "shell_export", capture_env), \
+                     mock.patch.object(self.mp, "window_exists", return_value=False), \
+                     mock.patch.object(self.mp, "run_tmux", return_value=Result()), \
+                     mock.patch.object(self.mp, "load_roster", return_value=[]), \
+                     mock.patch.object(self.mp, "update_roster", side_effect=records.append), \
+                     mock.patch.object(self.mp, "queue_register"), \
+                     mock.patch.object(self.mp, "recorder"), \
+                     mock.patch.object(self.mp, "wait_for_composer", return_value=False), \
+                     mock.patch.object(self.mp, "tmux_send_message"), \
+                     mock.patch.object(self.mp, "ensure_codex_doctrine"):
+                    self.mp.spawn(
+                        argparse.Namespace(
+                            agent_id=self.agent_id,
+                            backend="codex",
+                            cwd=str(cwd),
+                            boss=None,
+                            master=True,
+                            model=None,
+                            owner_task=None,
+                            temporary=False,
+                        )
+                    )
+
+            expected_home = str(provider_homes / "codex" / "codex-primary")
+            self.assertEqual(launch_env["CODEX_HOME"], expected_home)
+            self.assertEqual(records[0]["provider_profile"], "codex-primary")
+            self.assertEqual(records[0]["model"], "gpt-5.6-sol")
+            self.assertTrue(provider_homes.joinpath("codex", "codex-primary").is_dir())
 
     def test_switch_persists_desired_backend_before_stopping_window(self):
         rec = {

@@ -81,6 +81,44 @@ docker exec mypeople /home/mp/mypeople/bin/mp switch nightwatch:Nightwatch --bac
 
 `mp switch` saves the requested configuration before closing and reviving the tmux window. Future supervisor revival preserves the selected backend and model.
 
+## Switching provider accounts
+
+Provider profiles keep authentication separate from role and model selection. Credentials remain in the protected local Windows store under `%LOCALAPPDATA%\MyPeople\credentials`; they are copied into isolated runtime homes and are never committed to Git.
+
+Save the current Windows Codex login once:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Save-MyPeopleProviderProfile.ps1 -Provider codex -Profile codex-primary -FromCurrentWindowsLogin
+```
+
+Switch every agent that inherits the global profile:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Switch-MyPeopleProviderProfile.ps1 -Profile codex-primary
+```
+
+Assign a profile only to Boss:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Switch-MyPeopleProviderProfile.ps1 -Profile codex-primary -Agent node-1/main:Boss
+```
+
+Remove that override and make Boss inherit the global profile again:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Switch-MyPeopleProviderProfile.ps1 -InheritGlobal -Agent node-1/main:Boss
+```
+
+Inspect non-secret status without making a paid provider request:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Get-MyPeopleProviderStatus.ps1
+```
+
+A switch is transactional: it records bounded handoffs, stops only the selected active roles, installs and validates the target profile, writes bindings atomically, revives Boss before Nightwatch and workers, verifies the roster, and commits. A failed phase restores the previous binding and revives the prior roster. Startup rehydrates the configured global profile before services launch.
+
+Profile switching currently uses PowerShell. HUD controls for global and per-agent account selection are a future interface layer over this same transaction contract.
+
 ## Creating a worker manually
 
 Boss normally creates workers. For an advanced owner-task test:

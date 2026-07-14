@@ -23,6 +23,16 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertNotIn("docker run", text)
         self.assertNotIn("docker compose down", text)
 
+    def test_launcher_rehydrates_provider_before_starting_agents(self):
+        text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
+        container_start = text.index("docker start mypeople")
+        rehydrate = text.index("& $adapter.ActivateProfile")
+        start_agents = text.index("mypeople up --detach")
+        self.assertLess(container_start, rehydrate)
+        self.assertLess(rehydrate, start_agents)
+        self.assertIn("& $adapter.ValidateRuntime", text)
+        self.assertIn("No provider binding configured", text)
+
     def test_shortcut_installer_targets_hidden_powershell_launcher(self):
         text = (ROOT / "windows" / "Install-MyPeopleShortcut.ps1").read_text(encoding="utf-8")
         self.assertIn("CreateShortcut", text)

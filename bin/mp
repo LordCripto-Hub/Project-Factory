@@ -2,6 +2,12 @@
 from __future__ import annotations
 import argparse, json, mimetypes, os, pathlib, shlex, signal, subprocess, sys, time, uuid, urllib.request
 from mpcommon import *
+from provider_profiles import (
+    codex_home,
+    load_json as load_provider_json,
+    resolve_model,
+    resolve_profile,
+)
 
 INSTALL_DIR = ROOT
 
@@ -158,7 +164,42 @@ def spawn(ns):
         print(result["task_id"]); return
     boss = full_agent_id(raw_boss) if raw_boss is not None else ""
     target=f"mc-{session}:{tab}"
-    aid, host, session, tab, cwd, boss, args = _build_launch_args(aid, ns.cwd, boss, ns.master, ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL), ns.backend)
+    model = ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL)
+    profile_id = ""
+    provider_home = ""
+    if ns.backend == "codex":
+        bindings = load_provider_json(
+            os.environ.get(
+                "PROVIDER_BINDINGS_PATH",
+                os.path.join(ROOT, "run", "provider-bindings.json"),
+            ),
+            {},
+        )
+        profiles = load_provider_json(
+            os.environ.get(
+                "PROVIDER_PROFILES_PATH",
+                os.path.join(ROOT, "run", "provider-profiles.json"),
+            ),
+            {},
+        )
+        if bindings.get("globalProfile"):
+            profile_id = resolve_profile(bindings, aid)
+            profile = profiles.get(profile_id, {}) if isinstance(profiles, dict) else {}
+            if ns.model is None:
+                role = "boss" if ns.master else "nightwatch" if tab == "Nightwatch" else "engineer"
+                model = resolve_model(profile, role)
+            provider_home = codex_home(
+                os.environ.get(
+                    "PROVIDER_HOMES_DIR",
+                    os.path.join(ROOT, "run", "provider-homes"),
+                ),
+                profile_id,
+            )
+            os.makedirs(provider_home, mode=0o700, exist_ok=True)
+            os.chmod(provider_home, 0o700)
+    aid, host, session, tab, cwd, boss, args = _build_launch_args(
+        aid, ns.cwd, boss, ns.master, model, ns.backend
+    )
     if ns.backend == "codex" and ns.master:
         ensure_codex_doctrine(cwd)
     elif ns.backend == "codex" and tab == "Nightwatch":
@@ -169,9 +210,10 @@ def spawn(ns):
         ensure_worker_doctrine(cwd)
     if ns.model is not None and ns.master is False and tab != "Nightwatch":
         pass
-    model = ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL)
     launch_env={"AGENT_ID":aid,"QUEUE_URL":ENV.get("QUEUE_URL","http://127.0.0.1:9900"),"TODO_URL":os.environ.get("MYPEOPLE_TODO_URL") or os.environ.get("TODO_URL") or f"http://127.0.0.1:{ENV.get('TODO_PORT','9933')}","QUEUE_SECRET":ENV["QUEUE_SECRET"],
                 "HOST_ID":ENV["HOST_ID"],"INSTALL_DIR":ROOT,"BOSS_ID":boss or None,"OWNER_TASK_ID":ns.owner_task or "","LANG":"C.UTF-8","LC_ALL":"C.UTF-8"}
+    if provider_home:
+        launch_env["CODEX_HOME"] = provider_home
     if os.environ.get("VERIFY_RESERVED_OWNER_ID"):
         launch_env["VERIFY_RESERVED_OWNER_ID"]=os.environ["VERIFY_RESERVED_OWNER_ID"]
     command=shell_export(launch_env)+"; exec "+shlex.join(args)
@@ -196,6 +238,8 @@ def spawn(ns):
     rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"state":"alive",
          "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
          "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time())}
+    if profile_id:
+        rec["provider_profile"] = profile_id
     if ns.master: rec["summary"]="autonomous plan approve queue mp verify fire-and-forget"
     if tab=="Nightwatch": rec["summary"]="nightwatch ceo-equivalent approve whatsapp never-done"
     update_roster(rec); write_status(aid,"starting",rec.get("summary",""),boss_id=boss,backend=ns.backend)

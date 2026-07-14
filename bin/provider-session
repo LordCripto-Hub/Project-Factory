@@ -1,0 +1,432 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+from mpcommon import (
+    ROOT,
+    atomic_json,
+    load_json,
+    load_roster,
+    run_tmux,
+    save_roster,
+    tmux_target,
+    window_exists,
+)
+from provider_profiles import validate_profile_id
+
+
+RUN_ROOT = os.path.realpath(
+    os.environ.get("MYPEOPLE_RUN_DIR", os.path.join(ROOT, "run"))
+)
+LOCK_PATH = os.path.realpath(
+    os.environ.get("PROVIDER_SWITCH_LOCK", os.path.join(RUN_ROOT, "provider-switch.lock"))
+)
+BINDINGS_PATH = os.path.realpath(
+    os.environ.get(
+        "PROVIDER_BINDINGS_PATH", os.path.join(RUN_ROOT, "provider-bindings.json")
+    )
+)
+TRANSACTIONS_ROOT = os.path.realpath(
+    os.environ.get(
+        "PROVIDER_TRANSACTIONS_DIR",
+        os.path.join(RUN_ROOT, "provider-transactions"),
+    )
+)
+
+PUBLIC_HANDOFF_FIELDS = (
+    "agent_id",
+    "backend",
+    "model",
+    "provider_profile",
+    "lifecycle",
+    "owner_task_id",
+    "boss_id",
+    "is_master",
+    "state",
+    "status",
+    "summary",
+)
+
+
+class SwitchBusy(RuntimeError):
+    pass
+
+
+def _private_dir(path: str) -> None:
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def acquire_lock(path: str, transaction_id: str) -> None:
+    transaction_id = validate_profile_id(transaction_id)
+    path = os.path.realpath(path)
+    _private_dir(os.path.dirname(path))
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise SwitchBusy("a provider switch is already active") from exc
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"transaction": transaction_id, "created": time.time()},
+                handle,
+                sort_keys=True,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(path, 0o600)
+    except Exception:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def release_lock(path: str, transaction_id: str) -> None:
+    transaction_id = validate_profile_id(transaction_id)
+    path = os.path.realpath(path)
+    current = load_json(path, {})
+    if current.get("transaction") != transaction_id:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def redact(text: str) -> str:
+    value = str(text or "")
+    substitutions = (
+        (
+            re.compile(
+                r"(?i)authorization\s*:\s*bearer\s+[A-Za-z0-9._-]+"
+            ),
+            "Authorization: Bearer [REDACTED]",
+        ),
+        (
+            re.compile(
+                r"(?i)(?<![A-Za-z0-9])(?:tskey-auth-|sk-|ghp_|github_pat_)"
+                r"[A-Za-z0-9._-]+"
+            ),
+            "[REDACTED_TOKEN]",
+        ),
+        (
+            re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"),
+            "[REDACTED_EMAIL]",
+        ),
+        (
+            re.compile(r"(?i)[A-Z]:\\Users\\[^\r\n]+"),
+            "[REDACTED_WINDOWS_PATH]",
+        ),
+        (
+            re.compile(r"/" + r"Users/[^/\r\n]+(?:/[^\r\n]*)?"),
+            "[REDACTED_MACOS_PATH]",
+        ),
+    )
+    for pattern, replacement in substitutions:
+        value = pattern.sub(replacement, value)
+    return value
+
+
+def build_handoff(record: dict, terminal_tail: str, limit: int = 4000) -> dict:
+    public = {}
+    for key in PUBLIC_HANDOFF_FIELDS:
+        if key not in record:
+            continue
+        value = record[key]
+        public[key] = redact(value) if isinstance(value, str) else value
+    bounded = max(0, int(limit))
+    tail = redact(terminal_tail)
+    if bounded:
+        tail = tail[-bounded:]
+    else:
+        tail = ""
+    return {"agent": public, "terminalTail": tail}
+
+
+def active_provider_roster(roster: list[dict]) -> list[dict]:
+    return [
+        row
+        for row in roster
+        if row.get("backend") in {"codex", "claude"}
+        and row.get("state") == "alive"
+        and not row.get("retired")
+    ]
+
+
+def revival_order(roster: list[dict]) -> list[dict]:
+    def priority(item):
+        index, row = item
+        agent_id = str(row.get("agent_id", ""))
+        if row.get("is_master") or agent_id.endswith(":Boss"):
+            return 0, index
+        if agent_id.endswith(":Nightwatch") or "/nightwatch:" in agent_id:
+            return 1, index
+        return 2, index
+
+    return [row for _, row in sorted(enumerate(roster), key=priority)]
+
+
+def snapshot(transaction_dir: str, roster: list[dict], bindings: dict) -> None:
+    transaction_dir = os.path.realpath(transaction_dir)
+    _private_dir(transaction_dir)
+    atomic_json(os.path.join(transaction_dir, "roster.json"), roster, mode=0o600)
+    atomic_json(os.path.join(transaction_dir, "bindings.json"), bindings, mode=0o600)
+
+
+def _selected(roster: list[dict], selected_agent: str = "") -> list[dict]:
+    if not selected_agent:
+        return list(roster)
+    selected = [row for row in roster if row.get("agent_id") == selected_agent]
+    if not selected:
+        raise RuntimeError("selected agent is absent from the roster")
+    return selected
+
+
+def run_mp(arguments: list[str]) -> None:
+    subprocess.run(
+        [os.path.join(ROOT, "bin", "mp"), *arguments],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def stop_agents(roster: list[dict], selected_agent: str = "") -> None:
+    for row in _selected(roster, selected_agent):
+        run_mp(
+            [
+                "kill",
+                row["agent_id"],
+                "--reason",
+                "provider-profile-switch",
+            ]
+        )
+
+
+def revive_agents(roster: list[dict], selected_agent: str = "") -> None:
+    for row in revival_order(_selected(roster, selected_agent)):
+        run_mp(["revive", row["agent_id"]])
+
+
+def verify_roles(roster: list[dict], selected_agent: str = "") -> None:
+    actual = {row.get("agent_id"): row for row in load_roster()}
+    role_fields = ("backend", "is_master", "boss_id", "lifecycle", "owner_task_id")
+    failures = []
+    for expected in _selected(roster, selected_agent):
+        agent_id = expected["agent_id"]
+        current = actual.get(agent_id)
+        if current is None or current.get("state") != "alive":
+            failures.append(agent_id)
+            continue
+        if not window_exists(tmux_target(agent_id)):
+            failures.append(agent_id)
+            continue
+        if any(
+            field in expected and current.get(field) != expected.get(field)
+            for field in role_fields
+        ):
+            failures.append(agent_id)
+    if failures:
+        raise RuntimeError("provider switch role verification failed")
+
+
+def rollback(transaction_dir: str) -> None:
+    transaction_dir = os.path.realpath(transaction_dir)
+    state_path = os.path.join(transaction_dir, "state.json")
+    state = load_json(state_path, {})
+    transaction_id = validate_profile_id(state.get("transaction"))
+    selected_agent = str(state.get("selectedAgent") or "")
+    roster = load_json(os.path.join(transaction_dir, "roster.json"), [])
+    active_path = os.path.join(transaction_dir, "active-roster.json")
+    has_active_snapshot = os.path.exists(active_path)
+    active_roster = load_json(active_path, []) if has_active_snapshot else roster
+    bindings = load_json(os.path.join(transaction_dir, "bindings.json"), {})
+    try:
+        current_roster = load_roster()
+        if has_active_snapshot:
+            current_roster = active_provider_roster(current_roster)
+        if selected_agent:
+            current_roster = [
+                row for row in current_roster if row.get("agent_id") == selected_agent
+            ]
+        if current_roster:
+            stop_agents(current_roster, selected_agent)
+        atomic_json(BINDINGS_PATH, bindings, mode=0o600)
+        save_roster(roster)
+        revive_agents(active_roster, selected_agent)
+        state["phase"] = "rolled-back"
+        state["updated"] = time.time()
+        atomic_json(state_path, state, mode=0o600)
+    finally:
+        release_lock(LOCK_PATH, transaction_id)
+
+
+def _transaction_dir(transaction_id: str) -> str:
+    return os.path.join(TRANSACTIONS_ROOT, validate_profile_id(transaction_id))
+
+
+def _read_state(transaction_dir: str) -> dict:
+    state = load_json(os.path.join(transaction_dir, "state.json"), {})
+    if not isinstance(state, dict) or not state.get("transaction"):
+        raise RuntimeError("provider switch transaction state is missing")
+    return state
+
+
+def _write_phase(transaction_dir: str, state: dict, phase: str) -> None:
+    state = dict(state)
+    state["phase"] = phase
+    state["updated"] = time.time()
+    atomic_json(os.path.join(transaction_dir, "state.json"), state, mode=0o600)
+
+
+def _capture_tail(row: dict) -> str:
+    try:
+        result = run_tmux(
+            ["capture-pane", "-p", "-S", "-200", "-t", tmux_target(row["agent_id"])],
+            check=False,
+            capture=True,
+        )
+        return result.stdout or "" if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def command_prepare(args) -> None:
+    transaction_dir = _transaction_dir(args.transaction)
+    acquire_lock(LOCK_PATH, args.transaction)
+    try:
+        complete_roster = load_roster()
+        roster = active_provider_roster(complete_roster)
+        selected = _selected(roster, args.agent)
+        bindings = load_json(BINDINGS_PATH, {})
+        snapshot(transaction_dir, complete_roster, bindings)
+        atomic_json(
+            os.path.join(transaction_dir, "active-roster.json"),
+            roster,
+            mode=0o600,
+        )
+        handoffs = [build_handoff(row, _capture_tail(row)) for row in selected]
+        atomic_json(os.path.join(transaction_dir, "handoffs.json"), handoffs, mode=0o600)
+        state = {
+            "transaction": args.transaction,
+            "selectedAgent": args.agent or "",
+            "phase": "prepared",
+            "created": time.time(),
+        }
+        atomic_json(os.path.join(transaction_dir, "state.json"), state, mode=0o600)
+    except Exception:
+        release_lock(LOCK_PATH, args.transaction)
+        raise
+    print(json.dumps({"transaction": args.transaction, "phase": "prepared"}))
+
+
+def _transaction_roster(transaction_dir: str) -> list[dict]:
+    active = load_json(os.path.join(transaction_dir, "active-roster.json"), None)
+    if isinstance(active, list):
+        return active
+    complete = load_json(os.path.join(transaction_dir, "roster.json"), [])
+    return active_provider_roster(complete)
+
+
+def command_stop(args) -> None:
+    transaction_dir = _transaction_dir(args.transaction)
+    state = _read_state(transaction_dir)
+    roster = _transaction_roster(transaction_dir)
+    stop_agents(roster, str(state.get("selectedAgent") or ""))
+    _write_phase(transaction_dir, state, "stopped")
+
+
+def command_revive(args) -> None:
+    transaction_dir = _transaction_dir(args.transaction)
+    state = _read_state(transaction_dir)
+    roster = _transaction_roster(transaction_dir)
+    revive_agents(roster, str(state.get("selectedAgent") or ""))
+    _write_phase(transaction_dir, state, "revived")
+
+
+def command_verify(args) -> None:
+    transaction_dir = _transaction_dir(args.transaction)
+    state = _read_state(transaction_dir)
+    roster = _transaction_roster(transaction_dir)
+    verify_roles(roster, str(state.get("selectedAgent") or ""))
+    _write_phase(transaction_dir, state, "verified")
+
+
+def command_commit(args) -> None:
+    transaction_dir = _transaction_dir(args.transaction)
+    state = _read_state(transaction_dir)
+    _write_phase(transaction_dir, state, "committed")
+    release_lock(LOCK_PATH, args.transaction)
+
+
+def command_rollback(args) -> None:
+    rollback(_transaction_dir(args.transaction))
+
+
+def command_status(_args) -> None:
+    lock = load_json(LOCK_PATH, {})
+    transactions = []
+    root = Path(TRANSACTIONS_ROOT)
+    if root.is_dir():
+        for state_path in sorted(root.glob("*/state.json")):
+            state = load_json(str(state_path), {})
+            if state:
+                transactions.append(
+                    {
+                        "transaction": state.get("transaction"),
+                        "selectedAgent": state.get("selectedAgent", ""),
+                        "phase": state.get("phase"),
+                    }
+                )
+    print(json.dumps({"lock": lock, "transactions": transactions}, sort_keys=True))
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(prog="provider-session")
+    commands = result.add_subparsers(dest="command", required=True)
+    prepare = commands.add_parser("prepare")
+    prepare.add_argument("--transaction", required=True)
+    prepare.add_argument("--agent", default="")
+    prepare.set_defaults(function=command_prepare)
+    for name, function in (
+        ("stop", command_stop),
+        ("revive", command_revive),
+        ("verify", command_verify),
+        ("commit", command_commit),
+        ("rollback", command_rollback),
+    ):
+        command = commands.add_parser(name)
+        command.add_argument("--transaction", required=True)
+        command.set_defaults(function=function)
+    status = commands.add_parser("status")
+    status.set_defaults(function=command_status)
+    return result
+
+
+def main(argv=None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        args.function(args)
+        return 0
+    except SwitchBusy as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"provider switch failed: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

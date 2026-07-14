@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+Import-Module (Join-Path $PSScriptRoot 'MyPeople.ProviderProfiles.psm1') -Force
 $stateDir = Join-Path $env:LOCALAPPDATA 'MyPeople'
 $logPath = Join-Path $stateDir 'launcher.log'
 New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
@@ -68,6 +69,22 @@ try {
         Write-LauncherLog 'docker start mypeople'
         & docker start mypeople | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'docker start mypeople failed.' }
+    }
+
+    $bindings = Get-MyPeopleProviderBindings
+    $activeProfile = [string]$bindings.globalProfile
+    if ($activeProfile) {
+        $profiles = Get-MyPeopleProviderProfiles
+        $profileProperty = $profiles.PSObject.Properties[$activeProfile]
+        if ($null -eq $profileProperty -or -not $profileProperty.Value.enabled) {
+            throw "Active provider profile is missing or disabled: $activeProfile"
+        }
+        $adapter = Get-MyPeopleProviderAdapter -Provider ([string]$profileProperty.Value.provider)
+        Write-LauncherLog "Rehydrate provider profile $activeProfile"
+        & $adapter.ActivateProfile $activeProfile 'mypeople' | Out-Null
+        & $adapter.ValidateRuntime $activeProfile 'mypeople' | Out-Null
+    } else {
+        Write-LauncherLog 'No provider binding configured'
     }
 
     Write-LauncherLog 'docker exec mypeople mypeople up --detach'
