@@ -51,7 +51,10 @@ class WorkerHandoffContract(unittest.TestCase):
         exported = {}
         self.mp.ensure_worker_doctrine = lambda cwd: events.append(os.path.realpath(cwd))
         self.mp.compile_owner_task_spec = lambda _task_id: "/tmp/task-123.json"
-        self.mp.window_exists = lambda _target: True
+        self.mp.window_exists = lambda _target: False
+        self.mp.run_tmux = lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        self.mp.wait_for_composer = lambda _target: True
+        self.mp.tmux_send_message = lambda *_args: True
         self.mp.load_roster = lambda: []
         self.mp.update_roster = lambda _rec: None
         self.mp.write_status = lambda *_args, **_kwargs: None
@@ -110,6 +113,29 @@ class WorkerHandoffContract(unittest.TestCase):
         self.assertIn("AGENTS.md", sent[0][2])
         self.assertIn("mp complete", sent[0][2])
         self.assertIn("task-ready", sent[0][2])
+    def test_claude_owner_receives_provider_agnostic_taskspec_handoff(self):
+        sent = []
+        self.mp.compile_owner_task_spec = lambda _task_id: "/tmp/task-claude.json"
+        self.mp.window_exists = lambda _target: False
+        self.mp.run_tmux = lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        self.mp.load_roster = lambda: []
+        self.mp.update_roster = lambda _rec: None
+        self.mp.write_status = lambda *_args, **_kwargs: None
+        self.mp.queue_register = lambda _rec: None
+        self.mp.recorder = lambda *_args: None
+        self.mp.wait_for_composer = lambda _target: True
+        self.mp.tmux_send_message = lambda target, message: sent.append((target, message)) or True
+        with tempfile.TemporaryDirectory() as tmp:
+            self.mp.spawn(argparse.Namespace(
+                agent_id="node-1/main:eng-claude", backend="claude", cwd=tmp,
+                boss="node-1/main:Boss", master=False, model="sonnet",
+                owner_task="task-claude", temporary=False,
+            ))
+        self.assertEqual(len(sent), 1)
+        self.assertIn("MYPEOPLE_TASKSPEC_PATH", sent[0][1])
+        self.assertIn("CLAUDE.md", sent[0][1])
+        self.assertNotIn("AGENTS.md", sent[0][1])
+
     def test_complete_comments_moves_to_review_and_notifies_boss(self):
         calls = []
         notices = []

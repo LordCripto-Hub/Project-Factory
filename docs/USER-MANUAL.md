@@ -270,6 +270,10 @@ No Context question means no memory process or network call. A profile with `mem
 
 The read-only MCP pilot permits only `recall`, with top K at most 3 and graph hops fixed at 0. The credential remains an environment reference such as `env://MYPEOPLE_MEMORY_TOKEN`; never write the token value into a profile, Git, TaskSpec, event, URL, or comment.
 
+Verification commands must be single, reviewable commands and cannot contain shell metacharacters, substitutions, redirections, pipes, or line breaks. MCP server URLs cannot contain user information, a query string, or a fragment. The gateway child receives only essential runtime variables plus the referenced memory credential; unrelated provider and application secrets do not cross that boundary.
+
+If an owner terminal target already exists, MyPeople rejects the spawn before compiling context or calling MCP. This avoids paid recall, TaskSpec overwrite, and false-success handoffs.
+
 Inspect compiled contracts locally:
 
 ```bash
@@ -277,6 +281,6 @@ jq . run/taskspecs/<task-id>.json
 tail -n 20 run/taskspec-events.jsonl | jq .
 ```
 
-The event log contains metadata only: task/project identifiers, profile revision, memory status, counts, timing, response characters, and `aiUsage` as measured or `not_measured`. It does not contain questions, claims, tokens, or server URLs.
+The event log contains metadata only: task/project identifiers, profile revision, memory status, requested, returned, and embedded claim counts, timing, response characters, and `aiUsage` as measured or `not_measured`. It does not contain questions, claims, tokens, or server URLs.
 
 Phase A does not deploy Cloudflare, write external memory, enable a live profile, import real data, or expose MCP tools directly to Boss/engineers. Those actions require the separate Phase B approval and security gate.

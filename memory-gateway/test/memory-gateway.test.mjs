@@ -37,6 +37,9 @@ test('accepts only the bounded recall contract', () => {
     {...input, hops: 1},
     {...input, tool: 'remember'},
     {...input, serverUrl: 'http://remote.example/mcp'},
+    {...input, serverUrl: 'https://user:secret' + '@' + 'memory.example/mcp'},
+    {...input, serverUrl: 'https://memory.example/mcp?token=secret'},
+    {...input, serverUrl: 'https://memory.example/mcp#secret'},
     {...input, question: 'x'.repeat(501)},
     {...input, maxChars: 20100},
   ]) assert.throws(() => validateInput(bad));
@@ -45,6 +48,31 @@ test('accepts only the bounded recall contract', () => {
 test('rejects missing provenance and cross-project claims', () => {
   assert.throws(() => normalizeClaims([{id: '1', projectSlug: 'mypeople', content: 'x'}], input));
   assert.throws(() => normalizeClaims([{...claim, projectSlug: 'other'}], input));
+});
+
+test('rejects a server response above the requested topK', () => {
+  const claims = Array.from({length: 4}, (_, index) => ({
+    ...claim,
+    id: String(index),
+    sourceUri: `task://${index}`,
+  }));
+  assert.throws(() => normalizeClaims(claims, input), /invalid_response/);
+});
+
+test('normalizes optional metadata, usage, and rejects error tool results', async () => {
+  assert.throws(() => normalizeClaims([{...claim, createdAt: 'yesterday'}], input));
+  const clean = normalizeClaims([{...claim, hiddenInstruction: {secret: 'x'}}], input, {inputTokens: 12, secret: 'drop'});
+  assert.equal('hiddenInstruction' in clean.claims[0], false);
+  assert.deepEqual(clean.aiUsage, {inputTokens: 12});
+  const fake = {
+    connect: async () => {},
+    callTool: async () => ({isError: true, structuredContent: {claims: [claim]}}),
+    close: async () => {},
+  };
+  await assert.rejects(
+    executeRecall(input, {token: 'x', clientFactory: () => fake}),
+    /invalid_response/
+  );
 });
 
 test('calls only recall and closes the client', async () => {
@@ -74,6 +102,44 @@ test('closes the client after timeout', async () => {
     /timeout/
   );
   assert.equal(closed, true);
+});
+
+test('classifies injected transport 403 as unauthorized', async () => {
+  const fake = {
+    connect: async () => {},
+    callTool: async () => {
+      const error = new Error('private body');
+      error.code = 403;
+      throw error;
+    },
+    close: async () => {},
+  };
+  await assert.rejects(
+    executeRecall(input, {token: 'x', clientFactory: () => fake}),
+    error => error?.code === 'unauthorized' && !String(error).includes('private body')
+  );
+});
+
+test('classifies an official transport 401 without exposing its body', async () => {
+  const app = createMcpExpressApp();
+  app.post('/mcp', (_req, res) => {
+    res.status(401).json({private: 'must-not-leak'});
+  });
+  const listener = await new Promise(resolve => {
+    const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+  try {
+    const address = listener.address();
+    await assert.rejects(
+      executeRecall(
+        {...input, serverUrl: `http://127.0.0.1:${address.port}/mcp`},
+        {token: 'fixture-token', allowHttpLoopback: true}
+      ),
+      error => error?.code === 'unauthorized' && !String(error).includes('must-not-leak')
+    );
+  } finally {
+    await new Promise(resolve => listener.close(resolve));
+  }
 });
 
 test('uses the official Streamable HTTP client against a local recall-only server', async () => {

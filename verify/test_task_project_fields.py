@@ -29,7 +29,10 @@ def load_server(temp_dir: str):
     )
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
-    with patch.dict(os.environ, env, clear=False):
+    import mpcommon
+    with patch.dict(os.environ, env, clear=False), patch.dict(
+        mpcommon.ENV, env, clear=False
+    ):
         loader.exec_module(module)
     return module
 
@@ -41,6 +44,12 @@ class TaskProjectFieldsContract(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_missing_env_file_still_accepts_process_overrides(self):
+        missing = str(Path(self.temp.name) / "missing.env")
+        with patch.dict(os.environ, {"QUEUE_SECRET": "override-secret"}, clear=False):
+            result = self.server.read_env(missing)
+        self.assertEqual(result["QUEUE_SECRET"], "override-secret")
 
     def test_legacy_task_migrates_without_inventing_project(self):
         task = {"id": "legacy", "text": "Legacy task"}
@@ -60,6 +69,11 @@ class TaskProjectFieldsContract(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             self.server.validate_context_question("x" * 501)
+
+    def test_profile_directory_uses_merged_runtime_configuration(self):
+        source = (ROOT / "bin" / "todo-server.py").read_text(encoding="utf-8")
+        self.assertIn('ENV.get("PROJECT_PROFILES_DIR"', source)
+        self.assertNotIn('os.environ.get("PROJECT_PROFILES_DIR"', source)
 
     def test_profile_discovery_returns_only_matching_valid_slugs(self):
         directory = Path(self.temp.name) / "profiles"

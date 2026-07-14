@@ -12,7 +12,7 @@ def read_env(path: str = CONFIG) -> dict[str, str]:
     try:
         lines = pathlib.Path(path).read_text().splitlines()
     except FileNotFoundError:
-        return out
+        lines = []
     for raw in lines:
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:

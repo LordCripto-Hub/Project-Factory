@@ -47,6 +47,7 @@ export function validateInput(value, {allowHttpLoopback = false} = {}) {
   } catch {
     invalid();
   }
+  if (url.username || url.password || url.search || url.hash) invalid();
   const loopback = url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
   if (url.protocol !== 'https:' && !(allowHttpLoopback && loopback)) invalid();
   if (!PROJECT_SLUG.test(request.projectSlug || '') || request.projectSlug.length > 64) invalid();
@@ -62,8 +63,21 @@ export function validateInput(value, {allowHttpLoopback = false} = {}) {
   return request;
 }
 
-export function normalizeClaims(rawClaims, request) {
-  if (!Array.isArray(rawClaims)) invalid();
+function normalizeAiUsage(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'not_measured';
+  const entries = Object.entries(value);
+  if (entries.length > 16) return 'not_measured';
+  const clean = {};
+  for (const [key, amount] of entries) {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(key)) continue;
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount > 1e15) continue;
+    clean[key] = amount;
+  }
+  return Object.keys(clean).length ? clean : 'not_measured';
+}
+
+export function normalizeClaims(rawClaims, request, rawAiUsage) {
+  if (!Array.isArray(rawClaims) || rawClaims.length > request.topK) invalid();
   const claims = [];
   let responseChars = 0;
   let truncated = false;
@@ -84,8 +98,15 @@ export function normalizeClaims(rawClaims, request) {
       sourceUri: raw.sourceUri,
       sourceType: raw.sourceType,
     };
-    for (const field of ['createdAt', 'updatedAt', 'status']) {
-      if (raw[field] !== undefined) claim[field] = raw[field];
+    for (const field of ['createdAt', 'updatedAt']) {
+      if (raw[field] !== undefined) {
+        if (typeof raw[field] !== 'number' || !Number.isFinite(raw[field]) || raw[field] < 0) invalid();
+        claim[field] = raw[field];
+      }
+    }
+    if (raw.status !== undefined) {
+      if (typeof raw.status !== 'string' || !raw.status.trim() || raw.status.length > 64) invalid();
+      claim.status = raw.status.trim();
     }
     const remaining = request.maxChars - responseChars;
     if (claim.content.length > remaining) {
@@ -96,7 +117,13 @@ export function normalizeClaims(rawClaims, request) {
     claims.push(claim);
     if (truncated) break;
   }
-  return {claims, truncated, responseChars, aiUsage: 'not_measured'};
+  return {claims, truncated, responseChars, aiUsage: normalizeAiUsage(rawAiUsage)};
+}
+
+function classifyTransportError(error) {
+  const candidates = [error?.status, error?.statusCode, error?.code, error?.response?.status];
+  const status = candidates.find(value => Number.isInteger(value));
+  return status === 401 || status === 403 ? 'unauthorized' : 'unavailable';
 }
 
 function realClientFactory(request, token) {
@@ -135,11 +162,12 @@ export async function executeRecall(value, options = {}) {
       }),
       timeout,
     ]);
+    if (response?.isError === true) invalid('invalid_response');
     const claims = response?.structuredContent?.claims;
-    return normalizeClaims(claims, request);
+    return normalizeClaims(claims, request, response?.structuredContent?.aiUsage);
   } catch (error) {
     if (error instanceof GatewayError) throw error;
-    invalid('unavailable');
+    invalid(classifyTransportError(error));
   } finally {
     if (timer) clearTimeout(timer);
     try {

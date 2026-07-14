@@ -58,7 +58,10 @@ class MemoryGatewayBoundary(unittest.TestCase):
             }
             return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
 
-        with patch.dict(os.environ, {"MYPEOPLE_MEMORY_TOKEN": "fixture-secret"}):
+        with patch.dict(os.environ, {
+            "MYPEOPLE_MEMORY_TOKEN": "fixture-secret",
+            "UNRELATED_PROVIDER_SECRET": "must-not-cross-boundary",
+        }):
             result = project_context.call_memory_gateway(
                 enabled_profile(), "Which constraint applies?", runner=runner, max_chars=1200
             )
@@ -66,11 +69,29 @@ class MemoryGatewayBoundary(unittest.TestCase):
         self.assertEqual(request["credentialEnv"], "MYPEOPLE_MEMORY_TOKEN")
         self.assertNotIn("fixture-secret", observed["input"])
         self.assertEqual(observed["env"]["MYPEOPLE_MEMORY_TOKEN"], "fixture-secret")
+        self.assertNotIn("UNRELATED_PROVIDER_SECRET", observed["env"])
         self.assertEqual(observed["command"][0], "node")
         self.assertTrue(observed["command"][1].endswith("memory-gateway.mjs"))
         self.assertEqual(observed["timeout"], 10)
         self.assertFalse(observed["shell"])
         self.assertEqual(result["claims"], [])
+
+    def test_runtime_config_selects_gateway_without_exporting_it(self):
+        observed = {}
+        def runner(command, **kwargs):
+            observed["command"] = command
+            response = {"ok": True, "claims": [], "truncated": False,
+                        "responseChars": 0, "aiUsage": "not_measured"}
+            return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+        with patch.dict(project_context.RUNTIME_ENV, {
+            "MEMORY_GATEWAY_PATH": "/configured/memory-gateway.mjs"
+        }, clear=True), patch.dict(os.environ, {
+            "MYPEOPLE_MEMORY_TOKEN": "fixture-secret"
+        }, clear=True):
+            project_context.call_memory_gateway(
+                enabled_profile(), "Question", runner=runner
+            )
+        self.assertEqual(observed["command"][1], "/configured/memory-gateway.mjs")
 
     def test_missing_token_is_typed_unauthorized(self):
         with patch.dict(os.environ, {}, clear=True):

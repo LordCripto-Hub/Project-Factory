@@ -19,8 +19,23 @@ from project_context import (
 INSTALL_DIR = ROOT
 
 
+def record_taskspec_event(event):
+    events_path = os.path.join(ROOT, "run", "taskspec-events.jsonl")
+    os.makedirs(os.path.dirname(events_path), exist_ok=True)
+    descriptor = os.open(events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(events_path, 0o600)
+
+
 def compile_owner_task_spec(task_id):
     started = time.monotonic()
+    slug = ""
+    profile_revision = None
+    requested_claim_count = 0
+    stage = "board"
     todo_base = (
         os.environ.get("MYPEOPLE_TODO_URL")
         or os.environ.get("TODO_URL")
@@ -30,6 +45,7 @@ def compile_owner_task_spec(task_id):
         board = http_json(
             "/todo/board", base=todo_base, token=ENV.get("QUEUE_SECRET", "")
         )
+        stage = "compile"
         task = (board.get("tasks") or {}).get(task_id)
         if not isinstance(task, dict):
             raise TaskSpecError("unknown_task")
@@ -40,31 +56,81 @@ def compile_owner_task_spec(task_id):
             ENV.get("PROJECT_PROFILES_DIR", os.path.join(ROOT, "run", "project-profiles"))
         )
         profile = load_profile(profiles_dir, slug)
+        profile_revision = profile.get("revision")
+        if (
+            str(task.get("contextQuestion") or "").strip()
+            and profile.get("memory", {}).get("enabled") is True
+        ):
+            requested_claim_count = profile.get("limits", {}).get("memoryTopK", 0)
         spec = compile_task_spec(task, profile)
         taskspecs_dir = os.path.realpath(
             ENV.get("TASKSPECS_DIR", os.path.join(ROOT, "run", "taskspecs"))
         )
+        stage = "write"
         taskspec_path = write_task_spec(taskspecs_dir, task_id, spec)
-    except ProfileError as error:
-        raise TaskSpecError(error.code) from error
-    event = {
+    except (ProfileError, TaskSpecError) as error:
+        code = error.code
+        record_taskspec_event({
+            "taskId": task_id,
+            "projectSlug": slug,
+            "profileRevision": profile_revision,
+            "memoryStatus": "error",
+            "error": code,
+            "requestedClaimCount": requested_claim_count,
+            "returnedClaimCount": 0,
+            "embeddedClaimCount": 0,
+            "claimCount": 0,
+            "elapsedMilliseconds": round((time.monotonic() - started) * 1000),
+            "responseCharacters": 0,
+            "aiUsage": "not_measured",
+        })
+        if isinstance(error, ProfileError):
+            raise TaskSpecError(code) from error
+        raise
+    except (RuntimeError, OSError, json.JSONDecodeError) as error:
+        code = (
+            "board_unavailable" if stage == "board"
+            else "taskspec_write_failed" if stage == "write"
+            else "taskspec_compile_failed"
+        )
+        record_taskspec_event({
+            "taskId": task_id,
+            "projectSlug": slug,
+            "profileRevision": profile_revision,
+            "memoryStatus": "error",
+            "error": code,
+            "requestedClaimCount": requested_claim_count,
+            "returnedClaimCount": 0,
+            "embeddedClaimCount": 0,
+            "claimCount": 0,
+            "elapsedMilliseconds": round((time.monotonic() - started) * 1000),
+            "responseCharacters": 0,
+            "aiUsage": "not_measured",
+        })
+        raise TaskSpecError(code) from error
+    metadata = getattr(spec, "memory_metadata", {})
+    returned_claim_count = metadata.get(
+        "returnedClaimCount", len(spec["memoryClaims"])
+    )
+    embedded_claim_count = metadata.get(
+        "embeddedClaimCount", len(spec["memoryClaims"])
+    )
+    record_taskspec_event({
         "taskId": task_id,
         "projectSlug": spec["projectSlug"],
         "profileRevision": spec["profileRevision"],
         "memoryStatus": spec["memoryStatus"],
-        "claimCount": len(spec["memoryClaims"]),
+        "error": None,
+        "requestedClaimCount": metadata.get(
+            "requestedClaimCount", requested_claim_count
+        ),
+        "returnedClaimCount": returned_claim_count,
+        "embeddedClaimCount": embedded_claim_count,
+        "claimCount": embedded_claim_count,
         "elapsedMilliseconds": round((time.monotonic() - started) * 1000),
-        "responseCharacters": sum(len(x.get("content", "")) for x in spec["memoryClaims"]),
-        "aiUsage": "not_measured",
-    }
-    events_path = os.path.join(ROOT, "run", "taskspec-events.jsonl")
-    os.makedirs(os.path.dirname(events_path), exist_ok=True)
-    descriptor = os.open(events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
-        stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.chmod(events_path, 0o600)
+        "responseCharacters": metadata.get("responseCharacters", 0),
+        "aiUsage": metadata.get("aiUsage", "not_measured"),
+    })
     return taskspec_path
 
 CODEX_BOSS_POLICY = """
@@ -219,6 +285,10 @@ def spawn(ns):
         result=http_json("/task/submit","POST",{"type":"spawn","target_agent":aid,"payload":payload})
         print(result["task_id"]); return
     boss = full_agent_id(raw_boss) if raw_boss is not None else ""
+    target=f"mc-{session}:{tab}"
+    target_exists = window_exists(target)
+    if ns.owner_task and target_exists:
+        raise SystemExit(f"target_already_exists: {target}")
     taskspec_path = ""
     if ns.owner_task:
         try:
@@ -228,7 +298,6 @@ def spawn(ns):
             if boss:
                 notify_agent(boss, message)
             raise SystemExit(message) from error
-    target=f"mc-{session}:{tab}"
     model = ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL)
     profile_id = ""
     provider_home = ""
@@ -285,7 +354,7 @@ def spawn(ns):
         launch_env["VERIFY_RESERVED_OWNER_ID"]=os.environ["VERIFY_RESERVED_OWNER_ID"]
     command=shell_export(launch_env)+"; exec "+shlex.join(args)
     created=False
-    if not window_exists(target):
+    if not target_exists:
         if run_tmux(["has-session","-t",f"mc-{session}"],check=False).returncode:
             run_tmux(["new-session","-d","-s",f"mc-{session}","-n",tab,"-c",cwd,command])
             run_tmux(["set-option","-t",f"mc-{session}","-g","automatic-rename","off"],check=False)
@@ -320,9 +389,10 @@ def spawn(ns):
         wait_for_composer(target)
         doctrine_name = "AGENTS.md" if ns.backend == "codex" else "CLAUDE.md"
         tmux_send_message(target,f"Read {doctrine_name} and internalize the Nightwatch approve/edit/reject protocol. Reply with a concise nightwatch, CEO-equivalent, approve, WhatsApp, never-done readiness summary.")
-    elif created and ns.owner_task and ns.backend == "codex":
+    elif created and ns.owner_task:
         wait_for_composer(target)
-        tmux_send_message(target,f"Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH, then read AGENTS.md. Work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
+        doctrine_name = "AGENTS.md" if ns.backend == "codex" else "CLAUDE.md"
+        tmux_send_message(target,f"Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH, then read {doctrine_name}. Work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
     print(aid)
 
 def notify_agent(agent_id, message):

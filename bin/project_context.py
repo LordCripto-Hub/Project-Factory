@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import time
 from urllib.parse import urlparse
@@ -18,6 +20,15 @@ MAX_MEMORY_TIMEOUT_SECONDS = 15
 PROJECT_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 ENV_REF_RE = re.compile(r"^env://([A-Z][A-Z0-9_]{1,63})$")
 SECRET_KEY_RE = re.compile(r"token|secret|password|credentialvalue|apikey", re.I)
+
+try:
+    from mpcommon import ENV as RUNTIME_ENV
+except ImportError:
+    RUNTIME_ENV = {}
+
+
+def _runtime_setting(name: str, default=None):
+    return os.environ.get(name, RUNTIME_ENV.get(name, default))
 
 TOP_LEVEL_FIELDS = {
     "schemaVersion",
@@ -89,6 +100,19 @@ def _string_list(value, code: str, *, allow_empty: bool = False) -> list[str]:
     return result
 
 
+def _verification_commands(value) -> list[str]:
+    commands = _string_list(value, "invalid_verification_commands")
+    for command in commands:
+        if re.search(r"[;&|`$<>()\r\n]", command):
+            raise ProfileError("invalid_verification_commands")
+        try:
+            if not shlex.split(command, posix=True):
+                raise ProfileError("invalid_verification_commands")
+        except ValueError as error:
+            raise ProfileError("invalid_verification_commands") from error
+    return commands
+
+
 def _absolute_directory(value) -> str:
     value = str(value or "").strip()
     windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", value))
@@ -100,9 +124,11 @@ def _absolute_directory(value) -> str:
 def _validate_memory_url(value: str) -> str:
     value = str(value or "").strip()
     parsed = urlparse(value)
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ProfileError("memory_url_credentials_forbidden")
     if parsed.scheme == "https" and parsed.netloc:
         return value
-    allow_http = os.environ.get("MYPEOPLE_MEMORY_ALLOW_HTTP") == "1"
+    allow_http = _runtime_setting("MYPEOPLE_MEMORY_ALLOW_HTTP") == "1"
     if (
         allow_http
         and parsed.scheme == "http"
@@ -133,11 +159,13 @@ def validate_profile(value) -> dict:
     for field in (
         "allowedBranches",
         "contextFiles",
-        "verificationCommands",
         "allowedActions",
         "forbiddenActions",
     ):
         result[field] = _string_list(value.get(field), f"invalid_{field}")
+    result["verificationCommands"] = _verification_commands(
+        value.get("verificationCommands")
+    )
 
     limits = value.get("limits")
     if not isinstance(limits, dict):
@@ -217,7 +245,7 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
     token = os.environ.get(credential_env)
     if not token:
         raise MemoryError("unauthorized")
-    gateway_path = os.environ.get(
+    gateway_path = _runtime_setting(
         "MEMORY_GATEWAY_PATH",
         str(Path(__file__).resolve().parents[1] / "memory-gateway" / "memory-gateway.mjs"),
     )
@@ -231,7 +259,15 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
         "credentialEnv": credential_env,
         "maxChars": int(max_chars or profile["limits"]["contextChars"]),
     }
-    child_environment = os.environ.copy()
+    child_environment = {
+        key: os.environ[key]
+        for key in (
+            "PATH", "PATHEXT", "SystemRoot", "WINDIR", "HOME", "USERPROFILE",
+            "TMP", "TEMP", "LANG", "LC_ALL", "NODE_EXTRA_CA_CERTS",
+            "SSL_CERT_FILE", "SSL_CERT_DIR",
+        )
+        if key in os.environ
+    }
     child_environment[credential_env] = token
     try:
         completed = runner(
@@ -264,14 +300,52 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
         raise MemoryError("invalid_response")
     if not isinstance(response.get("truncated"), bool):
         raise MemoryError("invalid_response")
-    if not isinstance(response.get("responseChars"), int):
+    response_chars = response.get("responseChars")
+    if (
+        isinstance(response_chars, bool)
+        or not isinstance(response_chars, int)
+        or not 0 <= response_chars <= request["maxChars"]
+    ):
         raise MemoryError("invalid_response")
     return {
         "claims": response["claims"],
         "truncated": response["truncated"],
-        "responseChars": response["responseChars"],
-        "aiUsage": response.get("aiUsage", "not_measured"),
+        "responseChars": response_chars,
+        "aiUsage": _normalize_ai_usage(response.get("aiUsage")),
     }
+
+
+def _normalize_ai_usage(value):
+    if value == "not_measured":
+        return "not_measured"
+    if not isinstance(value, dict) or len(value) > 16:
+        return "not_measured"
+    result = {}
+    for key, amount in value.items():
+        if (
+            not isinstance(key, str)
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,31}", key)
+            or isinstance(amount, bool)
+            or not isinstance(amount, (int, float))
+            or not math.isfinite(amount)
+            or amount < 0
+            or amount > 10**15
+        ):
+            continue
+        result[key] = amount
+    return result or "not_measured"
+
+
+class TaskSpecDocument(dict):
+    def __init__(self, *args, memory_metadata=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.memory_metadata = memory_metadata or {
+            "requestedClaimCount": 0,
+            "returnedClaimCount": 0,
+            "embeddedClaimCount": 0,
+            "responseCharacters": 0,
+            "aiUsage": "not_measured",
+        }
 
 
 class TaskSpecError(RuntimeError):
@@ -312,7 +386,7 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
     if len(question) > 500:
         raise TaskSpecError("context_question_too_long")
     clock = now if now is not None else time.time
-    result = {
+    result = TaskSpecDocument({
         "schemaVersion": 1,
         "taskId": task_id,
         "projectSlug": project_slug,
@@ -330,7 +404,7 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
         "memoryClaims": [],
         "memoryStatus": "not_requested" if not question else "disabled",
         "compiledAt": clock(),
-    }
+    })
     limit = profile["limits"]["contextChars"]
     if _task_spec_chars(result) > limit:
         raise TaskSpecError("local_contract_budget_exceeded")
@@ -358,6 +432,16 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
         raise TaskSpecError(f"memory_{error.code}") from error
     if not isinstance(response, dict) or not isinstance(response.get("claims"), list):
         raise TaskSpecError("memory_invalid_response")
+    if len(response["claims"]) > profile["limits"]["memoryTopK"]:
+        raise TaskSpecError("memory_invalid_response")
+    response_chars = response.get("responseChars")
+    if (
+        isinstance(response_chars, bool)
+        or not isinstance(response_chars, int)
+        or not 0 <= response_chars <= remaining
+        or not isinstance(response.get("truncated"), bool)
+    ):
+        raise TaskSpecError("memory_invalid_response")
     claims = []
     for raw in response["claims"]:
         if not isinstance(raw, dict):
@@ -367,7 +451,27 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
                 raise TaskSpecError("memory_invalid_response")
         if raw["projectSlug"] != project_slug:
             raise TaskSpecError("memory_project_mismatch")
-        claims.append(dict(raw))
+        claim = {field: raw[field].strip() for field in (
+            "id", "projectSlug", "content", "sourceUri", "sourceType"
+        )}
+        for field in ("createdAt", "updatedAt"):
+            if field in raw:
+                timestamp = raw[field]
+                if (
+                    isinstance(timestamp, bool)
+                    or not isinstance(timestamp, (int, float))
+                    or not math.isfinite(timestamp)
+                    or timestamp < 0
+                ):
+                    raise TaskSpecError("memory_invalid_response")
+                claim[field] = timestamp
+        if "status" in raw:
+            status = raw["status"]
+            if not isinstance(status, str) or not status.strip() or len(status) > 64:
+                raise TaskSpecError("memory_invalid_response")
+            claim["status"] = status.strip()
+        claims.append(claim)
+    gateway_returned_count = len(claims)
     result["memoryClaims"] = claims
     result["memoryStatus"] = "truncated" if response.get("truncated") is True else "ok"
     while _task_spec_chars(result) > limit and result["memoryClaims"]:
@@ -380,6 +484,13 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
         result["memoryStatus"] = "truncated"
     if _task_spec_chars(result) > limit:
         raise TaskSpecError("memory_budget_exceeded")
+    result.memory_metadata = {
+        "requestedClaimCount": profile["limits"]["memoryTopK"],
+        "returnedClaimCount": gateway_returned_count,
+        "embeddedClaimCount": len(result["memoryClaims"]),
+        "responseCharacters": response_chars,
+        "aiUsage": _normalize_ai_usage(response.get("aiUsage")),
+    }
     return result
 
 

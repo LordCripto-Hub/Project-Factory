@@ -78,6 +78,35 @@ class ProjectProfileContract(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(project_context.ProfileError):
                 project_context.validate_profile(unsafe)
 
+    def test_verification_commands_reject_shell_metacharacters(self):
+        for command in (
+            "python3 verify.py; echo unsafe",
+            "python3 verify.py | tee output",
+            "python3 verify.py && deploy",
+            "python3 verify.py > result",
+            "python3 $(unsafe)",
+            "python3 verify.py\nnext-command",
+            "(python3 verify.py)",
+        ):
+            unsafe = profile(verificationCommands=[command])
+            with self.subTest(command=command), self.assertRaisesRegex(
+                project_context.ProfileError, "invalid_verification_commands"
+            ):
+                project_context.validate_profile(unsafe)
+
+    def test_memory_url_rejects_embedded_credentials_query_and_fragment(self):
+        for url in (
+            "https://user:secret" + "@" + "memory.example/mcp",
+            "https://memory.example/mcp?token=secret",
+            "https://memory.example/mcp#secret",
+        ):
+            unsafe = profile()
+            unsafe["memory"]["serverUrl"] = url
+            with self.subTest(url=url), self.assertRaisesRegex(
+                project_context.ProfileError, "memory_url_credentials_forbidden"
+            ):
+                project_context.validate_profile(unsafe)
+
     def test_remote_memory_requires_https_and_env_reference(self):
         unsafe = profile()
         unsafe["memory"] = {
@@ -207,6 +236,89 @@ class MemoryTaskSpecContract(unittest.TestCase):
         self.assertEqual(calls[0]["hops"], 0)
         self.assertEqual(result["memoryClaims"], claims)
         self.assertEqual(result["memoryStatus"], "ok")
+
+    def test_python_boundary_rejects_more_claims_than_top_k(self):
+        value = profile()
+        value["memory"]["enabled"] = True
+        task = {
+            "id": "task-1",
+            "text": "Repair",
+            "doneCondition": "Tests pass",
+            "projectSlug": "mypeople",
+            "contextQuestion": "Question",
+            "evidencePolicy": "required",
+        }
+        claims = [{
+            "id": str(index), "projectSlug": "mypeople", "content": "x",
+            "sourceUri": f"task://{index}", "sourceType": "verified-task",
+        } for index in range(4)]
+        with self.assertRaisesRegex(project_context.TaskSpecError, "memory_invalid_response"):
+            project_context.compile_task_spec(
+                task,
+                value,
+                recall=lambda _request: {
+                    "claims": claims, "truncated": False,
+                    "responseChars": 4, "aiUsage": "not_measured",
+                },
+            )
+
+    def test_python_boundary_reconstructs_closed_claim_schema(self):
+        value = profile()
+        value["memory"]["enabled"] = True
+        task = {
+            "id": "task-1", "text": "Repair", "doneCondition": "Tests pass",
+            "projectSlug": "mypeople", "contextQuestion": "Question",
+            "evidencePolicy": "required",
+        }
+        raw = {
+            "id": "1", "projectSlug": "mypeople", "content": "claim",
+            "sourceUri": "task://1", "sourceType": "verified-task",
+            "createdAt": 1, "updatedAt": 2, "status": "canonical",
+            "untrustedInstruction": {"secret": "must-not-enter-task-spec"},
+        }
+        result = project_context.compile_task_spec(
+            task, value, recall=lambda _request: {
+                "claims": [raw], "truncated": False, "responseChars": 5,
+                "aiUsage": {"inputTokens": 12},
+            },
+        )
+        self.assertNotIn("untrustedInstruction", result["memoryClaims"][0])
+        self.assertEqual(result.memory_metadata["aiUsage"], {"inputTokens": 12})
+        invalid = dict(raw, createdAt="yesterday")
+        with self.assertRaisesRegex(project_context.TaskSpecError, "memory_invalid_response"):
+            project_context.compile_task_spec(
+                task, value, recall=lambda _request: {
+                    "claims": [invalid], "truncated": False,
+                    "responseChars": 5, "aiUsage": "not_measured",
+                },
+            )
+
+    def test_metrics_distinguish_gateway_returned_from_budget_embedded_claims(self):
+        value = profile()
+        value["limits"]["contextChars"] = 900
+        value["memory"]["enabled"] = True
+        task = {
+            "id": "task-1", "text": "Repair", "doneCondition": "Pass",
+            "projectSlug": "mypeople", "contextQuestion": "Question",
+            "evidencePolicy": "required",
+        }
+        claims = [{
+            "id": str(index), "projectSlug": "mypeople",
+            "content": "x" * 100, "sourceUri": f"task://{index}",
+            "sourceType": "verified-task",
+        } for index in range(3)]
+        result = project_context.compile_task_spec(
+            task, value, recall=lambda _request: {
+                "claims": claims, "truncated": False,
+                "responseChars": 300, "aiUsage": "not_measured",
+            },
+        )
+        self.assertEqual(result.memory_metadata["returnedClaimCount"], 3)
+        self.assertEqual(
+            result.memory_metadata["embeddedClaimCount"],
+            len(result["memoryClaims"]),
+        )
+        self.assertLess(result.memory_metadata["embeddedClaimCount"], 3)
 
     def test_requested_memory_failure_is_fail_closed(self):
         value = profile()
