@@ -107,5 +107,68 @@ class ProjectProfileContract(unittest.TestCase):
                 project_context.load_profile(temp, "../outside")
 
 
+class TaskSpecContract(unittest.TestCase):
+    def task(self, **overrides):
+        value = {
+            "id": "task-1",
+            "text": "Repair switching",
+            "doneCondition": "Tests pass",
+            "projectSlug": "mypeople",
+            "contextQuestion": "",
+            "evidencePolicy": "required",
+        }
+        value.update(overrides)
+        return value
+
+    def test_compile_without_question_never_calls_memory(self):
+        calls = []
+        result = project_context.compile_task_spec(
+            self.task(), profile(), recall=lambda request: calls.append(request), now=lambda: 123.0
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(result["memoryStatus"], "not_requested")
+        self.assertEqual(result["compiledAt"], 123.0)
+
+    def test_memory_disabled_never_calls_memory(self):
+        calls = []
+        result = project_context.compile_task_spec(
+            self.task(contextQuestion="Which constraint applies?"),
+            profile(),
+            recall=lambda request: calls.append(request),
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(result["memoryStatus"], "disabled")
+
+    def test_write_task_spec_is_mode_0600_and_atomic(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = project_context.write_task_spec(temp, "task-1", {"schemaVersion": 1})
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            self.assertEqual(
+                json.loads(Path(path).read_text(encoding="utf-8"))["schemaVersion"], 1
+            )
+            self.assertEqual(list(Path(temp).glob("*.tmp")), [])
+
+    def test_local_contract_is_never_removed_to_fit_memory(self):
+        value = profile()
+        value["limits"]["contextChars"] = 900
+        value["verificationCommands"] = ["python3 verify/critical.py"]
+        result = project_context.compile_task_spec(
+            self.task(doneCondition="Critical verification passes"), value
+        )
+        self.assertEqual(result["verificationCommands"], ["python3 verify/critical.py"])
+        self.assertEqual(result["acceptanceCriteria"], "Critical verification passes")
+
+    def test_invalid_task_contracts_fail_closed(self):
+        invalid = (
+            self.task(id=""),
+            self.task(text=""),
+            self.task(projectSlug="other"),
+            self.task(evidencePolicy="anything"),
+        )
+        for task in invalid:
+            with self.subTest(task=task), self.assertRaises(project_context.TaskSpecError):
+                project_context.compile_task_spec(task, profile())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

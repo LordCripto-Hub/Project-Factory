@@ -198,3 +198,91 @@ def load_profile(directory, slug) -> dict:
     if result["slug"] != slug:
         raise ProfileError("profile_slug_mismatch")
     return result
+
+class TaskSpecError(RuntimeError):
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def _task_string(value, code: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        raise TaskSpecError(code)
+    return value
+
+
+def _task_spec_chars(value: dict) -> int:
+    return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def compile_task_spec(task, profile, recall=None, now=None) -> dict:
+    if not isinstance(task, dict):
+        raise TaskSpecError("task_object_required")
+    try:
+        profile = validate_profile(profile)
+        project_slug = validate_project_slug(task.get("projectSlug"))
+    except ProfileError as error:
+        raise TaskSpecError(error.code) from error
+    if project_slug != profile["slug"]:
+        raise TaskSpecError("project_profile_mismatch")
+    task_id = _task_string(task.get("id"), "task_id_required")
+    objective = _task_string(task.get("text"), "task_objective_required")
+    evidence_policy = str(task.get("evidencePolicy", "optional"))
+    if evidence_policy not in {"required", "optional"}:
+        raise TaskSpecError("invalid_evidence_policy")
+    question = re.sub(
+        r"[\x00-\x1f\x7f]+", " ", str(task.get("contextQuestion", ""))
+    ).strip()
+    if len(question) > 500:
+        raise TaskSpecError("context_question_too_long")
+    clock = now if now is not None else __import__("time").time
+    result = {
+        "schemaVersion": 1,
+        "taskId": task_id,
+        "projectSlug": project_slug,
+        "profileRevision": profile["revision"],
+        "objective": objective,
+        "acceptanceCriteria": str(task.get("doneCondition", "")).strip(),
+        "repository": profile["repository"],
+        "workingDirectory": profile["workingDirectory"],
+        "contextFiles": profile["contextFiles"],
+        "verificationCommands": profile["verificationCommands"],
+        "allowedActions": profile["allowedActions"],
+        "forbiddenActions": profile["forbiddenActions"],
+        "evidencePolicy": evidence_policy,
+        "memoryQuestion": question,
+        "memoryClaims": [],
+        "memoryStatus": "not_requested" if not question else "disabled",
+        "compiledAt": clock(),
+    }
+    if _task_spec_chars(result) > profile["limits"]["contextChars"]:
+        raise TaskSpecError("local_contract_budget_exceeded")
+    return result
+
+
+def write_task_spec(directory, task_id, value):
+    task_id = str(task_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task_id):
+        raise TaskSpecError("invalid_task_id")
+    root = Path(directory).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{task_id}.json"
+    temporary = root / f".{task_id}.{os.getpid()}.tmp"
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+    return str(path)
+
