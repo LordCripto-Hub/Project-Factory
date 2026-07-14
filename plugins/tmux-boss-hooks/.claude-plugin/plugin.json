@@ -1,0 +1,5 @@
+{
+  "name": "tmux-boss-hooks",
+  "version": "2.0.0",
+  "description": "Atomic MyPeople lifecycle status and queue notifications"
+}

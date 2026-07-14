@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import argparse, json, mimetypes, os, pathlib, shlex, signal, subprocess, sys, time, uuid, urllib.request
+from mpcommon import *
+
+INSTALL_DIR = ROOT
+
+CODEX_BOSS_POLICY = """
+## Codex backend policy
+
+Claude is currently disabled. Run delegated agents through Codex explicitly:
+
+`mp spawn <agent_id> --backend codex --model gpt-5.6-luna --boss <your_id> --owner-task <card_id>`
+
+Use `gpt-5.6-luna` for routine delegated work. Escalate deliberately to
+`gpt-5.6-terra` or `gpt-5.6-sol` when the task requires it.
+Do not spawn a Claude worker while Claude remains disabled.
+"""
+
+WORKER_POLICY = """
+<!-- mypeople-worker-contract:v1 -->
+## MyPeople worker handoff
+
+Work only on the task in `OWNER_TASK_ID`. When implementation and checks finish,
+report them with:
+
+`mp complete "<concise summary>" --proof "<verification command and result>"`
+
+Attach visual or executable results with repeatable `--proof-file <path>` and
+`--proof-url <url>`. This command moves the task to `review` and notifies the Boss. Do not close the
+task yourself; Boss/CEO owns verification and closure.
+"""
+
+def ensure_codex_doctrine(cwd, source=None):
+    source_path = pathlib.Path(source or os.path.join(ROOT, "boss-CLAUDE.md"))
+    target_dir = pathlib.Path(os.path.realpath(cwd))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "AGENTS.md"
+    rendered = source_path.read_text(encoding="utf-8").rstrip() + "\n\n" + CODEX_BOSS_POLICY.strip() + "\n"
+    try:
+        if target.read_text(encoding="utf-8") == rendered:
+            return str(target)
+    except FileNotFoundError:
+        pass
+    temporary = target.with_name(f"{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(rendered)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+    return str(target)
+
+def ensure_worker_doctrine(cwd):
+    target_dir = pathlib.Path(os.path.realpath(cwd))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "AGENTS.md"
+    marker = "<!-- mypeople-worker-contract:v1 -->"
+    try:
+        existing = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing = ""
+    if marker in existing:
+        return str(target)
+    rendered = (existing.rstrip() + "\n\n" if existing.strip() else "") + WORKER_POLICY.strip() + "\n"
+    temporary = target.with_name(f"{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(rendered)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+    return str(target)
+
+def is_managed_codex_cwd(cwd):
+    real_cwd = os.path.realpath(cwd)
+    managed_roots = (
+        os.path.realpath(os.path.join(ROOT, "run", "boss")),
+        os.path.realpath(os.path.join(ROOT, "run", "eng")),
+        os.path.realpath(os.path.join(ROOT, "run", "nightwatch")),
+    )
+    return any(real_cwd == root or real_cwd.startswith(root + os.sep) for root in managed_roots)
+
+def _build_launch_args(agent_id, cwd, boss, is_master, model, backend):
+    aid = full_agent_id(agent_id)
+    host, session, tab = parse_agent_id(aid)
+    boss_full = full_agent_id(boss) if boss else ""
+    cwd = os.path.realpath(cwd or (os.path.join(ROOT, "run", "boss") if is_master else os.path.join(ROOT, "run", "eng", tab)))
+    os.makedirs(cwd, exist_ok=True)
+    if backend == "codex":
+        real_cwd = os.path.realpath(cwd)
+        args = ["codex", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", real_cwd]
+        if model:
+            args += ["--model", model]
+        if is_managed_codex_cwd(real_cwd):
+            args += ["--config", f'projects.{json.dumps(real_cwd)}.trust_level = "trusted"']
+    elif backend == "claude":
+        trust_claude(cwd)
+        settings = os.path.expanduser("~/.claude/settings.json")
+        sd = load_json(settings, {})
+        sd["skipDangerousModePermissionPrompt"] = True
+        atomic_json(settings, sd)
+        args = ["claude", "--dangerously-skip-permissions", "--plugin-dir", os.path.join(ROOT, "plugins", "tmux-boss-hooks")]
+        if model:
+            args += ["--model", model]
+        if is_master:
+            args += ["--append-system-prompt-file", os.path.join(ROOT, "boss-CLAUDE.md")]
+        elif tab == "Nightwatch" and os.path.exists(os.path.join(cwd, "CLAUDE.md")):
+            args += ["--append-system-prompt-file", os.path.join(cwd, "CLAUDE.md")]
+    else:
+        raise ValueError(f"unsupported backend: {backend}")
+    return aid, host, session, tab, cwd, boss_full, args
+
+def build_launch(agent_id, cwd, boss, is_master, model, backend):
+    aid, host, session, tab, cwd, boss_full, args = _build_launch_args(agent_id, cwd, boss, is_master, model, backend)
+    return shlex.join(args)
+
+def queue_register(rec):
+    try: http_json("/agents/register", "POST", rec)
+    except Exception as e: print(f"warning: register deferred: {e}", file=sys.stderr)
+
+def recorder(session, tab):
+    name = "rec-" + tab
+    if run_tmux(["has-session", "-t", name], check=False).returncode == 0: return
+    os.makedirs(os.path.expanduser("~/recordings"), exist_ok=True)
+    cast = os.path.expanduser(f"~/recordings/{ENV.get('HOST_ID')}-{tab}.cast")
+    command = f"asciinema rec --quiet --append -c {shlex.quote(f'TMUX= tmux attach -rt mc-{session}:{tab}')} {shlex.quote(cast)}"
+    run_tmux(["new-session", "-d", "-s", name, command], check=False)
+
+def wait_for_composer(target, timeout=30):
+    """Wait for the selected backend's interactive composer before the first turn."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pane = run_tmux(["capture-pane", "-p", "-S", "-80", "-t", target], capture=True, check=False)
+        text = pane.stdout or ""
+        if pane.returncode == 0 and "Do you trust the contents of this directory?" in text:
+            run_tmux(["send-keys", "-t", target, "1", "Enter"], check=False)
+            time.sleep(.5)
+            continue
+        if pane.returncode == 0 and any(marker in text for marker in (
+            "bypass permissions on", "Claude Code", "OpenAI Codex", "How can I help", "Try"
+        )):
+            return True
+        time.sleep(.5)
+    return False
+
+def spawn(ns):
+    raw_boss = ns.boss
+    if raw_boss is not None and not raw_boss.strip(): raise SystemExit("empty --boss is invalid; omit --boss for a top-level agent")
+    if (ns.owner_task or ns.temporary) and raw_boss is None: raise SystemExit("--owner-task/--temporary require --boss")
+    if ns.owner_task and ns.temporary: raise SystemExit("--owner-task and --temporary are mutually exclusive")
+    aid = full_agent_id(ns.agent_id); host, session, tab = parse_agent_id(aid)
+    if host != ENV.get("HOST_ID"):
+        model = ns.model if ns.model is not None else ("" if ns.master else DEFAULT_ENG_MODEL)
+        payload={"backend":ns.backend,"cwd":ns.cwd,"boss":raw_boss,"is_master":ns.master,"model":model,
+                 "owner_task_id":ns.owner_task or "","temporary":ns.temporary}
+        result=http_json("/task/submit","POST",{"type":"spawn","target_agent":aid,"payload":payload})
+        print(result["task_id"]); return
+    boss = full_agent_id(raw_boss) if raw_boss is not None else ""
+    target=f"mc-{session}:{tab}"
+    aid, host, session, tab, cwd, boss, args = _build_launch_args(aid, ns.cwd, boss, ns.master, ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL), ns.backend)
+    if ns.backend == "codex" and ns.master:
+        ensure_codex_doctrine(cwd)
+    elif ns.backend == "codex" and tab == "Nightwatch":
+        nightwatch_source = os.path.join(cwd, "CLAUDE.md")
+        if os.path.exists(nightwatch_source):
+            ensure_codex_doctrine(cwd, nightwatch_source)
+    elif ns.backend == "codex" and ns.owner_task:
+        ensure_worker_doctrine(cwd)
+    if ns.model is not None and ns.master is False and tab != "Nightwatch":
+        pass
+    model = ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL)
+    launch_env={"AGENT_ID":aid,"QUEUE_URL":ENV.get("QUEUE_URL","http://127.0.0.1:9900"),"TODO_URL":os.environ.get("MYPEOPLE_TODO_URL") or os.environ.get("TODO_URL") or f"http://127.0.0.1:{ENV.get('TODO_PORT','9933')}","QUEUE_SECRET":ENV["QUEUE_SECRET"],
+                "HOST_ID":ENV["HOST_ID"],"INSTALL_DIR":ROOT,"BOSS_ID":boss or None,"OWNER_TASK_ID":ns.owner_task or "","LANG":"C.UTF-8","LC_ALL":"C.UTF-8"}
+    if os.environ.get("VERIFY_RESERVED_OWNER_ID"):
+        launch_env["VERIFY_RESERVED_OWNER_ID"]=os.environ["VERIFY_RESERVED_OWNER_ID"]
+    command=shell_export(launch_env)+"; exec "+shlex.join(args)
+    created=False
+    if not window_exists(target):
+        if run_tmux(["has-session","-t",f"mc-{session}"],check=False).returncode:
+            run_tmux(["new-session","-d","-s",f"mc-{session}","-n",tab,"-c",cwd,command])
+            run_tmux(["set-option","-t",f"mc-{session}","-g","automatic-rename","off"],check=False)
+        else:
+            run_tmux(["new-window","-d","-t",f"mc-{session}","-n",tab,"-c",cwd,command])
+        run_tmux(["set-option","-t",target,"-w","automatic-rename","off"])
+        run_tmux(["set-option","-t",target,"-w","allow-rename","off"])
+        run_tmux(["rename-window","-t",target,tab]); created=True
+    lifecycle="owner" if ns.owner_task else "temporary" if ns.temporary else "unclassified"
+    audit=["mp","spawn",aid,"--backend",ns.backend,"--cwd",cwd]
+    if boss:audit += ["--boss",boss]
+    if ns.master:audit += ["--master"]
+    if model:audit += ["--model",model]
+    if ns.owner_task:audit += ["--owner-task",ns.owner_task]
+    if ns.temporary:audit += ["--temporary"]
+    previous=next((x for x in load_roster() if x.get("agent_id")==aid),{})
+    rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"state":"alive",
+         "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
+         "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time())}
+    if ns.master: rec["summary"]="autonomous plan approve queue mp verify fire-and-forget"
+    if tab=="Nightwatch": rec["summary"]="nightwatch ceo-equivalent approve whatsapp never-done"
+    update_roster(rec); write_status(aid,"starting",rec.get("summary",""),boss_id=boss,backend=ns.backend)
+    queue_register(rec); recorder(session,tab)
+    if created and ns.master:
+        wait_for_composer(target)
+        tmux_send_message(target,"Read your Boss doctrine now. Internalize the queue quickstart, operate autonomously, and reply with a concise readiness summary containing plan, queue, mp, and verify.")
+    elif created and tab=="Nightwatch":
+        wait_for_composer(target)
+        doctrine_name = "AGENTS.md" if ns.backend == "codex" else "CLAUDE.md"
+        tmux_send_message(target,f"Read {doctrine_name} and internalize the Nightwatch approve/edit/reject protocol. Reply with a concise nightwatch, CEO-equivalent, approve, WhatsApp, never-done readiness summary.")
+    elif created and ns.owner_task and ns.backend == "codex":
+        wait_for_composer(target)
+        tmux_send_message(target,f"Read AGENTS.md, work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
+    print(aid)
+
+def notify_agent(agent_id, message):
+    aid=full_agent_id(agent_id); host,_,_=parse_agent_id(aid)
+    if host==ENV.get("HOST_ID"):
+        if not tmux_send_message(tmux_target(aid),message):
+            raise SystemExit(f"unable to notify {aid}")
+    else:
+        http_json("/task/submit","POST",{"type":"send","target_agent":aid,"payload":{"message":message}})
+
+def send(ns):
+    msg=" ".join(ns.message)
+    if not msg.strip(): raise SystemExit("message must be non-empty")
+    notify_agent(ns.agent_id,msg)
+
+def http_multipart(path,fields,file_path):
+    file_path=os.path.realpath(file_path)
+    if not os.path.isfile(file_path):raise SystemExit(f"proof file not found: {file_path}")
+    boundary="----mypeople"+uuid.uuid4().hex;chunks=[]
+    for key,value in fields.items():chunks.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode())
+    name=os.path.basename(file_path);ctype=mimetypes.guess_type(name)[0] or "application/octet-stream"
+    chunks.extend([f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name.replace(chr(34),'')}\"\r\nContent-Type: {ctype}\r\n\r\n".encode(),pathlib.Path(file_path).read_bytes(),b"\r\n",f"--{boundary}--\r\n".encode()])
+    base=(os.environ.get("TODO_URL") or ENV.get("QUEUE_URL","http://127.0.0.1:9900")).rstrip("/")
+    req=urllib.request.Request(base+path,data=b"".join(chunks),method="POST",headers={"X-Queue-Secret":ENV.get("QUEUE_SECRET",""),"Content-Type":"multipart/form-data; boundary="+boundary})
+    try:
+        with urllib.request.urlopen(req,timeout=60) as response:
+            raw=response.read();return json.loads(raw) if raw else {}
+    except Exception as e:raise SystemExit(f"evidence upload failed: {e}") from e
+
+def complete(ns):
+    actor=os.environ.get("AGENT_ID","").strip();task_id=os.environ.get("OWNER_TASK_ID","").strip();boss=os.environ.get("BOSS_ID","").strip();summary=" ".join(ns.summary).strip()
+    proofs=[p.strip() for p in (getattr(ns,"proof",[]) or []) if p.strip()];files=[p.strip() for p in (getattr(ns,"proof_file",[]) or []) if p.strip()];urls=[p.strip() for p in (getattr(ns,"proof_url",[]) or []) if p.strip()]
+    if not actor:raise SystemExit("AGENT_ID is required; run mp complete inside a managed worker")
+    if not task_id:raise SystemExit("OWNER_TASK_ID is required; this worker does not own a task")
+    if not boss:raise SystemExit("BOSS_ID is required; owner workers must report to a Boss")
+    if not summary:raise SystemExit("summary must be non-empty")
+    if not (proofs or files or urls):raise SystemExit("at least one --proof, --proof-file, or --proof-url is required")
+    evidence=proofs+[f"file: {os.path.basename(x)}" for x in files]+[f"url: {x}" for x in urls]
+    body="Worker handoff\n\nSummary: "+summary+"\n\nEvidence and verification:\n" + "\n".join(f"- {item}" for item in evidence)
+    http_json("/todo/comment","POST",{"task_id":task_id,"by":actor,"body":body})
+    for proof in proofs:http_json("/todo/proof","POST",{"task_id":task_id,"kind":"text","body":proof,"by":actor})
+    for url in urls:http_json("/todo/proof","POST",{"task_id":task_id,"kind":"link","url":url,"by":actor})
+    for file_path in files:http_multipart("/todo/proof",{"task_id":task_id,"by":actor},file_path)
+    http_json("/todo/status","POST",{"task_id":task_id,"state":"review","verified":False,"by":actor})
+    notify_agent(boss,f"[worker handoff] {task_id} is ready for review from {actor}: {summary}")
+    print(f"{task_id} -> review")
+
+def peek(ns):
+    aid=full_agent_id(ns.agent_id); host,_,_=parse_agent_id(aid)
+    if host != ENV.get("HOST_ID"):
+        print(http_json("/task/submit","POST",{"type":"peek","target_agent":aid,"payload":{}})); return
+    p=run_tmux(["capture-pane","-p","-S","-200","-t",tmux_target(aid)],capture=True,check=False)
+    status=load_json(status_path(aid),{}).get("status","ready").upper(); print(f"[{status}]\n{p.stdout}",end="")
+
+def kill(ns):
+    aid=full_agent_id(ns.agent_id); _,s,t=parse_agent_id(aid)
+    run_tmux(["kill-window","-t",f"mc-{s}:{t}"],check=False); run_tmux(["kill-session","-t",f"rec-{t}"],check=False)
+    rows=load_roster()
+    for r in rows:
+        if r.get("agent_id")==aid:r.update(retired=True,state="dead",retired_reason=ns.reason or "",retired_at=time.time())
+    save_roster(rows); atomic_json(agents_path(),[r for r in rows if not r.get("retired") and window_exists(f"mc-{r.get('session')}:{r.get('tab')}")])
+    try:http_json("/agents/unregister","POST",{"agent_id":aid})
+    except Exception:pass
+
+def revive(ns):
+    aid=full_agent_id(ns.agent_id); rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
+    if not rec:raise SystemExit("unknown agent")
+    argv=["spawn",aid,"--backend",rec.get("backend","claude"),"--cwd",rec.get("cwd",ROOT)]
+    if rec.get("boss_id"):argv += ["--boss",rec["boss_id"]]
+    if rec.get("is_master"):argv += ["--master"]
+    if rec.get("model"):argv += ["--model",rec["model"]]
+    if rec.get("lifecycle")=="owner" and rec.get("owner_task_id"):argv += ["--owner-task",rec["owner_task_id"]]
+    elif rec.get("lifecycle")=="temporary":argv += ["--temporary"]
+    main(argv)
+
+def switch_backend(ns):
+    aid=full_agent_id(ns.agent_id); host,session,tab=parse_agent_id(aid)
+    if host != ENV.get("HOST_ID"):raise SystemExit("remote backend switching is not supported")
+    rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
+    if not rec:raise SystemExit("unknown agent")
+    desired={**rec,"backend":ns.backend,"model":ns.model,"retired":False,
+             "state":"switching","switched_at":time.time()}
+    update_roster(desired)
+    run_tmux(["kill-window","-t",f"mc-{session}:{tab}"],check=False)
+    run_tmux(["kill-session","-t",f"rec-{tab}"],check=False)
+    main(["revive",aid])
+
+def status(_):
+    try:
+        for a in http_json("/agents"):print(f"{a['agent_id']} [{a['state']}] {a.get('status','ready')} {a.get('summary','')}")
+    except Exception:
+        for a in load_roster():print(f"{a['agent_id']} [{a.get('state','dead')}]")
+
+def answer(ns):
+    aid=full_agent_id(ns.agent_id); run_tmux(["send-keys","-t",tmux_target(aid),str(ns.choice),"Enter"])
+
+def parser():
+    p=argparse.ArgumentParser(prog="mp"); sub=p.add_subparsers(dest="verb",required=True)
+    q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="claude",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.set_defaults(fn=spawn)
+    q=sub.add_parser("send");q.add_argument("agent_id");q.add_argument("message",nargs="+");q.set_defaults(fn=send)
+    q=sub.add_parser("complete");q.add_argument("summary",nargs="+");q.add_argument("--proof",action="append",default=[]);q.add_argument("--proof-file",action="append",default=[]);q.add_argument("--proof-url",action="append",default=[]);q.set_defaults(fn=complete)
+    q=sub.add_parser("peek");q.add_argument("agent_id");q.set_defaults(fn=peek)
+    q=sub.add_parser("kill");q.add_argument("agent_id");q.add_argument("--reason");q.set_defaults(fn=kill)
+    q=sub.add_parser("revive");q.add_argument("agent_id");q.set_defaults(fn=revive)
+    q=sub.add_parser("switch");q.add_argument("agent_id");q.add_argument("--backend",required=True,choices=["claude","codex"]);q.add_argument("--model",required=True);q.set_defaults(fn=switch_backend)
+    q=sub.add_parser("answer");q.add_argument("agent_id");q.add_argument("choice",type=int);q.set_defaults(fn=answer)
+    q=sub.add_parser("status");q.set_defaults(fn=status)
+    return p
+
+def main(argv=None):
+    ns=parser().parse_args(argv); return ns.fn(ns)
+if __name__=="__main__": main()

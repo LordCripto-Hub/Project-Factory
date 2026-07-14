@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+import argparse, json, os, pathlib, shutil, subprocess, time
+from mpcommon import ENV,ROOT,atomic_json,load_json
+from importlib.machinery import SourceFileLoader
+exporter=SourceFileLoader("board_export",os.path.join(ROOT,"bin","board-export.py")).load_module()
+def main():
+    ap=argparse.ArgumentParser();ap.add_argument("ref",nargs="?",default="HEAD");a=ap.parse_args()
+    board=os.path.realpath(os.environ.get("BOARD_PATH",os.path.join(ROOT,"todos","board.v2.json")));repo=os.path.realpath(os.environ.get("EXPORT_REPO",ENV.get("EXPORT_REPO") or exporter.default_repo()))
+    p=subprocess.run(["git","-C",repo,"show",f"{a.ref}:board.v2.json"],capture_output=True,text=True)
+    if p.returncode:raise SystemExit("snapshot not found")
+    try:data=json.loads(p.stdout)
+    except Exception:raise SystemExit("snapshot unparseable")
+    if not isinstance(data,dict) or not isinstance(data.get("tasks"),dict):raise SystemExit("snapshot empty or invalid")
+    os.makedirs(os.path.dirname(board),exist_ok=True)
+    if os.path.exists(board):shutil.copy2(board,board+f".bak.prerestore.{time.time_ns()}")
+    atomic_json(board,data);print(f"restored {len(data['tasks'])} tasks from {a.ref}")
+if __name__=="__main__":main()

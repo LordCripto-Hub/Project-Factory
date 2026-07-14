@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Claude lifecycle hook. UserPromptSubmit deliberately writes no stdout."""
+import glob,json,os,pathlib,re,sys,time,urllib.request
+AGENT=os.environ.get("AGENT_ID","")
+if not AGENT:sys.exit(0)
+ROOT=os.environ.get("INSTALL_DIR",os.path.expanduser("~/mypeople"));BOSS=os.environ.get("BOSS_ID","")
+try:data=json.load(sys.stdin)
+except:data={}
+event=data.get("hook_event_name") or data.get("event") or os.environ.get("CLAUDE_HOOK_EVENT","")
+_,rest=AGENT.split("/",1);session,tab=rest.split(":",1);path=os.path.join(ROOT,"status",f"mc-{session}",tab+".json");os.makedirs(os.path.dirname(path),exist_ok=True)
+def load():
+ try:return json.load(open(path))
+ except:return {}
+def write(status,summary="",state="alive"):
+ d=load();d.update(status=status,timestamp=time.time(),session_id=data.get("session_id",d.get("session_id","")),boss_id=BOSS,backend="claude",state=state)
+ if summary:d["summary"]=summary
+ tmp=f"{path}.{os.getpid()}.{time.time_ns()}.tmp";json.dump(d,open(tmp,"w"),indent=2);os.replace(tmp,path)
+def assistant_text(obj):
+ if not isinstance(obj,dict):return ""
+ if obj.get("type")=="assistant":
+  m=obj.get("message",obj);c=m.get("content",[]) if isinstance(m,dict) else []
+  return " ".join(x.get("text","") for x in c if isinstance(x,dict) and x.get("type")=="text")
+ return ""
+def summary():
+ paths=[]
+ if data.get("transcript_path"):paths.append(data["transcript_path"])
+ sid=data.get("session_id","")
+ if sid:paths += glob.glob(os.path.expanduser(f"~/.claude/projects/**/{sid}.jsonl"),recursive=True)
+ for _ in range(4):
+  for p in paths:
+   try:
+    lines=pathlib.Path(p).read_text(errors="replace").splitlines();texts=[]
+    for line in lines[-100:]:
+     try:t=assistant_text(json.loads(line))
+     except:t=""
+     if t.strip():texts.append(t.strip())
+    if texts:
+     candidate=re.sub(r"\s+"," ",texts[-1])[:500];old=load().get("summary","")
+     keys=("plan","approve","queue","mp","autonomous","verify","fire-and-forget") if tab=="Boss" else (("nightwatch","ceo-equivalent","approve","whatsapp","never-done") if tab=="Nightwatch" else ())
+     if keys and sum(k in candidate.lower() for k in keys)<2 and sum(k in old.lower() for k in keys)>=2:return old
+     return candidate
+   except:pass
+  time.sleep(.5)
+ old=load().get("summary","")
+ if tab=="Boss" and sum(k in old.lower() for k in ("plan","queue","mp","verify","autonomous","approve","fire-and-forget"))>=2:return old
+ return old or "turn completed"
+def notify(message):
+ if not BOSS:return
+ body=json.dumps({"type":"send","target_agent":BOSS,"payload":{"message":message}}).encode();req=urllib.request.Request(os.environ.get("QUEUE_URL","http://127.0.0.1:9900")+"/task/submit",data=body,method="POST",headers={"Content-Type":"application/json","X-Queue-Secret":os.environ.get("QUEUE_SECRET","")})
+ try:urllib.request.urlopen(req,timeout=5).read()
+ except:pass
+if event=="SessionStart":write("starting")
+elif event=="UserPromptSubmit":write("working")
+elif event=="PreToolUse":
+ write("blocked");notify(f"[AGENT QUESTION] {AGENT} is blocked on AskUserQuestion")
+elif event=="Stop":
+ s=summary();write("idle",s);notify(f"[AGENT NOTIFICATION] {AGENT} finished: {s}")
+elif event=="SessionEnd":write("idle",state="dead")
