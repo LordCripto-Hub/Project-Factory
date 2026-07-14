@@ -225,5 +225,22 @@ class MemoryTaskSpecContract(unittest.TestCase):
             project_context.compile_task_spec(task, value, recall=fail)
 
 
+class ProjectInstallContract(unittest.TestCase):
+    def test_locked_gateway_install_and_operator_documentation_exist(self):
+        install = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("npm ci --omit=dev --ignore-scripts", install)
+        self.assertIn("memory-gateway", install)
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(encoding="utf-8")
+        for phrase in (
+            "ProjectProfile",
+            "TaskSpec",
+            "Context question",
+            "read-only MCP pilot",
+            "MYPEOPLE_MEMORY_TOKEN",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, manual)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

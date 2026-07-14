@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
-ROOT=${INSTALL_DIR:-$HOME/mypeople}; mkdir -p "$ROOT"/{bin,run/boss,run/eng,status,todos,plugins} "$HOME/.local/bin" "$HOME/.claude"
+ROOT=${INSTALL_DIR:-$HOME/mypeople}; mkdir -p "$ROOT"/{bin,run/boss,run/eng,run/project-profiles,run/taskspecs,status,todos,plugins} "$HOME/.local/bin" "$HOME/.claude"
+if [[ -f "$ROOT/memory-gateway/package-lock.json" ]]; then
+  npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix "$ROOT/memory-gateway"
+fi
 python3 - "$ROOT" <<'PY'
 import json,os,sys
 root=os.path.realpath(sys.argv[1]);p=os.path.expanduser('~/.claude.json')

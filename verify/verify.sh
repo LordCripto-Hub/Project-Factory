@@ -19,6 +19,11 @@ if [[ ! -d "$VERIFY/node_modules/playwright" ]]; then
   (cd "$VERIFY" && npm install --no-audit --no-fund playwright@1.61.1)
 fi
 (cd "$VERIFY" && npx playwright install chromium webkit >/dev/null)
+python3 "$VERIFY/test_task_project_fields.py"
+python3 "$VERIFY/test_project_context.py"
+python3 "$VERIFY/test_memory_gateway.py"
+python3 "$VERIFY/test_taskspec_spawn.py"
+npm test --prefix "$ROOT/memory-gateway"
 python3 "$VERIFY/test_task_evidence.py"
 python3 "$VERIFY/test_voice_dock.py"
 python3 "$VERIFY/test_scorpion_theme.py"

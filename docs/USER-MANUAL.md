@@ -191,7 +191,7 @@ docker cp mypeople:/home/mp/recordings (Join-Path $backupRoot 'recordings')
 - External volumes and full restore are not yet proven.
 - The transient queue is lost when its process restarts.
 - Codex conversations are not resumed automatically.
-- A card's project does not yet have a formal `ProjectProfile` contract for repository, context, verification commands, and permissions.
+- ProjectProfile and TaskSpec are available, but external memory remains disabled until the Phase B security and deployment gate.
 - PID 1 is `sleep infinity` and does not reap child processes; zombie processes have been observed.
 - Ports are currently published on `0.0.0.0`; port 7681 allows terminal writes.
 - The complete verifier creates temporary cards; run it without active work or in an isolated environment.
@@ -256,3 +256,27 @@ Terminal dictation pastes text but never sends Enter. If Windows intercepts the 
 4. One bounded context packet at task startup.
 5. Explicit session handoff or resume without depending on invisible history.
 6. Atomic leases, evidence, and approval gates for parallel work.
+
+## Bounded external memory pilot
+
+Phase A gives every owner task one explicit project contract without turning MyPeople into another memory system.
+
+1. Copy `examples/project-profile.example.json` to `run/project-profiles/<project-slug>.json`.
+2. Set the repository, working directory, context files, verification commands, allowed actions, forbidden actions, and limits in that local ProjectProfile.
+3. In Priorities, set **Project** to the matching slug. Add a **Context question** only when the task needs targeted durable recall.
+4. When Boss starts an owner worker, MyPeople compiles a mode-0600 TaskSpec under `run/taskspecs/` before creating the process. The worker reads `$MYPEOPLE_TASKSPEC_PATH` first.
+
+No Context question means no memory process or network call. A profile with `memory.enabled=false` also makes no memory call. When recall is requested, timeout, authorization, project-isolation, response-shape, or budget failures stop worker creation and return only a typed error.
+
+The read-only MCP pilot permits only `recall`, with top K at most 3 and graph hops fixed at 0. The credential remains an environment reference such as `env://MYPEOPLE_MEMORY_TOKEN`; never write the token value into a profile, Git, TaskSpec, event, URL, or comment.
+
+Inspect compiled contracts locally:
+
+```bash
+jq . run/taskspecs/<task-id>.json
+tail -n 20 run/taskspec-events.jsonl | jq .
+```
+
+The event log contains metadata only: task/project identifiers, profile revision, memory status, counts, timing, response characters, and `aiUsage` as measured or `not_measured`. It does not contain questions, claims, tokens, or server URLs.
+
+Phase A does not deploy Cloudflare, write external memory, enable a live profile, import real data, or expose MCP tools directly to Boss/engineers. Those actions require the separate Phase B approval and security gate.
