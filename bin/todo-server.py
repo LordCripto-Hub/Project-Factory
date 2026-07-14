@@ -8,17 +8,42 @@ BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=in
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
 BOSS=ENV.get("BOSS_AGENT","main:Boss");BOSS_FULL=full_agent_id(BOSS);NW_AGENT=ENV.get("NIGHTWATCH_AGENT",f"{HOST_ID}/nightwatch:Nightwatch")
 BOARD_PATH=os.path.realpath(os.environ.get("BOARD_PATH",os.path.join(ROOT,"todos","board.v2.json")))
+PROJECT_PROFILES_DIR=os.path.realpath(os.environ.get("PROJECT_PROFILES_DIR",os.path.join(ROOT,"run","project-profiles")))
 TODOS_DIR=os.path.dirname(BOARD_PATH);PROOFS_DIR=os.path.join(TODOS_DIR,"proofs");INBOX_LOG=os.path.join(TODOS_DIR,"boss-inbox.log")
 os.makedirs(os.path.join(ROOT,"run"),exist_ok=True)
 SESSIONS=set();TOKENS={};START=time.time();STORE_LOCK=threading.RLock()
 VALID_STATES={"needs_brainstorm","working","review","done","blocked","cancelled","recurring"};TERMINAL={"done","cancelled"}
+PROJECT_SLUG_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+def validate_project_slug(value,*,allow_empty=False):
+    value=str(value or "").strip()
+    if allow_empty and not value:return ""
+    if len(value)>64 or not PROJECT_SLUG_RE.fullmatch(value):raise ValueError("invalid_project_slug")
+    return value
+
+def validate_context_question(value):
+    value=re.sub(r"[\x00-\x1f\x7f]+"," ",str(value or "")).strip()
+    if len(value)>500:raise ValueError("context_question_too_long")
+    return value
+
+def available_project_slugs():
+    directory=pathlib.Path(PROJECT_PROFILES_DIR)
+    if not directory.is_dir():return []
+    values=[]
+    for path in directory.glob("*.json"):
+        try:
+            slug=validate_project_slug(path.stem)
+            data=json.loads(path.read_text(encoding="utf-8"))
+            if data.get("slug")==slug:values.append(slug)
+        except (OSError,ValueError,json.JSONDecodeError):continue
+    return sorted(set(values))
 
 def default_board():return {"version":2,"order":[],"pinSeq":0,"tasks":{}}
 def blank_board():return default_board()
 def owner_event(action,agent_id="",previous="",by="system"):
     return {"id":secrets.token_hex(6),"action":action,"kind":action,"agent_id":agent_id,"previous":previous,"by":by,"ts":time.time()}
 def normalize_task(t):
-    defaults={"text":"","state":"needs_brainstorm","assignee":"","doneCondition":"","evidencePolicy":"optional","workToDone":False,"comments":[],"proofs":[],"unread":0,"verified":False,"pingsToBoss":0,"pinned":False,"pinRank":None,"test":False,"ownerHistory":[],"ownerNeedsReplacement":False,"updated":time.time()}
+    defaults={"text":"","state":"needs_brainstorm","assignee":"","doneCondition":"","projectSlug":"","contextQuestion":"","evidencePolicy":"optional","workToDone":False,"comments":[],"proofs":[],"unread":0,"verified":False,"pingsToBoss":0,"pinned":False,"pinRank":None,"test":False,"ownerHistory":[],"ownerNeedsReplacement":False,"updated":time.time()}
     for k,v in defaults.items():
         if k not in t or t[k] is None:t[k]=copy.deepcopy(v)
     if t.get("evidencePolicy") not in ("required","optional"):t["evidencePolicy"]="optional"
@@ -228,7 +253,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not path or not os.path.isfile(path):return self.json({"error":"not_found"},404)
             return self.send_bytes(open(path,"rb").read(),200,mimetypes.guess_type(path)[0] or "application/octet-stream",head=head)
         if p=="/todo/board":
-            b=load_board();o=copy.deepcopy(b);o["displayOrder"]=ordered_ids(b);o["boardPath"]=BOARD_PATH;return self.json(o,head=head)
+            b=load_board();o=copy.deepcopy(b);o["displayOrder"]=ordered_ids(b);o["boardPath"]=BOARD_PATH;o["projectSlugs"]=available_project_slugs();return self.json(o,head=head)
         if p in ("/todo/attach","/todo/terminal","/terminal"):
             aid=urllib.parse.parse_qs(u.query).get("agent",[""])[0]
             try:
@@ -283,6 +308,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not item or item["used"] or item["expires"]<time.time() or item["text"]!=d.get("text",""):return self.json({"ok":False,"error":"nightwatch_cannot_create"},403)
             item["used"]=True
         if kind=="nightwatch" and op=="set" and (d.get("state")=="done" or d.get("done") is True or d.get("workToDone") is True):return self.json({"ok":False,"error":"nightwatch_cannot_done"},403)
+        try:
+            project_slug=validate_project_slug(d.get("projectSlug",""),allow_empty=True) if op in ("add","set") else ""
+            context_question=validate_context_question(d.get("contextQuestion","")) if op in ("add","set") else ""
+        except ValueError as e:
+            return self.json({"ok":False,"error":str(e)},400)
         with STORE_LOCK:
             b=load_board();tid=d.get("id","")
             if op=="add":
@@ -290,7 +320,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 title=str(d.get("text","")).strip();is_test=bool(d.get("test"));policy=d.get("evidencePolicy","optional" if is_test else "required")
                 if not title:return self.json({"ok":False,"error":"text_required"},400)
                 if policy not in ("required","optional"):return self.json({"ok":False,"error":"invalid_evidence_policy"},400)
-                tid=secrets.token_hex(8);t=normalize_task({"id":tid,"text":title,"state":"needs_brainstorm","evidencePolicy":policy,"test":is_test,"created":time.time(),"updated":time.time()});b["tasks"][tid]=t;b["order"].insert(0,tid)
+                tid=secrets.token_hex(8);t=normalize_task({"id":tid,"text":title,"state":"needs_brainstorm","projectSlug":project_slug,"contextQuestion":context_question,"evidencePolicy":policy,"test":is_test,"created":time.time(),"updated":time.time()});b["tasks"][tid]=t;b["order"].insert(0,tid)
                 if not t["test"]:fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": added",d.get("by",d.get("actor","CEO")))
             elif tid not in b["tasks"]:return self.json({"ok":False,"error":"unknown_task"},404)
             elif op=="del":b["tasks"].pop(tid);b["order"]=[x for x in b["order"] if x!=tid]
@@ -312,6 +342,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 t["state"]=desired;t["evidencePolicy"]=policy
                 for k in ("text","doneCondition","workToDone"):
                     if k in d:t[k]=d[k]
+                t["projectSlug"]=project_slug;t["contextQuestion"]=context_question
                 t["verified"]=verified
                 t["updated"]=time.time();self.close_reopen(t,old,desired,d.get("by",d.get("actor","")))
                 if old!=desired and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {desired}",d.get("by",d.get("actor","")))
