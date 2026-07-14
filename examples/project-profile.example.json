@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "slug": "example-project",
+  "repository": "https://github.com/example/example-project.git",
+  "workingDirectory": "/workspace/example-project",
+  "allowedBranches": [
+    "main"
+  ],
+  "contextFiles": [
+    "README.md",
+    "AGENTS.md"
+  ],
+  "verificationCommands": [
+    "python3 -m unittest discover -s verify"
+  ],
+  "allowedActions": [
+    "read",
+    "edit",
+    "test"
+  ],
+  "forbiddenActions": [
+    "deploy",
+    "push",
+    "delete"
+  ],
+  "limits": {
+    "contextChars": 6000,
+    "memoryTopK": 3,
+    "memoryHops": 0,
+    "memoryTimeoutSeconds": 8
+  },
+  "memory": {
+    "enabled": false,
+    "serverUrl": "https://memory.example.invalid/mcp",
+    "credentialRef": "env://MYPEOPLE_MEMORY_TOKEN"
+  }
+}

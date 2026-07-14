@@ -24,7 +24,7 @@ def read_env(path: str = CONFIG) -> dict[str, str]:
         out[k.strip()] = v
     # Process-local overrides enable isolated verification without mutating queue.env.
     for k, v in os.environ.items():
-        if k in out or k in {"BOARD_PATH","ROSTER_PATH","AGENTS_PATH","STATUS_DIR","EXPORT_REPO","CEO_WHATSAPP","HERMES_SEND_URL","NIGHTWATCH_IDLE_MIN","NIGHTWATCH_TOKEN_TTL","BOSS_AGENT","NIGHTWATCH_AGENT","HUD_PORT","TODO_PORT","QUEUE_URL","BIND_ADDR","INSTALL_DIR","HOST_ID","QUEUE_SECRET","NIGHTWATCH_TOKEN"}:
+        if k in out or k in {"BOARD_PATH","ROSTER_PATH","AGENTS_PATH","STATUS_DIR","EXPORT_REPO","CEO_WHATSAPP","HERMES_SEND_URL","NIGHTWATCH_IDLE_MIN","NIGHTWATCH_TOKEN_TTL","BOSS_AGENT","NIGHTWATCH_AGENT","HUD_PORT","TODO_PORT","QUEUE_URL","BIND_ADDR","INSTALL_DIR","HOST_ID","QUEUE_SECRET","NIGHTWATCH_TOKEN","PROJECT_PROFILES_DIR","TASKSPECS_DIR","MEMORY_GATEWAY_PATH","MYPEOPLE_MEMORY_ALLOW_HTTP"}:
             out[k] = v
     return out
 
