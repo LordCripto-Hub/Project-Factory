@@ -170,5 +170,60 @@ class TaskSpecContract(unittest.TestCase):
                 project_context.compile_task_spec(task, profile())
 
 
+class MemoryTaskSpecContract(unittest.TestCase):
+    def test_requested_memory_is_bounded_and_embedded(self):
+        value = profile()
+        value["memory"]["enabled"] = True
+        calls = []
+        task = {
+            "id": "task-1",
+            "text": "Repair",
+            "doneCondition": "Tests pass",
+            "projectSlug": "mypeople",
+            "contextQuestion": "Which constraint applies?",
+            "evidencePolicy": "required",
+        }
+        claims = [{
+            "id": "1",
+            "projectSlug": "mypeople",
+            "content": "Point-in-time; verify before asserting.",
+            "sourceUri": "task://source",
+            "sourceType": "verified-task",
+            "createdAt": 1,
+            "updatedAt": 1,
+            "status": "canonical",
+        }]
+        result = project_context.compile_task_spec(
+            task,
+            value,
+            recall=lambda request: calls.append(request) or {
+                "claims": claims,
+                "truncated": False,
+                "responseChars": len(claims[0]["content"]),
+                "aiUsage": "not_measured",
+            },
+        )
+        self.assertEqual(calls[0]["topK"], 3)
+        self.assertEqual(calls[0]["hops"], 0)
+        self.assertEqual(result["memoryClaims"], claims)
+        self.assertEqual(result["memoryStatus"], "ok")
+
+    def test_requested_memory_failure_is_fail_closed(self):
+        value = profile()
+        value["memory"]["enabled"] = True
+        task = {
+            "id": "task-1",
+            "text": "Repair",
+            "doneCondition": "Tests pass",
+            "projectSlug": "mypeople",
+            "contextQuestion": "Which constraint applies?",
+            "evidencePolicy": "required",
+        }
+        def fail(_request):
+            raise project_context.MemoryError("timeout")
+        with self.assertRaisesRegex(project_context.TaskSpecError, "memory_timeout"):
+            project_context.compile_task_spec(task, value, recall=fail)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

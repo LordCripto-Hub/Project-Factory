@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import time
 from urllib.parse import urlparse
 
 MAX_CONTEXT_CHARS = 20_000
@@ -199,6 +201,79 @@ def load_profile(directory, slug) -> dict:
         raise ProfileError("profile_slug_mismatch")
     return result
 
+class MemoryError(RuntimeError):
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=None):
+    profile = validate_profile(profile)
+    credential_ref = profile["memory"]["credentialRef"]
+    match = ENV_REF_RE.fullmatch(credential_ref)
+    if not match:
+        raise MemoryError("unauthorized")
+    credential_env = match.group(1)
+    token = os.environ.get(credential_env)
+    if not token:
+        raise MemoryError("unauthorized")
+    gateway_path = os.environ.get(
+        "MEMORY_GATEWAY_PATH",
+        str(Path(__file__).resolve().parents[1] / "memory-gateway" / "memory-gateway.mjs"),
+    )
+    request = {
+        "serverUrl": profile["memory"]["serverUrl"],
+        "projectSlug": profile["slug"],
+        "question": str(question or "").strip(),
+        "topK": profile["limits"]["memoryTopK"],
+        "hops": profile["limits"]["memoryHops"],
+        "timeoutSeconds": profile["limits"]["memoryTimeoutSeconds"],
+        "credentialEnv": credential_env,
+        "maxChars": int(max_chars or profile["limits"]["contextChars"]),
+    }
+    child_environment = os.environ.copy()
+    child_environment[credential_env] = token
+    try:
+        completed = runner(
+            ["node", os.path.realpath(gateway_path)],
+            input=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+            capture_output=True,
+            text=True,
+            timeout=profile["limits"]["memoryTimeoutSeconds"] + 2,
+            env=child_environment,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise MemoryError("timeout") from error
+    except (OSError, subprocess.SubprocessError) as error:
+        raise MemoryError("unavailable") from error
+    try:
+        response = json.loads((completed.stdout or "").strip())
+    except (json.JSONDecodeError, TypeError) as error:
+        raise MemoryError("invalid_response") from error
+    if not isinstance(response, dict):
+        raise MemoryError("invalid_response")
+    if completed.returncode != 0 or response.get("ok") is not True:
+        code = response.get("error")
+        allowed = {
+            "unauthorized", "timeout", "project_mismatch", "invalid_response",
+            "budget_exceeded", "unavailable",
+        }
+        raise MemoryError(code if code in allowed else "unavailable")
+    if not isinstance(response.get("claims"), list):
+        raise MemoryError("invalid_response")
+    if not isinstance(response.get("truncated"), bool):
+        raise MemoryError("invalid_response")
+    if not isinstance(response.get("responseChars"), int):
+        raise MemoryError("invalid_response")
+    return {
+        "claims": response["claims"],
+        "truncated": response["truncated"],
+        "responseChars": response["responseChars"],
+        "aiUsage": response.get("aiUsage", "not_measured"),
+    }
+
+
 class TaskSpecError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
@@ -236,7 +311,7 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
     ).strip()
     if len(question) > 500:
         raise TaskSpecError("context_question_too_long")
-    clock = now if now is not None else __import__("time").time
+    clock = now if now is not None else time.time
     result = {
         "schemaVersion": 1,
         "taskId": task_id,
@@ -256,8 +331,55 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
         "memoryStatus": "not_requested" if not question else "disabled",
         "compiledAt": clock(),
     }
-    if _task_spec_chars(result) > profile["limits"]["contextChars"]:
+    limit = profile["limits"]["contextChars"]
+    if _task_spec_chars(result) > limit:
         raise TaskSpecError("local_contract_budget_exceeded")
+    if not question or not profile["memory"]["enabled"]:
+        return result
+    remaining = limit - _task_spec_chars(result)
+    if remaining < 256:
+        raise TaskSpecError("memory_budget_exceeded")
+    credential_env = ENV_REF_RE.fullmatch(profile["memory"]["credentialRef"]).group(1)
+    request = {
+        "serverUrl": profile["memory"]["serverUrl"],
+        "projectSlug": profile["slug"],
+        "question": question,
+        "topK": profile["limits"]["memoryTopK"],
+        "hops": profile["limits"]["memoryHops"],
+        "timeoutSeconds": profile["limits"]["memoryTimeoutSeconds"],
+        "credentialEnv": credential_env,
+        "maxChars": remaining,
+    }
+    try:
+        response = recall(request) if recall is not None else call_memory_gateway(
+            profile, question, max_chars=remaining
+        )
+    except MemoryError as error:
+        raise TaskSpecError(f"memory_{error.code}") from error
+    if not isinstance(response, dict) or not isinstance(response.get("claims"), list):
+        raise TaskSpecError("memory_invalid_response")
+    claims = []
+    for raw in response["claims"]:
+        if not isinstance(raw, dict):
+            raise TaskSpecError("memory_invalid_response")
+        for field in ("id", "projectSlug", "content", "sourceUri", "sourceType"):
+            if not isinstance(raw.get(field), str) or not raw[field].strip():
+                raise TaskSpecError("memory_invalid_response")
+        if raw["projectSlug"] != project_slug:
+            raise TaskSpecError("memory_project_mismatch")
+        claims.append(dict(raw))
+    result["memoryClaims"] = claims
+    result["memoryStatus"] = "truncated" if response.get("truncated") is True else "ok"
+    while _task_spec_chars(result) > limit and result["memoryClaims"]:
+        overflow = _task_spec_chars(result) - limit
+        last = result["memoryClaims"][-1]
+        if len(last["content"]) <= overflow:
+            result["memoryClaims"].pop()
+        else:
+            last["content"] = last["content"][:-overflow]
+        result["memoryStatus"] = "truncated"
+    if _task_spec_chars(result) > limit:
+        raise TaskSpecError("memory_budget_exceeded")
     return result
 
 
@@ -285,4 +407,3 @@ def write_task_spec(directory, task_id, value):
         except FileNotFoundError:
             pass
     return str(path)
-
