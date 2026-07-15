@@ -66,6 +66,7 @@ while (( ! stopping )); do
   spawn todo-server env PATH="$HOME/.local/bin:$ROOT/bin:$PATH" python3 "$ROOT/bin/todo-server.py"
   spawn queue-client python3 "$ROOT/bin/queue-client.py"
   spawn board-export python3 "$ROOT/bin/board-export.py"
+  spawn workspace-supervisor python3 "$ROOT/bin/workspace-supervisor.py"
   spawn ttyd-write ttyd -i 0.0.0.0 -W -a -p "$TTYD_PORT" -t disableLeaveAlert=true "$ROOT/bin/attach-helper.sh"
   spawn ttyd-read ttyd -i 0.0.0.0 -a -p "$TTYD_RO_PORT" -t disableLeaveAlert=true "$ROOT/bin/attach-ro-helper.sh"
   spawn boss-supervisor bash "$ROOT/bin/boss-supervisor.sh"

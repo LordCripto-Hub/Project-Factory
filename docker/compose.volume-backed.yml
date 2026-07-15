@@ -29,6 +29,7 @@ services:
       - mypeople-codex:/home/mp/.codex
       - mypeople-claude:/home/mp/.claude
       - mypeople-recordings:/home/mp/recordings
+      - mypeople-workspaces:/home/mp/workspaces
 
 volumes:
   mypeople-todos:
@@ -45,3 +46,5 @@ volumes:
     name: mypeople-claude
   mypeople-recordings:
     name: mypeople-recordings
+  mypeople-workspaces:
+    name: mypeople-workspaces

@@ -11,6 +11,7 @@ EXPECTED = {
     "mypeople-codex": "/home/mp/.codex",
     "mypeople-claude": "/home/mp/.claude",
     "mypeople-recordings": "/home/mp/recordings",
+    "mypeople-workspaces": "/home/mp/workspaces",
 }
 
 contract = json.loads(

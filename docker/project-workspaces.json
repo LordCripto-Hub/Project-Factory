@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "projects": [
+    {
+      "schemaVersion": 1,
+      "slug": "project-factory",
+      "repository": "https://github.com/LordCripto-Hub/Project-Factory.git",
+      "branch": "main",
+      "workspace": "/home/mp/workspaces/project-factory",
+      "tmuxSession": "repo-project-factory"
+    }
+  ]
+}
