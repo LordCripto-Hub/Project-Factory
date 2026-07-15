@@ -1,4 +1,4 @@
-# Project Factory — MyPeople with Codex
+# Project Factory - MyPeople with Codex
 
 MyPeople is a local coordination environment for Codex agents running through Docker and tmux. It provides a Boss, Nightwatch, delegated workers, Priorities, and an operational HUD.
 
@@ -37,6 +37,8 @@ Windows operators can install the desktop shortcut with:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Install-MyPeopleShortcut.ps1
 ```
+
+The installer copies the launcher to `%LOCALAPPDATA%\MyPeople\launcher`, so the desktop shortcut does not depend on the repository remaining in its original directory.
 
 ## Documentation
 

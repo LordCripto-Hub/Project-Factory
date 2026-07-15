@@ -137,7 +137,7 @@ Install the desktop shortcut once:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Install-MyPeopleShortcut.ps1
 ```
 
-The shortcut starts Docker Desktop when required, starts the existing container, launches MyPeople services idempotently, checks Priorities, queue/HUD, and terminal readiness, then opens Priorities. It never deletes or recreates the container.
+The installer copies the required launcher files to `%LOCALAPPDATA%\MyPeople\launcher`. The shortcut starts Docker Desktop when required, starts the existing container, launches MyPeople services idempotently, checks Priorities, queue/HUD, terminal readiness, and that Boss and Nightwatch are alive, then opens Priorities. It never deletes or recreates the container.
 
 Manual startup remains available:
 
@@ -147,7 +147,7 @@ docker exec mypeople /home/mp/mypeople/bin/mypeople up --detach
 docker exec mypeople /home/mp/mypeople/bin/mp status
 ```
 
-The container currently uses `restart policy: no` and `sleep infinity` as its primary command, so MyPeople services may need to be started after Docker or Windows restarts.
+The container currently uses restart policy `unless-stopped` and `sleep infinity` as its primary command. The Windows launcher also restarts the internal supervisors when Docker is running but MyPeople services have stopped.
 
 ## Current persistence
 

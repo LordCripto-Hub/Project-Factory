@@ -115,6 +115,17 @@ try {
         } catch { return $false }
     } 30 'terminal web'
 
+    Wait-Until {
+        try {
+            $statusOutput = @(& docker exec mypeople /home/mp/mypeople/bin/mp status 2>$null)
+            $statusExitCode = $LASTEXITCODE
+            $statusText = $statusOutput -join "`n"
+            return $statusExitCode -eq 0 `
+                -and $statusText -match 'main:Boss \[alive\]' `
+                -and $statusText -match 'nightwatch:Nightwatch \[alive\]'
+        } catch { return $false }
+    } $ServiceTimeoutSeconds 'Boss and Nightwatch'
+
     Write-LauncherLog 'READY http://localhost:9933/'
     if (-not $NoBrowser) { Start-Process 'http://localhost:9933/' }
 } catch {

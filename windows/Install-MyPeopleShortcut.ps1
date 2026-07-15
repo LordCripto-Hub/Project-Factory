@@ -1,6 +1,20 @@
 $ErrorActionPreference = 'Stop'
-$launcher = Join-Path $PSScriptRoot 'Start-MyPeople.ps1'
-if (-not (Test-Path -LiteralPath $launcher)) { throw "Launcher missing: $launcher" }
+$installDirectory = Join-Path $env:LOCALAPPDATA 'MyPeople\launcher'
+New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
+
+foreach ($name in @('Start-MyPeople.ps1', 'MyPeople.ProviderProfiles.psm1')) {
+    $source = Join-Path $PSScriptRoot $name
+    if (-not (Test-Path -LiteralPath $source)) { throw "Launcher file missing: $source" }
+    $destination = Join-Path $installDirectory $name
+    if (-not [IO.Path]::GetFullPath($source).Equals(
+        [IO.Path]::GetFullPath($destination),
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+    }
+}
+
+$launcher = Join-Path $installDirectory 'Start-MyPeople.ps1'
 
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcutPath = Join-Path $desktop 'MyPeople.lnk'
