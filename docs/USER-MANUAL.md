@@ -162,6 +162,7 @@ Mutable state is separated into:
 | `mypeople-codex` | `/home/mp/.codex` | Codex sessions and local login state |
 | `mypeople-claude` | `/home/mp/.claude` | Claude sessions and local login state |
 | `mypeople-recordings` | `/home/mp/recordings` | Terminal recordings |
+| `mypeople-workspaces` | `/home/mp/workspaces` | Managed Git checkouts, local branches, and commits |
 
 Run the read-only preflight first:
 
@@ -169,7 +170,7 @@ Run the read-only preflight first:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Migrate-MyPeopleDockerState.ps1
 ```
 
-Review the reported `transaction.json` under `%LOCALAPPDATA%\MyPeople\backups\docker-migration\<timestamp>`. It must show `stage: planned`, `execute: false`, exactly seven volume names, and `rollbackAttempted: false`.
+Review the reported `transaction.json` under `%LOCALAPPDATA%\MyPeople\backups\docker-migration\<timestamp>`. It must show `stage: planned`, `execute: false`, exactly eight volume names, and `rollbackAttempted: false`.
 
 Execute only after the preflight is green:
 
@@ -197,6 +198,51 @@ Cloudflare memory remains disabled until the Docker migration, restore drill, de
 
 The transient queue task registry and connected-client state remain process memory. `mp revive` still opens a new Codex conversation until exact session resume is implemented; explicit TaskSpecs and handoffs remain authoritative.
 
+## Persistent project workspace and publication
+
+Project Factory lives at `/home/mp/workspaces/project-factory` on the
+`mypeople-workspaces` volume. Docker or provider restarts preserve the Git
+checkout. The runtime supervisor recreates only the shell session:
+
+```powershell
+docker exec mypeople tmux has-session -t repo-project-factory
+docker exec -it mypeople tmux attach -t repo-project-factory
+docker exec mypeople git -C /home/mp/workspaces/project-factory status --short --branch
+```
+
+The workspace supervisor clones only when the path is absent. It never runs
+`fetch`, `pull`, `reset`, `merge`, or `checkout` automatically. If an
+existing path is not a Git checkout or its `origin` differs from the manifest,
+the supervisor records a blocked state under `run/workspaces/` and preserves
+the directory for review.
+
+Worker TaskSpecs permit reading, editing, testing, and committing, while
+`push` remains forbidden. Publication is a two-stage Boss gate:
+
+```bash
+# Run inside the managed Boss terminal after the card is in review with evidence.
+mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main
+
+# Safe validation: checks the ledger and Git state without network mutation.
+mp publish <approval-id> --check
+
+# Consumes the approval once and pushes only the approved object.
+mp publish <approval-id>
+mp publish-status <approval-id>
+```
+
+The approval expires after 15 minutes by default and is bound to the task,
+project, full commit, branch, repository, workspace, profile revision, and Boss
+identity. Publication is serialized by a file lock and never uses force push or
+tags. A failed or consumed approval cannot be reused; Boss must review and issue
+a new one.
+
+Git credentials are deliberately not installed by MyPeople. Configure a local
+external credential helper or future secret reference before a real
+publication. Never place a token in `origin`, `.git/config`, the approval
+ledger, a priority comment, Docker Compose, or Git. Portable backups remove
+credential helper and extra-header configuration from copied Git metadata.
+
 ## Known limitations
 
 - The transient queue is lost when its process restarts.
@@ -216,6 +262,8 @@ docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeop
 docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_codex_boss_doctrine.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_boss_supervisor_backend.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_codex_message_submit.py
+docker exec mypeople python3 /home/mp/mypeople/verify/test_project_workspace.py
+docker exec mypeople python3 /home/mp/mypeople/verify/test_project_publisher.py
 ```
 
 Complete suite:

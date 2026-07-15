@@ -42,7 +42,7 @@ The installer copies the launcher to `%LOCALAPPDATA%\MyPeople\launcher`, so the 
 
 ## Durable Docker state
 
-MyPeople uses a pinned local image plus seven named volumes:
+MyPeople uses a pinned local image plus eight named volumes:
 
 - `mypeople-todos` for the board, comments, proofs, and board backups;
 - `mypeople-run` for the roster, provider bindings, TaskSpecs, and runtime records;
@@ -50,6 +50,7 @@ MyPeople uses a pinned local image plus seven named volumes:
 - `mypeople-config` for queue and runtime configuration;
 - `mypeople-codex` and `mypeople-claude` for provider session state;
 - `mypeople-recordings` for terminal recordings.
+- `mypeople-workspaces` for managed Git working trees, local commits, and branches.
 
 The migration is dry-run-first:
 
@@ -66,6 +67,35 @@ The live transaction retains the old container as `mypeople-pre-volumes-<timesta
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Cleanup of preserved containers, images, backups, or restore-test volumes is a separate human-approved operation.
 
 Cloudflare memory remains disabled during this migration. Its first real profile is a separate, bounded, read-only activation cycle after backup, restore, launcher recovery, and rollback are verified.
+
+## Persistent Project Factory workspace
+
+The runtime rehydrates one shell-only tmux session without changing Git content:
+
+```bash
+docker exec -it mypeople tmux attach -t repo-project-factory
+git -C /home/mp/workspaces/project-factory status --short --branch
+```
+
+The first start clones the configured public repository when the workspace is
+absent. Later starts only validate `origin`; they never pull, reset, merge, or
+checkout automatically.
+
+Workers may commit but receive `push` as a forbidden ProjectProfile action.
+After a matching priority reaches review with evidence, Boss binds one
+short-lived approval to the full commit:
+
+```bash
+mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main
+mp publish <approval-id> --check
+mp publish <approval-id>
+```
+
+`project-publisher` is the only product component that invokes `git push`.
+It rejects dirty worktrees, changed commits, remote or branch mismatches,
+expired approvals, and reuse. Git authentication remains an external credential
+helper or secret reference; credentials are never copied into the workspace,
+approval ledger, image, or repository.
 
 ## Documentation
 
