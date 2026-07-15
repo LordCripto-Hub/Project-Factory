@@ -69,4 +69,20 @@ foreach ($forbidden in @('docker volume rm', 'docker compose down -v', 'docker s
     if ($migration -match [regex]::Escape($forbidden)) { throw "Forbidden migration token: $forbidden" }
 }
 
+$restorePath = Join-Path $root 'windows\Test-MyPeopleDockerRestore.ps1'
+$restore = if (Test-Path -LiteralPath $restorePath) { Get-Content -Raw $restorePath } else { '' }
+foreach ($required in @(
+    'mypeople-restore-',
+    'MYPEOPLE_SUPPRESS_BOSS_NOTIFY=1',
+    'MYPEOPLE_DISABLE_PROVIDER_LAUNCH=1',
+    'board.v2.json',
+    'roster.json',
+    'portable-state.tar.gz'
+)) {
+    if ($restore -notmatch [regex]::Escape($required)) { throw "Missing restore behavior: $required" }
+}
+if ($restore -match [regex]::Escape('docker volume rm')) {
+    throw 'Restore drill must retain evidence volumes'
+}
+
 Write-Output 'PASS Docker migration contract, names, redaction, hashes, and transactions'
