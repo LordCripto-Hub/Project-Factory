@@ -133,6 +133,9 @@ function Invoke-MyPeopleRollback {
     if (-not $oldExists) {
         if (-not $newExists) { throw 'Neither preserved nor original container exists' }
         Invoke-MyPeopleDocker -Arguments @('start', $NewName)
+        Invoke-MyPeopleDocker -Arguments @(
+            'exec', $NewName, '/home/mp/mypeople/bin/mypeople', 'up', '--detach'
+        )
         return
     }
     if ($newExists) {
@@ -140,6 +143,9 @@ function Invoke-MyPeopleRollback {
     }
     Invoke-MyPeopleDocker -Arguments @('rename', $PreservedName, $NewName)
     Invoke-MyPeopleDocker -Arguments @('start', $NewName)
+    Invoke-MyPeopleDocker -Arguments @(
+        'exec', $NewName, '/home/mp/mypeople/bin/mypeople', 'up', '--detach'
+    )
 }
 
 Export-ModuleMember -Function @(

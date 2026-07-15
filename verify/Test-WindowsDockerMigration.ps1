@@ -80,6 +80,9 @@ $removeIndex = $module.IndexOf("Invoke-MyPeopleDocker -Arguments @('rm', '-f'")
 if ($guardIndex -lt 0 -or $removeIndex -lt 0 -or $guardIndex -gt $removeIndex) {
     throw 'Rollback removal is not guarded by preserved-container detection'
 }
+if ($module -notmatch [regex]::Escape("'/home/mp/mypeople/bin/mypeople', 'up', '--detach'")) {
+    throw 'Rollback does not restart the legacy container services'
+}
 
 $migrationPath = Join-Path $root 'windows\Migrate-MyPeopleDockerState.ps1'
 $migration = if (Test-Path -LiteralPath $migrationPath) { Get-Content -Raw $migrationPath } else { '' }
@@ -109,6 +112,7 @@ foreach ($required in @(
     'afterStableState',
     'resumedFrom',
     'snapshot-reused',
+    'Rollback launcher verification failed',
     'Get-MyPeopleStableRosterHash -Json',
     'Test-MyPeopleDockerObject -Type volume'
 )) {

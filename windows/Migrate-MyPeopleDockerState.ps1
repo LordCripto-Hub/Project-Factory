@@ -362,6 +362,8 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
         $script:state.rollbackAttempted = $true
         try {
             Invoke-MyPeopleRollback -PreservedName $preservedName
+            & (Join-Path $root 'windows\Start-MyPeople.ps1') -NoBrowser
+            if ($LASTEXITCODE -ne 0) { throw 'Rollback launcher verification failed' }
             $script:state.rollbackStatus = 'pass'
         } catch {
             $script:state.rollbackStatus = 'failed'
