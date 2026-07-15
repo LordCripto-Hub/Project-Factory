@@ -37,6 +37,11 @@ function Get-MyPeopleSha256 {
     return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
+function Read-MyPeoplePlainText {
+    param([Parameter(Mandatory)][string]$Path)
+    return [IO.File]::ReadAllText((Resolve-Path -LiteralPath $Path).Path)
+}
+
 function Get-MyPeopleStableRosterHash {
     param([Parameter(Mandatory)][string]$Json)
     $roster = ConvertFrom-Json -InputObject $Json
@@ -153,6 +158,7 @@ Export-ModuleMember -Function @(
     'Test-MyPeopleDockerName',
     'ConvertTo-MyPeopleRedactedConfig',
     'Get-MyPeopleSha256',
+    'Read-MyPeoplePlainText',
     'Get-MyPeopleStableRosterHash',
     'Write-MyPeopleTransaction',
     'Invoke-MyPeopleDocker',

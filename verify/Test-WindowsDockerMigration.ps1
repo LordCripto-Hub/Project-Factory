@@ -52,6 +52,11 @@ New-Item -ItemType Directory -Path $temporaryRoot -Force | Out-Null
 try {
     $sourcePath = Join-Path $temporaryRoot 'source.txt'
     Set-Content -LiteralPath $sourcePath -Value 'hash-me' -NoNewline -Encoding ASCII
+    $plainText = Read-MyPeoplePlainText -Path $sourcePath
+    $serializedPlainText = ConvertTo-Json -InputObject $plainText -Depth 12 -Compress
+    if ($serializedPlainText.Length -gt 64) {
+        throw 'Plain text reader retained PowerShell extended properties'
+    }
     $hash = Get-MyPeopleSha256 $sourcePath
     if ($hash -ne '4d11186aed035cc624d553e10db358492c84a7cd6b9670d92123c144930450aa') {
         throw "Unexpected SHA-256: $hash"
@@ -112,6 +117,7 @@ foreach ($required in @(
     'afterStableState',
     'resumedFrom',
     'snapshot-reused',
+    'portable-backup-reused',
     'Rollback launcher verification failed',
     'cp -a ''$source/.'' ''$target/''',
     'Get-MyPeopleStableRosterHash -Json',

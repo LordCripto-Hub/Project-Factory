@@ -36,7 +36,12 @@ $snapshotImage = if ($resumeState) {
 }
 $gitSha = (& git -C $root rev-parse --short=12 HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $gitSha) { throw 'Unable to resolve the source commit' }
-$candidateImage = "mypeople-node:volume-backed-$gitSha"
+$reusePortableBackup = $resumeState -and $resumeState.stage -eq 'portable-backup'
+$candidateImage = if ($reusePortableBackup) {
+    [string]$resumeState.candidateImage
+} else {
+    "mypeople-node:volume-backed-$gitSha"
+}
 $contract = Get-MyPeopleVolumeContract -Root $root
 
 $script:state = [ordered]@{
@@ -48,6 +53,7 @@ $script:state = [ordered]@{
     snapshotImage = $snapshotImage
     candidateImage = $candidateImage
     sourceCommit = $gitSha
+    candidateSourceCommit = if ($reusePortableBackup) { [string]$resumeState.sourceCommit } else { $gitSha }
     volumes = @($contract.Keys)
     volumeState = [ordered]@{}
     backup = $transactionRoot
@@ -98,6 +104,37 @@ function Get-StableStateSignature {
     ) -Capture
     $rosterHash = Get-MyPeopleStableRosterHash -Json $rosterJson
     return '{0}:{1}' -f $boardHash, $rosterHash
+}
+
+function Assert-PopulatedVolumeState {
+    param(
+        [Parameter(Mandatory)][string]$Image,
+        [Parameter(Mandatory)][string]$ExpectedSignature
+    )
+    foreach ($volume in $contract.Keys) {
+        if (-not (Test-MyPeopleDockerObject -Type volume -Name $volume)) {
+            throw "Resume state volume not found: $volume"
+        }
+    }
+    if (-not (Test-MyPeopleDockerObject -Type image -Name $Image)) {
+        throw "Resume candidate image not found: $Image"
+    }
+    $probe = "mypeople-volume-probe-$stamp"
+    Invoke-MyPeopleDocker -Arguments @(
+        'create', '--name', $probe, '--user', 'root',
+        '--mount', 'type=volume,src=mypeople-todos,dst=/home/mp/mypeople/todos',
+        '--mount', 'type=volume,src=mypeople-run,dst=/home/mp/mypeople/run',
+        $Image, 'sleep', 'infinity'
+    )
+    try {
+        Docker start $probe
+        $observed = Get-StableStateSignature -Name $probe
+        if ($observed -ne $ExpectedSignature) {
+            throw 'Populated state volumes do not match the reusable snapshot signature'
+        }
+    } finally {
+        & docker.exe rm -f $probe *> $null
+    }
 }
 
 function Assert-Preflight {
@@ -160,8 +197,10 @@ try {
 
     if ($resumeState) {
         Set-Stage 'resume-validate'
-        if ($resumeState.stage -ne 'candidate-image' -or $resumeState.rollbackStatus -ne 'pass') {
-            throw 'Resume manifest is not a rolled-back candidate-image transaction'
+        $candidateResume = $resumeState.stage -eq 'candidate-image' -and $resumeState.rollbackStatus -eq 'pass'
+        $portableResume = $resumeState.stage -eq 'portable-backup' -and -not $resumeState.rollbackAttempted
+        if (-not $candidateResume -and -not $portableResume) {
+            throw 'Resume manifest is not a verified candidate-image or portable-backup transaction'
         }
         if (-not (Test-MyPeopleDockerObject -Type image -Name $snapshotImage)) {
             throw "Resume snapshot image not found: $snapshotImage"
@@ -170,7 +209,7 @@ try {
         if (-not (Test-Path -LiteralPath $resumeBeforePath)) {
             throw 'Resume transaction has no before-state hash evidence'
         }
-        $before = Get-Content -Raw -LiteralPath $resumeBeforePath
+        $before = Read-MyPeoplePlainText -Path $resumeBeforePath
         $beforeStable = [string]$resumeState.beforeStableState
         if (-not $beforeStable) { throw 'Resume transaction has no stable state signature' }
         $currentStable = Get-StableStateSignature -Name $Container
@@ -179,10 +218,33 @@ try {
         }
         $before | Set-Content -LiteralPath (Join-Path $transactionRoot 'before-state.sha256') -Encoding ASCII
         $script:state.beforeStableState = $beforeStable
+        if ($reusePortableBackup) {
+            $resumeRoot = Split-Path $resolvedResumeManifest -Parent
+            $resumeArchive = Join-Path $resumeRoot 'portable-state.tar.gz'
+            if (-not (Test-Path -LiteralPath $resumeArchive)) {
+                throw 'Portable-backup resume has no portable archive'
+            }
+            Assert-PopulatedVolumeState -Image $candidateImage -ExpectedSignature $beforeStable
+            Copy-Item -LiteralPath $resumeArchive -Destination (Join-Path $transactionRoot 'portable-state.tar.gz')
+            $redactedConfig = Join-Path $resumeRoot 'queue.env.redacted'
+            if (Test-Path -LiteralPath $redactedConfig) {
+                Copy-Item -LiteralPath $redactedConfig -Destination (Join-Path $transactionRoot 'queue.env.redacted')
+            }
+            foreach ($property in $resumeState.volumeState.PSObject.Properties) {
+                $script:state.volumeState[$property.Name] = [string]$property.Value
+            }
+            $script:state.archiveSha256 = Get-MyPeopleSha256 (Join-Path $transactionRoot 'portable-state.tar.gz')
+            $script:state.beforeState = [string]$before
+            $script:state.excludedAuthPatterns = @('*auth*', '*credential*', '*token*', '*.key')
+        }
         Write-MyPeopleTransaction -Path $transactionPath -State $script:state
         $mutationStarted = $true
         Docker stop --time 30 $Container
-        Set-Stage 'snapshot-reused'
+        if ($reusePortableBackup) {
+            Set-Stage 'portable-backup-reused'
+        } else {
+            Set-Stage 'snapshot-reused'
+        }
     } else {
         Set-Stage 'quiesce'
         $before = Invoke-MyPeopleDocker -Arguments @(
@@ -200,6 +262,7 @@ try {
         Docker commit $Container $snapshotImage
     }
 
+    if (-not $reusePortableBackup) {
     Set-Stage 'candidate-image'
     $candidateContainer = "mypeople-candidate-$stamp"
     Docker create --name $candidateContainer --user root $snapshotImage sleep infinity
@@ -300,6 +363,7 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
     $script:state.beforeState = $before
     $script:state.excludedAuthPatterns = @('*auth*', '*credential*', '*token*', '*.key')
     Write-MyPeopleTransaction -Path $transactionPath -State $script:state
+    }
 
     Set-Stage 'preserve-old'
     Docker rename $Container $preservedName
