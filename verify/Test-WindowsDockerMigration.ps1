@@ -49,13 +49,24 @@ if ($guardIndex -lt 0 -or $removeIndex -lt 0 -or $guardIndex -gt $removeIndex) {
 
 $migrationPath = Join-Path $root 'windows\Migrate-MyPeopleDockerState.ps1'
 $migration = if (Test-Path -LiteralPath $migrationPath) { Get-Content -Raw $migrationPath } else { '' }
-if ($migration) {
-    foreach ($required in @('Docker commit', 'Docker rename', 'Invoke-MyPeopleRollback', 'compose.volume-backed.yml', 'state-volumes.json')) {
-        if ($migration -notmatch [regex]::Escape($required)) { throw "Missing migration token: $required" }
-    }
-    foreach ($forbidden in @('docker volume rm', 'docker compose down -v', 'docker system prune')) {
-        if ($migration -match [regex]::Escape($forbidden)) { throw "Forbidden migration token: $forbidden" }
-    }
+foreach ($required in @(
+    '[switch]$Execute',
+    'mypeople-pre-volumes-',
+    'mypeople-node:pre-volumes-',
+    'mypeople-node:volume-backed-',
+    'Docker commit',
+    'Docker rename',
+    'Invoke-MyPeopleRollback',
+    'compose.volume-backed.yml',
+    'state-volumes.json',
+    'portable-state.tar.gz',
+    'Remove-StaleRuntimePidFiles',
+    'Test-MyPeopleDockerRestore.ps1'
+)) {
+    if ($migration -notmatch [regex]::Escape($required)) { throw "Missing migration token: $required" }
+}
+foreach ($forbidden in @('docker volume rm', 'docker compose down -v', 'docker system prune')) {
+    if ($migration -match [regex]::Escape($forbidden)) { throw "Forbidden migration token: $forbidden" }
 }
 
 Write-Output 'PASS Docker migration contract, names, redaction, hashes, and transactions'

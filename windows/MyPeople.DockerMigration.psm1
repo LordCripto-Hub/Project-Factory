@@ -54,7 +54,7 @@ function Invoke-MyPeopleDocker {
         [Parameter(Mandatory)][string[]]$Arguments,
         [switch]$Capture
     )
-    $output = @(& docker @Arguments 2>&1)
+    $output = @(& docker.exe @Arguments 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw "docker $($Arguments -join ' ') failed: $($output -join "`n")"
     }
@@ -70,9 +70,9 @@ function Invoke-MyPeopleRollback {
         throw 'Rollback received an unsafe Docker name'
     }
 
-    & docker inspect $PreservedName *> $null
+    & docker.exe inspect $PreservedName *> $null
     $oldExists = $LASTEXITCODE -eq 0
-    & docker inspect $NewName *> $null
+    & docker.exe inspect $NewName *> $null
     $newExists = $LASTEXITCODE -eq 0
 
     if (-not $oldExists) {
