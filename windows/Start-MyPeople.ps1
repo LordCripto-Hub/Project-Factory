@@ -59,16 +59,30 @@ try {
         Wait-Until { Test-DockerEngine } $DockerTimeoutSeconds 'Docker Desktop'
     }
 
-    & docker inspect mypeople *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'The mypeople container does not exist. The launcher will not recreate it because that could destroy state; restore or install the container first.'
+    $deploymentDirectory = Join-Path $env:LOCALAPPDATA 'MyPeople\deployment'
+    $composePath = Join-Path $deploymentDirectory 'compose.volume-backed.yml'
+    $environmentPath = Join-Path $deploymentDirectory '.env'
+    $hasCompose = Test-Path -LiteralPath $composePath
+    $hasEnvironment = Test-Path -LiteralPath $environmentPath
+    if ($hasCompose -xor $hasEnvironment) {
+        throw 'The pinned MyPeople deployment is incomplete; both Compose and .env are required.'
     }
 
-    $running = (& docker inspect -f '{{.State.Running}}' mypeople 2>$null).Trim()
-    if ($running -ne 'true') {
-        Write-LauncherLog 'docker start mypeople'
-        & docker start mypeople | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'docker start mypeople failed.' }
+    if ($hasCompose -and $hasEnvironment) {
+        Write-LauncherLog 'docker compose pinned deployment up'
+        & docker compose --project-name mypeople --env-file $environmentPath -f $composePath up -d
+        if ($LASTEXITCODE -ne 0) { throw 'Pinned docker compose up failed.' }
+    } else {
+        & docker inspect mypeople *> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The mypeople container and pinned deployment manifest are both missing.'
+        }
+        $running = (& docker inspect -f '{{.State.Running}}' mypeople 2>$null).Trim()
+        if ($running -ne 'true') {
+            Write-LauncherLog 'docker start mypeople'
+            & docker start mypeople | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'docker start mypeople failed.' }
+        }
     }
 
     $bindings = Get-MyPeopleProviderBindings

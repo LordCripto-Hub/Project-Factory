@@ -28,13 +28,24 @@ class WindowsLauncherContract(unittest.TestCase):
 
     def test_launcher_rehydrates_provider_before_starting_agents(self):
         text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
+        compose = text.index("docker compose pinned deployment up")
         container_start = text.index("docker start mypeople")
         rehydrate = text.index("& $adapter.ActivateProfile")
         start_agents = text.index("mypeople up --detach")
+        self.assertLess(compose, rehydrate)
         self.assertLess(container_start, rehydrate)
         self.assertLess(rehydrate, start_agents)
         self.assertIn("& $adapter.ValidateRuntime", text)
         self.assertIn("No provider binding configured", text)
+
+    def test_launcher_recovers_the_pinned_volume_backed_deployment(self):
+        text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
+        self.assertIn(r"MyPeople\deployment", text)
+        self.assertIn("compose.volume-backed.yml", text)
+        self.assertIn("--env-file", text)
+        self.assertIn("docker compose", text)
+        self.assertNotIn("compose down", text)
+        self.assertNotIn("volume rm", text)
 
     def test_shortcut_installer_targets_hidden_powershell_launcher(self):
         text = (ROOT / "windows" / "Install-MyPeopleShortcut.ps1").read_text(encoding="utf-8")
@@ -44,6 +55,8 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertIn("MyPeople\\launcher", text)
         self.assertIn("Copy-Item", text)
         self.assertIn("MyPeople.ProviderProfiles.psm1", text)
+        self.assertIn("compose.volume-backed.yml", text)
+        self.assertIn("state-volumes.json", text)
         self.assertIn("-WindowStyle Hidden", text)
         self.assertIn("MyPeople.lnk", text)
 

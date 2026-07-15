@@ -14,6 +14,19 @@ foreach ($name in @('Start-MyPeople.ps1', 'MyPeople.ProviderProfiles.psm1')) {
     }
 }
 
+$deploymentDirectory = Join-Path $env:LOCALAPPDATA 'MyPeople\deployment'
+$environmentPath = Join-Path $deploymentDirectory '.env'
+if (Test-Path -LiteralPath $environmentPath) {
+    $projectRoot = Split-Path $PSScriptRoot -Parent
+    foreach ($name in @('compose.volume-backed.yml', 'state-volumes.json')) {
+        $source = Join-Path $projectRoot "docker\$name"
+        if (-not (Test-Path -LiteralPath $source)) {
+            throw "Deployment file missing: $source"
+        }
+        Copy-Item -LiteralPath $source -Destination $deploymentDirectory -Force
+    }
+}
+
 $launcher = Join-Path $installDirectory 'Start-MyPeople.ps1'
 
 $desktop = [Environment]::GetFolderPath('Desktop')
