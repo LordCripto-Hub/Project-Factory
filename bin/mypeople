@@ -1,16 +1,26 @@
 #!/bin/bash
 set -euo pipefail
-ROOT=${INSTALL_DIR:-$HOME/mypeople}; cmd=${1:-status}
+
+ROOT=${INSTALL_DIR:-$HOME/mypeople}
+cmd=${1:-status}
+
 case "$cmd" in
   up)
     mkdir -p "$ROOT/run"
-    if [[ -f "$ROOT/run/runtime-supervisor.pid" ]] && kill -0 "$(cat "$ROOT/run/runtime-supervisor.pid")" 2>/dev/null && [[ $(ps -o stat= -p "$(cat "$ROOT/run/runtime-supervisor.pid")") != Z* ]]; then :; else
-      setsid "$ROOT/bin/runtime-supervisor.sh" </dev/null >>"$ROOT/run/runtime-supervisor.log" 2>&1 & echo $! >"$ROOT/run/runtime-supervisor.pid"
-    fi
-    if [[ -f "$ROOT/run/boss-supervisor.pid" ]] && kill -0 "$(cat "$ROOT/run/boss-supervisor.pid")" 2>/dev/null && [[ $(ps -o stat= -p "$(cat "$ROOT/run/boss-supervisor.pid")") != Z* ]]; then :; else
-      setsid "$ROOT/bin/boss-supervisor.sh" </dev/null >>"$ROOT/run/boss-supervisor.log" 2>&1 & echo $! >"$ROOT/run/boss-supervisor.pid"
+    if [[ -f "$ROOT/run/runtime-supervisor.pid" ]] \
+      && kill -0 "$(cat "$ROOT/run/runtime-supervisor.pid")" 2>/dev/null \
+      && [[ $(ps -o stat= -p "$(cat "$ROOT/run/runtime-supervisor.pid")") != Z* ]]; then
+      :
+    else
+      setsid "$ROOT/bin/runtime-supervisor.sh" </dev/null >>"$ROOT/run/runtime-supervisor.log" 2>&1 &
+      echo $! >"$ROOT/run/runtime-supervisor.pid"
     fi
     ;;
-  status) "$ROOT/bin/mp" status;;
-  *) echo "usage: mypeople up [--detach]|status" >&2; exit 2;;
+  status)
+    "$ROOT/bin/mp" status
+    ;;
+  *)
+    echo "usage: mypeople up [--detach]|status" >&2
+    exit 2
+    ;;
 esac
