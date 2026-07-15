@@ -40,6 +40,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Install-MyPeopleSh
 
 The installer copies the launcher to `%LOCALAPPDATA%\MyPeople\launcher`, so the desktop shortcut does not depend on the repository remaining in its original directory.
 
+## Durable Docker state
+
+MyPeople uses a pinned local image plus seven named volumes:
+
+- `mypeople-todos` for the board, comments, proofs, and board backups;
+- `mypeople-run` for the roster, provider bindings, TaskSpecs, and runtime records;
+- `mypeople-status` for lifecycle status;
+- `mypeople-config` for queue and runtime configuration;
+- `mypeople-codex` and `mypeople-claude` for provider session state;
+- `mypeople-recordings` for terminal recordings.
+
+The migration is dry-run-first:
+
+```powershell
+# Preflight and local transaction plan; does not stop or rename the container
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Migrate-MyPeopleDockerState.ps1
+
+# Explicit live migration after reviewing the dry-run record
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Migrate-MyPeopleDockerState.ps1 -Execute
+```
+
+The live transaction retains the old container as `mypeople-pre-volumes-<timestamp>`, creates immutable snapshot and candidate image tags, and stores a protected portable backup plus restore evidence under `%LOCALAPPDATA%\MyPeople\backups\docker-migration\<timestamp>`. The pinned Compose definition and local image binding live under `%LOCALAPPDATA%\MyPeople\deployment` and let the desktop launcher recreate a missing container without deleting state.
+
+Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Cleanup of preserved containers, images, backups, or restore-test volumes is a separate human-approved operation.
+
+Cloudflare memory remains disabled during this migration. Its first real profile is a separate, bounded, read-only activation cycle after backup, restore, launcher recovery, and rollback are verified.
+
 ## Documentation
 
 - [User manual](docs/USER-MANUAL.md)

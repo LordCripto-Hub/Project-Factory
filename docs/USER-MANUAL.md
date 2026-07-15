@@ -137,7 +137,7 @@ Install the desktop shortcut once:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Install-MyPeopleShortcut.ps1
 ```
 
-The installer copies the required launcher files to `%LOCALAPPDATA%\MyPeople\launcher`. The shortcut starts Docker Desktop when required, starts the existing container, launches MyPeople services idempotently, checks Priorities, queue/HUD, terminal readiness, and that Boss and Nightwatch are alive, then opens Priorities. It never deletes or recreates the container.
+The installer copies the required launcher files to `%LOCALAPPDATA%\MyPeople\launcher`. The shortcut starts Docker Desktop when required, runs the pinned Compose deployment when it exists, rehydrates the selected provider profile, checks Priorities, queue/HUD, terminal readiness, and that Boss and Nightwatch are alive, then opens Priorities. It never deletes a volume or changes the pinned image.
 
 Manual startup remains available:
 
@@ -147,55 +147,65 @@ docker exec mypeople /home/mp/mypeople/bin/mypeople up --detach
 docker exec mypeople /home/mp/mypeople/bin/mp status
 ```
 
-The container currently uses restart policy `unless-stopped` and `sleep infinity` as its primary command. The Windows launcher also restarts the internal supervisors when Docker is running but MyPeople services have stopped.
+The volume-backed container uses restart policy `unless-stopped`, Docker `init: true`, and one foreground runtime supervisor. The launcher also retains a legacy fallback for a preserved pre-migration container.
 
-## Current persistence
+## Durable Docker state
 
-Persisted in the writable container layer:
+Mutable state is separated into:
 
-- Board: `/home/mp/mypeople/todos/board.v2.json`, with atomic backups.
-- Agent/backend/model roster: `/home/mp/mypeople/run/roster.json`.
-- Agent snapshot: `/home/mp/mypeople/run/agents.json`.
-- Boss and Nightwatch doctrine files.
-- Terminal recordings: `/home/mp/recordings/*.cast`.
-- Native Codex sessions: `/home/mp/.codex/sessions/`.
+| Volume | Container path | Contents |
+|---|---|---|
+| `mypeople-todos` | `/home/mp/mypeople/todos` | Board, comments, proofs, and backups |
+| `mypeople-run` | `/home/mp/mypeople/run` | Roster, bindings, TaskSpecs, logs, and runtime records |
+| `mypeople-status` | `/home/mp/mypeople/status` | Agent lifecycle status |
+| `mypeople-config` | `/home/mp/.config/mypeople` | Queue and runtime configuration |
+| `mypeople-codex` | `/home/mp/.codex` | Codex sessions and local login state |
+| `mypeople-claude` | `/home/mp/.claude` | Claude sessions and local login state |
+| `mypeople-recordings` | `/home/mp/recordings` | Terminal recordings |
 
-Process memory only:
-
-- transient queue task registry;
-- connected queue clients and temporary queue-server records.
-
-`mp revive` currently opens a new Codex conversation. MyPeople stores explicit handoffs, but it does not yet depend on `codex resume` or invisible session history for project recovery.
-
-## Backup and restore boundary
-
-The current container does not yet use external volumes for `/home/mp/mypeople`, `/home/mp/.codex`, or `/home/mp/recordings`.
-
-- `docker stop` followed by `docker start` preserves the writable layer.
-- deleting or recreating the container can lose the board, roster, sessions, recordings, and runtime changes.
-
-Do not delete or recreate the container before external volumes and a tested backup/restore procedure exist.
-
-Provisional local backup:
+Run the read-only preflight first:
 
 ```powershell
-$backupRoot = Join-Path $env:LOCALAPPDATA 'MyPeople\backups\manual'
-New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-docker cp mypeople:/home/mp/mypeople (Join-Path $backupRoot 'mypeople-runtime')
-docker cp mypeople:/home/mp/.codex (Join-Path $backupRoot 'codex-runtime')
-docker cp mypeople:/home/mp/recordings (Join-Path $backupRoot 'recordings')
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Migrate-MyPeopleDockerState.ps1
 ```
+
+Review the reported `transaction.json` under `%LOCALAPPDATA%\MyPeople\backups\docker-migration\<timestamp>`. It must show `stage: planned`, `execute: false`, exactly seven volume names, and `rollbackAttempted: false`.
+
+Execute only after the preflight is green:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Migrate-MyPeopleDockerState.ps1 -Execute
+```
+
+The transaction:
+
+1. stops the original container and commits an immutable snapshot;
+2. builds and tests a separate candidate image from the reviewed repository;
+3. seeds empty named volumes directly from the snapshot;
+4. writes a current-user-protected portable backup with provider auth excluded;
+5. renames the original container to `mypeople-pre-volumes-<timestamp>`;
+6. launches the candidate through pinned Compose;
+7. verifies hashes, process ownership, services, and an isolated provider-disabled restore.
+
+If a post-stop stage fails, rollback removes only the failed new container, renames the untouched original back to `mypeople`, and starts it. New volumes, backup evidence, and images are retained for diagnosis.
+
+The launcher reads `%LOCALAPPDATA%\MyPeople\deployment\.env` and `compose.volume-backed.yml`. It may recreate the container from the pinned image, but never rebuilds implicitly or deletes state.
+
+Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Preserved containers, images, backups, and restore-test volumes are cleaned only in a separate human-approved operation.
+
+Cloudflare memory remains disabled until the Docker migration, restore drill, desktop-launcher recovery, and rollback rehearsal all pass.
+
+The transient queue task registry and connected-client state remain process memory. `mp revive` still opens a new Codex conversation until exact session resume is implemented; explicit TaskSpecs and handoffs remain authoritative.
 
 ## Known limitations
 
-- External volumes and full restore are not yet proven.
 - The transient queue is lost when its process restarts.
 - Codex conversations are not resumed automatically.
 - ProjectProfile and TaskSpec are available, but external memory remains disabled until the Phase B security and deployment gate.
-- PID 1 is `sleep infinity` and does not reap child processes; zombie processes have been observed.
 - Ports are currently published on `0.0.0.0`; port 7681 allows terminal writes.
 - The complete verifier creates temporary cards; run it without active work or in an isolated environment.
 - The board Git exporter may quarantine small snapshots during heavy test churn; review them before treating the exporter as backup.
+- Preserved migration containers, images, backups, and restore-test volumes require an explicit cleanup review; startup never removes them.
 
 ## Technical verification
 
@@ -250,12 +260,11 @@ Terminal dictation pastes text but never sends Enter. If Windows intercepts the 
 
 ## Recommended next stage
 
-1. External volumes for runtime, Codex, and recordings.
-2. Tested backup and restore before container recreation.
-3. One `ProjectProfile` per project with repository, context, verification, limits, and secret references.
-4. One bounded context packet at task startup.
-5. Explicit session handoff or resume without depending on invisible history.
-6. Atomic leases, evidence, and approval gates for parallel work.
+1. Exact Codex/Claude session resume with transcript validation and no silent fresh-session fallback.
+2. Deliberate Boss stop, reconcile, revive, model, and provider-profile controls in Priorities.
+3. Bind local services safely and protect the writable terminal.
+4. Evaluate a JSON-to-SQLite board migration with a tested JSON rollback path.
+5. Activate read-only Cloudflare recall for one real ProjectProfile through a separate security-gated cycle.
 
 ## Bounded external memory pilot
 

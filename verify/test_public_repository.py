@@ -45,6 +45,15 @@ class PublicRepositoryContract(unittest.TestCase):
         self.assertIn("credentials", policy)
         self.assertIn("personal", policy)
 
+    def test_durable_docker_operator_contract_is_public(self):
+        for path in (ROOT / "README.md", ROOT / "docs" / "USER-MANUAL.md"):
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("Durable Docker state", text)
+            self.assertIn("Migrate-MyPeopleDockerState.ps1", text)
+            self.assertIn("mypeople-pre-volumes-", text)
+            self.assertIn("Never run `docker compose down -v`", text)
+            self.assertIn("Cloudflare memory remains disabled", text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
