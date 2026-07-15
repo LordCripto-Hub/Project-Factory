@@ -69,6 +69,19 @@ function Docker {
     Invoke-MyPeopleDocker -Arguments $Arguments
 }
 
+function Invoke-LauncherVerification {
+    param([Parameter(Mandatory)][string]$FailureMessage)
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'windows\Start-MyPeople.ps1') -NoBrowser -NonInteractive
+        $launcherExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($launcherExitCode -ne 0) { throw $FailureMessage }
+}
+
 function Test-ContainerExists {
     param([Parameter(Mandatory)][string]$Name)
     return Test-MyPeopleDockerObject -Type container -Name $Name
@@ -241,7 +254,7 @@ try {
         foreach ($entry in $contract.GetEnumerator()) {
             $source = $entry.Value
             $target = "/mnt/$($entry.Key)"
-            Docker exec $staging sh -lc "mkdir -p '$target' && if [ -d '$source' ]; then cp -a '$source'/.' '$target'/; fi"
+            Docker exec $staging sh -lc "mkdir -p '$target' && if [ -d '$source' ]; then cp -a '$source/.' '$target/'; fi"
         }
         Remove-StaleRuntimePidFiles $staging
     } finally {
@@ -312,8 +325,7 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
     )
 
     Set-Stage 'verify'
-    & (Join-Path $root 'windows\Start-MyPeople.ps1') -NoBrowser
-    if ($LASTEXITCODE -ne 0) { throw 'Launcher verification failed' }
+    Invoke-LauncherVerification -FailureMessage 'Launcher verification failed'
     $pidOne = (& docker.exe exec mypeople ps -o comm= -p 1).Trim()
     if ($LASTEXITCODE -ne 0 -or $pidOne -eq 'sleep') {
         throw "PID 1 is not Docker init: $pidOne"
@@ -362,8 +374,7 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
         $script:state.rollbackAttempted = $true
         try {
             Invoke-MyPeopleRollback -PreservedName $preservedName
-            & (Join-Path $root 'windows\Start-MyPeople.ps1') -NoBrowser
-            if ($LASTEXITCODE -ne 0) { throw 'Rollback launcher verification failed' }
+            Invoke-LauncherVerification -FailureMessage 'Rollback launcher verification failed'
             $script:state.rollbackStatus = 'pass'
         } catch {
             $script:state.rollbackStatus = 'failed'

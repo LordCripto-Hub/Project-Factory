@@ -47,6 +47,16 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertNotIn("compose down", text)
         self.assertNotIn("volume rm", text)
 
+    def test_launcher_supports_noninteractive_migration_verification(self):
+        launcher = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
+        migration = (
+            ROOT / "windows" / "Migrate-MyPeopleDockerState.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("[switch]$NonInteractive", launcher)
+        self.assertIn("if (-not $NonInteractive)", launcher)
+        self.assertIn("powershell.exe", migration)
+        self.assertIn("-NonInteractive", migration)
+
     def test_shortcut_installer_targets_hidden_powershell_launcher(self):
         text = (ROOT / "windows" / "Install-MyPeopleShortcut.ps1").read_text(encoding="utf-8")
         self.assertIn("CreateShortcut", text)

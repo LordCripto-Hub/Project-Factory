@@ -113,6 +113,7 @@ foreach ($required in @(
     'resumedFrom',
     'snapshot-reused',
     'Rollback launcher verification failed',
+    'cp -a ''$source/.'' ''$target/''',
     'Get-MyPeopleStableRosterHash -Json',
     'Test-MyPeopleDockerObject -Type volume'
 )) {

@@ -1,5 +1,6 @@
 param(
     [switch]$NoBrowser,
+    [switch]$NonInteractive,
     [int]$DockerTimeoutSeconds = 180,
     [int]$ServiceTimeoutSeconds = 90
 )
@@ -18,13 +19,17 @@ function Write-LauncherLog([string]$Message) {
 
 function Show-LauncherError([string]$Message) {
     Write-LauncherLog "ERROR $Message"
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        "$Message`n`nLog: $logPath",
-        'MyPeople could not start',
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Error
-    ) | Out-Null
+    if (-not $NonInteractive) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [System.Windows.Forms.MessageBox]::Show(
+            "$Message`n`nLog: $logPath",
+            'MyPeople could not start',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    } else {
+        Write-Output "ERROR $Message"
+    }
 }
 
 function Test-DockerEngine {
