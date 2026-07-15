@@ -24,7 +24,7 @@ The existing one-click launcher can recover internal supervisors, but deleting o
 ### Included
 
 - a guarded, one-time Windows migration command;
-- a local immutable image snapshot of the verified pre-migration container;
+- a local immutable image snapshot of the verified pre-migration container and a pinned candidate image derived from it with the reviewed repository code;
 - named volumes for mutable state only;
 - Docker `init: true` and a foreground runtime supervisor;
 - automatic rollback to the untouched previous container;
@@ -92,14 +92,15 @@ The Windows migration command implements these states and writes each transition
 1. **Preflight**: verify Docker, the `mypeople` container, expected paths, free disk space, source commit, health endpoints, Boss/Nightwatch status, provider-profile status, and absence of another migration lock.
 2. **Quiesce**: stop new task intake, record the board signature and roster/session counts, then stop the container cleanly.
 3. **Snapshot**: commit the stopped container to an immutable local tag containing the timestamp and original container/image IDs.
-4. **Create volumes**: create only missing named volumes and record whether each volume was created or reused.
-5. **Seed volumes**: start a disposable staging container from the snapshot image, mount the new volumes at staging paths, and copy state with ownership, modes, timestamps, and symlinks preserved. Credential-bearing paths never transit through a host plaintext archive.
-6. **Portable backup**: create a user-ACL-protected backup under `%LOCALAPPDATA%\MyPeople\backups\docker-migration\<timestamp>`. Include the board, proofs, TaskSpecs, roster metadata, configuration with secret values redacted, Codex/Claude session files excluding auth files, recordings, hashes, source commit, image IDs, volume names, and restore instructions.
-7. **Preserve old container**: rename the stopped container to `mypeople-pre-volumes-<timestamp>`. Do not delete it.
-8. **Launch**: create the new `mypeople` container from the snapshot image with Compose, named volumes, `init: true`, the same ports, hostname, restart policy, capabilities, and seed bind.
-9. **Verify**: check container health, PID 1, supervisor uniqueness, board signature, proof count, roster identity/model/profile fields, session inventories, recordings count, Priorities/HUD/terminal endpoints, Boss/Nightwatch readiness, and one non-mutating Boss inbox ping.
-10. **Restore drill**: copy the portable non-secret backup into isolated test volumes, start a disposable container with provider launches disabled, and verify board/proof/roster integrity without contacting Codex, Claude, Cloudflare, or paid APIs.
-11. **Commit**: mark the transaction successful and leave the old container stopped, the snapshot image, backup, and test evidence available for human review.
+4. **Candidate image**: create an isolated container from the snapshot, copy in the reviewed repository code, run the focused Docker/supervisor contracts, and commit a separately tagged candidate image. The original container is never modified.
+5. **Create volumes**: create only missing named volumes and record whether each volume was created or reused.
+6. **Seed volumes**: start a disposable root staging container from the snapshot image, mount the new volumes at staging paths, and copy state with ownership, modes, timestamps, and symlinks preserved. Credential-bearing paths never transit through a host plaintext archive.
+7. **Portable backup**: create a user-ACL-protected backup under `%LOCALAPPDATA%\MyPeople\backups\docker-migration\<timestamp>`. Include the board, proofs, TaskSpecs, roster metadata, configuration with secret values redacted, Codex/Claude session files excluding auth files, recordings, hashes, source commit, image IDs, volume names, and restore instructions.
+8. **Preserve old container**: rename the stopped container to `mypeople-pre-volumes-<timestamp>`. Do not delete it.
+9. **Launch**: create the new `mypeople` container from the pinned candidate image with Compose, named volumes, `init: true`, the same ports, hostname, restart policy, capabilities, and seed bind.
+10. **Verify**: check container health, PID 1, supervisor uniqueness, board signature, proof count, roster identity/model/profile fields, session inventories, recordings count, Priorities/HUD/terminal endpoints, Boss/Nightwatch readiness, and one non-mutating Boss inbox ping.
+11. **Restore drill**: copy the portable non-secret backup into isolated test volumes, start a disposable container with provider launches disabled, and verify board/proof/roster integrity without contacting Codex, Claude, Cloudflare, or paid APIs.
+12. **Commit**: mark the transaction successful and leave the old container stopped, both pinned images, backup, and test evidence available for human review.
 
 ## Rollback
 
