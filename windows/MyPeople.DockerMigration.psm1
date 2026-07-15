@@ -37,6 +37,32 @@ function Get-MyPeopleSha256 {
     return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
+function Get-MyPeopleStableRosterHash {
+    param([Parameter(Mandatory)][string]$Json)
+    $roster = ConvertFrom-Json -InputObject $Json
+    $stable = @(
+        $roster |
+            Sort-Object -Property agent_id |
+            ForEach-Object {
+                [ordered]@{
+                    agent_id = $_.agent_id
+                    backend = $_.backend
+                    model = $_.model
+                    provider_profile = $_.provider_profile
+                    session_id = $_.session_id
+                }
+            }
+    )
+    $payload = ConvertTo-Json -InputObject $stable -Depth 4 -Compress
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($payload)
+        return -join ($algorithm.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
 function Write-MyPeopleTransaction {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -61,6 +87,25 @@ function Invoke-MyPeopleDocker {
     if ($Capture) { return $output -join "`n" }
 }
 
+function Test-MyPeopleDockerObject {
+    param(
+        [Parameter(Mandatory)][ValidateSet('container', 'image', 'volume')][string]$Type,
+        [Parameter(Mandatory)][string]$Name
+    )
+    if (-not (Test-MyPeopleDockerName $Name)) {
+        throw 'Docker object check received an unsafe name'
+    }
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'SilentlyContinue'
+        & docker.exe $Type inspect $Name 2>$null | Out-Null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
 function Invoke-MyPeopleRollback {
     param(
         [Parameter(Mandatory)][string]$PreservedName,
@@ -70,10 +115,8 @@ function Invoke-MyPeopleRollback {
         throw 'Rollback received an unsafe Docker name'
     }
 
-    & docker.exe inspect $PreservedName *> $null
-    $oldExists = $LASTEXITCODE -eq 0
-    & docker.exe inspect $NewName *> $null
-    $newExists = $LASTEXITCODE -eq 0
+    $oldExists = Test-MyPeopleDockerObject -Type container -Name $PreservedName
+    $newExists = Test-MyPeopleDockerObject -Type container -Name $NewName
 
     if (-not $oldExists) {
         if (-not $newExists) { throw 'Neither preserved nor original container exists' }
@@ -92,7 +135,9 @@ Export-ModuleMember -Function @(
     'Test-MyPeopleDockerName',
     'ConvertTo-MyPeopleRedactedConfig',
     'Get-MyPeopleSha256',
+    'Get-MyPeopleStableRosterHash',
     'Write-MyPeopleTransaction',
     'Invoke-MyPeopleDocker',
+    'Test-MyPeopleDockerObject',
     'Invoke-MyPeopleRollback'
 )

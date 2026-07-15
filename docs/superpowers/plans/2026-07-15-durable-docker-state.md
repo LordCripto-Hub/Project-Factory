@@ -506,7 +506,7 @@ param(
     [switch]$Execute,
     [ValidatePattern('^mypeople$')][string]$Container = 'mypeople',
     [string]$SeedPath = $env:MYPEOPLE_SEED_PATH,
-    [int]$MinimumFreeGiB = 8
+    [int]$MinimumFreeGiB = 16
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent

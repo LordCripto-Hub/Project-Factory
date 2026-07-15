@@ -8,6 +8,12 @@ if ($contract.Count -ne 7) { throw 'Expected seven volumes' }
 if ($contract['mypeople-run'] -ne '/home/mp/mypeople/run') { throw 'Wrong run target' }
 if (-not (Test-MyPeopleDockerName 'mypeople-pre-volumes-20260715T190000Z')) { throw 'Safe name rejected' }
 if (Test-MyPeopleDockerName 'mypeople;rm') { throw 'Unsafe name accepted' }
+if (-not (Test-MyPeopleDockerObject -Type container -Name 'mypeople')) {
+    throw 'Existing container was not detected'
+}
+if (Test-MyPeopleDockerObject -Type container -Name 'mypeople-object-that-does-not-exist') {
+    throw 'Missing container was reported as present'
+}
 
 $redacted = ConvertTo-MyPeopleRedactedConfig @'
 QUEUE_SECRET=alpha
@@ -18,6 +24,25 @@ TODO_PORT=9933
 if ($redacted -match 'alpha|beta') { throw 'Secret value leaked' }
 if ($redacted -notmatch 'QUEUE_SECRET=<redacted>') { throw 'Queue secret was not redacted' }
 if ($redacted -notmatch 'HOST_ID=node-1') { throw 'Non-secret value was lost' }
+
+$rosterBefore = @'
+[
+  {"agent_id":"main","backend":"codex","model":"gpt-5.6-sol","provider_profile":"codex-primary","session_id":"boss-session","state":"alive","updated_at":"before"},
+  {"agent_id":"eng-1","backend":"codex","model":"gpt-5.6-luna","provider_profile":"codex-primary","session_id":null,"state":"dead","updated_at":"before"}
+]
+'@
+$rosterAfterRestart = @'
+[
+  {"agent_id":"eng-1","backend":"codex","model":"gpt-5.6-luna","provider_profile":"codex-primary","session_id":null,"state":"alive","updated_at":"after"},
+  {"agent_id":"main","backend":"codex","model":"gpt-5.6-sol","provider_profile":"codex-primary","session_id":"boss-session","state":"alive","updated_at":"after"}
+]
+'@
+$rosterChangedModel = $rosterAfterRestart -replace 'gpt-5.6-sol', 'gpt-5.6-luna'
+$stableBefore = Get-MyPeopleStableRosterHash -Json $rosterBefore
+$stableAfterRestart = Get-MyPeopleStableRosterHash -Json $rosterAfterRestart
+$stableChangedModel = Get-MyPeopleStableRosterHash -Json $rosterChangedModel
+if ($stableBefore -ne $stableAfterRestart) { throw 'Dynamic roster fields changed the stable hash' }
+if ($stableBefore -eq $stableChangedModel) { throw 'Model change did not change the stable hash' }
 
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "mypeople-migration-test-$PID"
 New-Item -ItemType Directory -Path $temporaryRoot -Force | Out-Null
@@ -67,6 +92,17 @@ foreach ($required in @(
 }
 foreach ($forbidden in @('docker volume rm', 'docker compose down -v', 'docker system prune')) {
     if ($migration -match [regex]::Escape($forbidden)) { throw "Forbidden migration token: $forbidden" }
+}
+foreach ($required in @(
+    '[int]$MinimumFreeGiB = 16',
+    'beforeStableState',
+    'afterStableState',
+    'Get-MyPeopleStableRosterHash -Json',
+    'Test-MyPeopleDockerObject -Type volume'
+)) {
+    if ($migration -notmatch [regex]::Escape($required)) {
+        throw "Missing migration regression guard: $required"
+    }
 }
 
 $restorePath = Join-Path $root 'windows\Test-MyPeopleDockerRestore.ps1'

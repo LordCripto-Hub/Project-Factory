@@ -2,7 +2,7 @@ param(
     [switch]$Execute,
     [ValidatePattern('^mypeople$')][string]$Container = 'mypeople',
     [string]$SeedPath = $env:MYPEOPLE_SEED_PATH,
-    [int]$MinimumFreeGiB = 8
+    [int]$MinimumFreeGiB = 16
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,8 +52,20 @@ function Docker {
 
 function Test-ContainerExists {
     param([Parameter(Mandatory)][string]$Name)
-    & docker.exe inspect $Name *> $null
-    return $LASTEXITCODE -eq 0
+    return Test-MyPeopleDockerObject -Type container -Name $Name
+}
+
+function Get-StableStateSignature {
+    param([Parameter(Mandatory)][string]$Name)
+    $boardLine = Invoke-MyPeopleDocker -Arguments @(
+        'exec', $Name, 'sha256sum', '/home/mp/mypeople/todos/board.v2.json'
+    ) -Capture
+    $boardHash = ($boardLine.Trim() -split '\s+')[0]
+    $rosterJson = Invoke-MyPeopleDocker -Arguments @(
+        'exec', $Name, 'cat', '/home/mp/mypeople/run/roster.json'
+    ) -Capture
+    $rosterHash = Get-MyPeopleStableRosterHash -Json $rosterJson
+    return '{0}:{1}' -f $boardHash, $rosterHash
 }
 
 function Assert-Preflight {
@@ -119,7 +131,10 @@ try {
         'exec', $Container, 'sh', '-lc',
         'sha256sum /home/mp/mypeople/todos/board.v2.json /home/mp/mypeople/run/roster.json'
     ) -Capture
+    $beforeStable = Get-StableStateSignature -Name $Container
     $before | Set-Content -LiteralPath (Join-Path $transactionRoot 'before-state.sha256') -Encoding ASCII
+    $script:state.beforeStableState = $beforeStable
+    Write-MyPeopleTransaction -Path $transactionPath -State $script:state
     $mutationStarted = $true
     Docker stop --time 30 $Container
 
@@ -150,8 +165,7 @@ try {
 
     Set-Stage 'create-volumes'
     foreach ($volume in $contract.Keys) {
-        & docker.exe volume inspect $volume *> $null
-        if ($LASTEXITCODE -eq 0) {
+        if (Test-MyPeopleDockerObject -Type volume -Name $volume) {
             $script:state.volumeState[$volume] = 'reused-empty-required'
         } else {
             Docker volume create $volume
@@ -271,11 +285,13 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
         'exec', 'mypeople', 'sh', '-lc',
         'sha256sum /home/mp/mypeople/todos/board.v2.json /home/mp/mypeople/run/roster.json'
     ) -Capture
+    $afterStable = Get-StableStateSignature -Name 'mypeople'
     $after | Set-Content -LiteralPath (Join-Path $transactionRoot 'after-state.sha256') -Encoding ASCII
-    if ($before.Trim() -ne $after.Trim()) {
-        throw 'Board or roster hash changed during migration'
+    if ($beforeStable -ne $afterStable) {
+        throw 'Board content or stable roster identity changed during migration'
     }
     $script:state.afterState = $after
+    $script:state.afterStableState = $afterStable
     Write-MyPeopleTransaction -Path $transactionPath -State $script:state
 
     Set-Stage 'restore-drill'
