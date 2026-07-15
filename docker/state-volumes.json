@@ -1,0 +1,9 @@
+{
+  "mypeople-todos": "/home/mp/mypeople/todos",
+  "mypeople-run": "/home/mp/mypeople/run",
+  "mypeople-status": "/home/mp/mypeople/status",
+  "mypeople-config": "/home/mp/.config/mypeople",
+  "mypeople-codex": "/home/mp/.codex",
+  "mypeople-claude": "/home/mp/.claude",
+  "mypeople-recordings": "/home/mp/recordings"
+}

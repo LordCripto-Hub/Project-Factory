@@ -1,0 +1,47 @@
+services:
+  mypeople:
+    image: ${MYPEOPLE_IMAGE:?set MYPEOPLE_IMAGE}
+    container_name: mypeople
+    hostname: node-1
+    user: mp
+    init: true
+    restart: unless-stopped
+    command: ["/home/mp/mypeople/bin/runtime-supervisor.sh"]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "9900:9900"
+      - "9933:9933"
+      - "7681:7681"
+      - "7682:7682"
+      - "7699:7699"
+    volumes:
+      - type: bind
+        source: ${MYPEOPLE_SEED_PATH:?set MYPEOPLE_SEED_PATH}
+        target: /home/mp/mypeople.seed.md
+        read_only: true
+      - mypeople-todos:/home/mp/mypeople/todos
+      - mypeople-run:/home/mp/mypeople/run
+      - mypeople-status:/home/mp/mypeople/status
+      - mypeople-config:/home/mp/.config/mypeople
+      - mypeople-codex:/home/mp/.codex
+      - mypeople-claude:/home/mp/.claude
+      - mypeople-recordings:/home/mp/recordings
+
+volumes:
+  mypeople-todos:
+    name: mypeople-todos
+  mypeople-run:
+    name: mypeople-run
+  mypeople-status:
+    name: mypeople-status
+  mypeople-config:
+    name: mypeople-config
+  mypeople-codex:
+    name: mypeople-codex
+  mypeople-claude:
+    name: mypeople-claude
+  mypeople-recordings:
+    name: mypeople-recordings
