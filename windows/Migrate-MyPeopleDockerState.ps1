@@ -340,9 +340,11 @@ copy_if_present /home/mp/mypeople/run/roster.json /tmp/portable/home/mp/mypeople
 copy_if_present /home/mp/mypeople/run/taskspecs /tmp/portable/home/mp/mypeople/run/
 copy_if_present /home/mp/mypeople/run/proofs /tmp/portable/home/mp/mypeople/run/
 copy_if_present /home/mp/recordings /tmp/portable/home/mp/
+copy_if_present /home/mp/workspaces /tmp/portable/home/mp/
 copy_if_present /home/mp/.codex/sessions /tmp/portable/home/mp/.codex/
 copy_if_present /home/mp/.claude/projects /tmp/portable/home/mp/.claude/
 find /tmp/portable -type f \( -iname '*auth*' -o -iname '*credential*' -o -iname '*token*' -o -iname '*.key' \) -delete
+find /tmp/portable/home/mp/workspaces -path '*/.git/config' -type f -exec sed -i -E '/^[[:space:]]*(extraheader|helper)[[:space:]]*=/Id; s#(url[[:space:]]*=[[:space:]]*https://)[^/@[:space:]]+:[^/@[:space:]]+@#\1#Ig' {} + 2>/dev/null || true
 tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
 '@
         Invoke-MyPeopleDocker -Arguments @(

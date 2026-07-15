@@ -61,6 +61,7 @@ copy_tree /restore/home/mp/mypeople/status /mnt/mypeople-status
 copy_tree /restore/home/mp/recordings /mnt/mypeople-recordings
 copy_tree /restore/home/mp/.codex /mnt/mypeople-codex
 copy_tree /restore/home/mp/.claude /mnt/mypeople-claude
+copy_tree /restore/home/mp/workspaces /mnt/mypeople-workspaces
 python3 -m json.tool /mnt/mypeople-todos/board.v2.json >/dev/null
 python3 -m json.tool /mnt/mypeople-run/roster.json >/dev/null
 '@

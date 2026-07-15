@@ -4,8 +4,9 @@ $modulePath = Join-Path $root 'windows\MyPeople.DockerMigration.psm1'
 Import-Module $modulePath -Force
 
 $contract = Get-MyPeopleVolumeContract -Root $root
-if ($contract.Count -ne 7) { throw 'Expected seven volumes' }
+if ($contract.Count -ne 8) { throw 'Expected eight volumes' }
 if ($contract['mypeople-run'] -ne '/home/mp/mypeople/run') { throw 'Wrong run target' }
+if ($contract['mypeople-workspaces'] -ne '/home/mp/workspaces') { throw 'Wrong workspace target' }
 if (-not (Test-MyPeopleDockerName 'mypeople-pre-volumes-20260715T190000Z')) { throw 'Safe name rejected' }
 if (Test-MyPeopleDockerName 'mypeople;rm') { throw 'Unsafe name accepted' }
 if (-not (Test-MyPeopleDockerObject -Type container -Name 'mypeople')) {
@@ -121,7 +122,9 @@ foreach ($required in @(
     'Rollback launcher verification failed',
     'cp -a ''$source/.'' ''$target/''',
     'Get-MyPeopleStableRosterHash -Json',
-    'Test-MyPeopleDockerObject -Type volume'
+    'Test-MyPeopleDockerObject -Type volume',
+    'copy_if_present /home/mp/workspaces /tmp/portable/home/mp/',
+    'extraheader|helper'
 )) {
     if ($migration -notmatch [regex]::Escape($required)) {
         throw "Missing migration regression guard: $required"
@@ -136,7 +139,8 @@ foreach ($required in @(
     'MYPEOPLE_DISABLE_PROVIDER_LAUNCH=1',
     'board.v2.json',
     'roster.json',
-    'portable-state.tar.gz'
+    'portable-state.tar.gz',
+    'copy_tree /restore/home/mp/workspaces /mnt/mypeople-workspaces'
 )) {
     if ($restore -notmatch [regex]::Escape($required)) { throw "Missing restore behavior: $required" }
 }
