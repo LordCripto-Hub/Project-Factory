@@ -8,6 +8,7 @@ launcher = (ROOT / "bin" / "mypeople").read_text(encoding="utf-8")
 assert "trap shutdown TERM INT EXIT" in supervisor
 assert 'spawn boss-supervisor bash "$ROOT/bin/boss-supervisor.sh"' in supervisor
 assert 'spawn workspace-supervisor python3 "$ROOT/bin/workspace-supervisor.py"' in supervisor
+assert 'sudo -n install -d -o mp -g mp -m 0750 /home/mp/workspaces' in supervisor
 assert 'wait "$pid"' in supervisor
 assert 'kill -KILL "$pid"' in supervisor
 assert 'printf \'%s\\n\' "$$" >"$ROOT/run/runtime-supervisor.pid"' in supervisor

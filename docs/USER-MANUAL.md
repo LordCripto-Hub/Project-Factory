@@ -216,6 +216,11 @@ existing path is not a Git checkout or its `origin` differs from the manifest,
 the supervisor records a blocked state under `run/workspaces/` and preserves
 the directory for review.
 
+An unauthenticated first clone works only while the configured GitHub
+repository is public. For a private repository, bootstrap the volume through an
+operator-controlled credential or credential-free Git bundle, then retain the
+clean HTTPS `origin`. MyPeople never copies the host credential into Docker.
+
 Worker TaskSpecs permit reading, editing, testing, and committing, while
 `push` remains forbidden. Publication is a two-stage Boss gate:
 

@@ -8,6 +8,7 @@ export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 . "$HOME/.config/mypeople/queue.env"
 mkdir -p "$ROOT/run" "$ROOT/run/tailscale-state"
+sudo -n install -d -o mp -g mp -m 0750 /home/mp/workspaces
 printf '%s\n' "$$" >"$ROOT/run/runtime-supervisor.pid"
 
 declare -A children=()
