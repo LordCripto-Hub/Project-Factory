@@ -15,6 +15,12 @@ from project_context import (
     load_profile,
     write_task_spec,
 )
+from project_publisher import (
+    PublisherError,
+    approve_runtime,
+    get_approval,
+    publish as publish_project,
+)
 
 INSTALL_DIR = ROOT
 
@@ -489,6 +495,27 @@ def status(_):
 def answer(ns):
     aid=full_agent_id(ns.agent_id); run_tmux(["send-keys","-t",tmux_target(aid),str(ns.choice),"Enter"])
 
+def approve_publish(ns):
+    try:
+        record=approve_runtime(ns.task_id,ns.project,ns.commit,ns.branch,ns.ttl)
+    except PublisherError as error:
+        raise SystemExit(str(error)) from error
+    print(record["approvalId"])
+
+def run_publish(ns):
+    try:
+        record=publish_project(ns.approval_id,execute=not ns.check)
+    except PublisherError as error:
+        raise SystemExit(str(error)) from error
+    print(json.dumps(record,sort_keys=True))
+
+def publish_status(ns):
+    try:
+        record=get_approval(ns.approval_id)
+    except PublisherError as error:
+        raise SystemExit(str(error)) from error
+    print(json.dumps(record,sort_keys=True))
+
 def parser():
     p=argparse.ArgumentParser(prog="mp"); sub=p.add_subparsers(dest="verb",required=True)
     q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="claude",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.set_defaults(fn=spawn)
@@ -500,6 +527,9 @@ def parser():
     q=sub.add_parser("switch");q.add_argument("agent_id");q.add_argument("--backend",required=True,choices=["claude","codex"]);q.add_argument("--model",required=True);q.set_defaults(fn=switch_backend)
     q=sub.add_parser("answer");q.add_argument("agent_id");q.add_argument("choice",type=int);q.set_defaults(fn=answer)
     q=sub.add_parser("status");q.set_defaults(fn=status)
+    q=sub.add_parser("approve-publish");q.add_argument("task_id");q.add_argument("--project",required=True);q.add_argument("--commit",required=True);q.add_argument("--branch",default="main");q.add_argument("--ttl",type=int,default=900);q.set_defaults(fn=approve_publish)
+    q=sub.add_parser("publish");q.add_argument("approval_id");q.add_argument("--check",action="store_true");q.set_defaults(fn=run_publish)
+    q=sub.add_parser("publish-status");q.add_argument("approval_id");q.set_defaults(fn=publish_status)
     return p
 
 def main(argv=None):
