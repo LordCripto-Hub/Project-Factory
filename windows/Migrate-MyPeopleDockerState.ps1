@@ -2,6 +2,7 @@ param(
     [switch]$Execute,
     [ValidatePattern('^mypeople$')][string]$Container = 'mypeople',
     [string]$SeedPath = $env:MYPEOPLE_SEED_PATH,
+    [string]$ResumeManifest,
     [int]$MinimumFreeGiB = 16
 )
 
@@ -14,8 +15,25 @@ $stateRoot = Join-Path $env:LOCALAPPDATA 'MyPeople'
 $transactionRoot = Join-Path $stateRoot "backups\docker-migration\$stamp"
 $transactionPath = Join-Path $transactionRoot 'transaction.json'
 $lockPath = Join-Path $stateRoot 'docker-migration.lock'
+$resolvedResumeManifest = $null
+$resumeState = $null
+if ($ResumeManifest) {
+    $resolvedResumeManifest = (Resolve-Path -LiteralPath $ResumeManifest).Path
+    $allowedResumeRoot = [IO.Path]::GetFullPath(
+        (Join-Path $stateRoot 'backups\docker-migration')
+    ).TrimEnd('\') + '\'
+    $resolvedFullPath = [IO.Path]::GetFullPath($resolvedResumeManifest)
+    if (-not $resolvedFullPath.StartsWith($allowedResumeRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Resume manifest must be inside the MyPeople Docker migration backup root'
+    }
+    $resumeState = Get-Content -Raw -LiteralPath $resolvedResumeManifest | ConvertFrom-Json
+}
 $preservedName = "mypeople-pre-volumes-$stamp"
-$snapshotImage = "mypeople-node:pre-volumes-$stamp"
+$snapshotImage = if ($resumeState) {
+    [string]$resumeState.snapshotImage
+} else {
+    "mypeople-node:pre-volumes-$stamp"
+}
 $gitSha = (& git -C $root rev-parse --short=12 HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $gitSha) { throw 'Unable to resolve the source commit' }
 $candidateImage = "mypeople-node:volume-backed-$gitSha"
@@ -33,6 +51,7 @@ $script:state = [ordered]@{
     volumes = @($contract.Keys)
     volumeState = [ordered]@{}
     backup = $transactionRoot
+    resumedFrom = $resolvedResumeManifest
     rollbackAttempted = $false
 }
 $lockCreated = $false
@@ -126,20 +145,47 @@ try {
         return
     }
 
-    Set-Stage 'quiesce'
-    $before = Invoke-MyPeopleDocker -Arguments @(
-        'exec', $Container, 'sh', '-lc',
-        'sha256sum /home/mp/mypeople/todos/board.v2.json /home/mp/mypeople/run/roster.json'
-    ) -Capture
-    $beforeStable = Get-StableStateSignature -Name $Container
-    $before | Set-Content -LiteralPath (Join-Path $transactionRoot 'before-state.sha256') -Encoding ASCII
-    $script:state.beforeStableState = $beforeStable
-    Write-MyPeopleTransaction -Path $transactionPath -State $script:state
-    $mutationStarted = $true
-    Docker stop --time 30 $Container
+    if ($resumeState) {
+        Set-Stage 'resume-validate'
+        if ($resumeState.stage -ne 'candidate-image' -or $resumeState.rollbackStatus -ne 'pass') {
+            throw 'Resume manifest is not a rolled-back candidate-image transaction'
+        }
+        if (-not (Test-MyPeopleDockerObject -Type image -Name $snapshotImage)) {
+            throw "Resume snapshot image not found: $snapshotImage"
+        }
+        $resumeBeforePath = Join-Path (Split-Path $resolvedResumeManifest -Parent) 'before-state.sha256'
+        if (-not (Test-Path -LiteralPath $resumeBeforePath)) {
+            throw 'Resume transaction has no before-state hash evidence'
+        }
+        $before = Get-Content -Raw -LiteralPath $resumeBeforePath
+        $beforeStable = [string]$resumeState.beforeStableState
+        if (-not $beforeStable) { throw 'Resume transaction has no stable state signature' }
+        $currentStable = Get-StableStateSignature -Name $Container
+        if ($currentStable -ne $beforeStable) {
+            throw 'Live state changed since the reusable snapshot was captured'
+        }
+        $before | Set-Content -LiteralPath (Join-Path $transactionRoot 'before-state.sha256') -Encoding ASCII
+        $script:state.beforeStableState = $beforeStable
+        Write-MyPeopleTransaction -Path $transactionPath -State $script:state
+        $mutationStarted = $true
+        Docker stop --time 30 $Container
+        Set-Stage 'snapshot-reused'
+    } else {
+        Set-Stage 'quiesce'
+        $before = Invoke-MyPeopleDocker -Arguments @(
+            'exec', $Container, 'sh', '-lc',
+            'sha256sum /home/mp/mypeople/todos/board.v2.json /home/mp/mypeople/run/roster.json'
+        ) -Capture
+        $beforeStable = Get-StableStateSignature -Name $Container
+        $before | Set-Content -LiteralPath (Join-Path $transactionRoot 'before-state.sha256') -Encoding ASCII
+        $script:state.beforeStableState = $beforeStable
+        Write-MyPeopleTransaction -Path $transactionPath -State $script:state
+        $mutationStarted = $true
+        Docker stop --time 30 $Container
 
-    Set-Stage 'snapshot'
-    Docker commit $Container $snapshotImage
+        Set-Stage 'snapshot'
+        Docker commit $Container $snapshotImage
+    }
 
     Set-Stage 'candidate-image'
     $candidateContainer = "mypeople-candidate-$stamp"

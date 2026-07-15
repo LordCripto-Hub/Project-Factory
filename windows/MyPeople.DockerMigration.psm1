@@ -80,8 +80,15 @@ function Invoke-MyPeopleDocker {
         [Parameter(Mandatory)][string[]]$Arguments,
         [switch]$Capture
     )
-    $output = @(& docker.exe @Arguments 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& docker.exe @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($exitCode -ne 0) {
         throw "docker $($Arguments -join ' ') failed: $($output -join "`n")"
     }
     if ($Capture) { return $output -join "`n" }
@@ -92,7 +99,12 @@ function Test-MyPeopleDockerObject {
         [Parameter(Mandatory)][ValidateSet('container', 'image', 'volume')][string]$Type,
         [Parameter(Mandatory)][string]$Name
     )
-    if (-not (Test-MyPeopleDockerName $Name)) {
+    $safeName = if ($Type -eq 'image') {
+        $Name -match '^[a-zA-Z0-9][a-zA-Z0-9_./:-]{0,255}$'
+    } else {
+        Test-MyPeopleDockerName $Name
+    }
+    if (-not $safeName) {
         throw 'Docker object check received an unsafe name'
     }
 

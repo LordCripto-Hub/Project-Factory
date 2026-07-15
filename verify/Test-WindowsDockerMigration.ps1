@@ -14,6 +14,9 @@ if (-not (Test-MyPeopleDockerObject -Type container -Name 'mypeople')) {
 if (Test-MyPeopleDockerObject -Type container -Name 'mypeople-object-that-does-not-exist') {
     throw 'Missing container was reported as present'
 }
+if (-not (Test-MyPeopleDockerObject -Type image -Name 'mypeople-node:latest')) {
+    throw 'Existing tagged image was not detected'
+}
 
 $redacted = ConvertTo-MyPeopleRedactedConfig @'
 QUEUE_SECRET=alpha
@@ -64,6 +67,12 @@ try {
 
 $dockerVersion = Invoke-MyPeopleDocker -Arguments @('version','--format','{{.Client.Version}}') -Capture
 if (-not $dockerVersion.Trim()) { throw 'Docker capture helper returned no version' }
+$stderrWithSuccess = Invoke-MyPeopleDocker -Arguments @(
+    'exec', 'mypeople', 'sh', '-lc', 'printf healthy-to-stderr >&2'
+) -Capture
+if ($stderrWithSuccess -notmatch 'healthy-to-stderr') {
+    throw 'Docker helper lost stderr from a successful command'
+}
 
 $module = Get-Content -Raw -LiteralPath $modulePath
 $guardIndex = $module.IndexOf('if (-not $oldExists)')
@@ -95,8 +104,11 @@ foreach ($forbidden in @('docker volume rm', 'docker compose down -v', 'docker s
 }
 foreach ($required in @(
     '[int]$MinimumFreeGiB = 16',
+    '[string]$ResumeManifest',
     'beforeStableState',
     'afterStableState',
+    'resumedFrom',
+    'snapshot-reused',
     'Get-MyPeopleStableRosterHash -Json',
     'Test-MyPeopleDockerObject -Type volume'
 )) {
