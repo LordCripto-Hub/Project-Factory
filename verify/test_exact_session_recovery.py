@@ -209,6 +209,114 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.assertTrue(any(event[0] == "tmux" for event in self.events))
         self.assertEqual(self.events[-1], ("lock-exit",))
 
+    def test_exact_resume_fails_before_healthy_state_without_provider_readiness(self):
+        record = self.lifecycle_record()
+        persisted = []
+        environment = {
+            "PROVIDER_BINDINGS_PATH": str(self.bindings),
+            "PROVIDER_PROFILES_PATH": str(self.profiles),
+            "PROVIDER_HOMES_DIR": str(self.homes),
+        }
+        with mock.patch.dict(os.environ, environment, clear=False), \
+             mock.patch.object(self.mp, "window_exists", return_value=False), \
+             mock.patch.object(self.mp, "run_tmux", side_effect=self.fake_tmux), \
+             mock.patch.object(self.mp, "load_roster", return_value=[record]), \
+             mock.patch.object(self.mp, "update_roster", side_effect=lambda row: persisted.append(copy.deepcopy(row))), \
+             mock.patch.object(self.mp, "write_status"), \
+             mock.patch.object(self.mp, "queue_register"), \
+             mock.patch.object(self.mp, "recorder"), \
+             mock.patch.object(self.mp, "wait_for_composer", return_value=False), \
+             mock.patch.object(self.mp, "tmux_send_message"), \
+             mock.patch.object(self.mp, "ensure_codex_doctrine"), \
+             mock.patch.object(self.mp, "shell_export", return_value="true"):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "resume_process_failed",
+            ):
+                self.mp.spawn(
+                    self.mp.namespace_from_record(record),
+                    resume_session=record["session_id"],
+                )
+        self.assertFalse(
+            any(
+                row.get("recovery_state") == "healthy"
+                for row in persisted
+            )
+        )
+
+    def test_fresh_claude_spawn_clears_previous_codex_profile_identity(self):
+        previous = self.lifecycle_record(
+            backend="codex",
+            provider_profile="codex-primary",
+            session_profile="codex-primary",
+        )
+        namespace = self.namespace()
+        namespace.backend = "claude"
+        persisted = []
+        with mock.patch.object(self.mp, "window_exists", return_value=False), \
+             mock.patch.object(self.mp, "run_tmux", side_effect=self.fake_tmux), \
+             mock.patch.object(self.mp, "load_roster", return_value=[previous]), \
+             mock.patch.object(self.mp, "update_roster", side_effect=lambda row: persisted.append(copy.deepcopy(row))), \
+             mock.patch.object(self.mp, "write_status"), \
+             mock.patch.object(self.mp, "queue_register"), \
+             mock.patch.object(self.mp, "recorder"), \
+             mock.patch.object(self.mp, "wait_for_composer", return_value=True), \
+             mock.patch.object(self.mp, "tmux_send_message"), \
+             mock.patch.object(self.mp, "trust_claude"), \
+             mock.patch.object(self.mp, "atomic_json"), \
+             mock.patch.object(self.mp, "shell_export", return_value="true"):
+            self.mp.spawn(namespace)
+        self.assertEqual(persisted[-1].get("provider_profile"), "")
+        self.assertEqual(persisted[-1].get("session_profile"), "")
+
+    def test_owner_runtime_reuses_authorized_receipts_without_recompile(self):
+        taskspec = self.root / "taskspec.json"
+        taskspec.write_text(
+            json.dumps({"workingDirectory": str(self.cwd)}) + "\n",
+            encoding="utf-8",
+        )
+        role = self.root / "role.md"
+        role.write_text("fixed worker contract\n", encoding="utf-8")
+        record = self.lifecycle_record(
+            lifecycle="owner",
+            owner_task_id="task-1234",
+            taskspec_path=str(taskspec),
+            taskspec_sha256=self.mp.hashlib.sha256(
+                taskspec.read_bytes()
+            ).hexdigest(),
+            role_contract_path=str(role),
+            role_contract_sha256=self.mp.hashlib.sha256(
+                role.read_bytes()
+            ).hexdigest(),
+            role_contract_version="1.0.0",
+        )
+        namespace = self.namespace()
+        namespace.owner_task = "task-1234"
+        namespace.cwd = str(self.cwd)
+        with mock.patch.object(
+            self.mp,
+            "compile_owner_task_spec",
+        ) as forbidden_compile, mock.patch.object(
+            self.mp,
+            "materialize_worker_contract",
+        ) as forbidden_materialize:
+            path, context, contract = self.mp.resolve_owner_runtime(
+                namespace,
+                record,
+            )
+        forbidden_compile.assert_not_called()
+        forbidden_materialize.assert_not_called()
+        self.assertEqual(path, str(taskspec))
+        self.assertEqual(
+            context["taskspec_sha256"],
+            record["taskspec_sha256"],
+        )
+        self.assertEqual(
+            contract["sha256"],
+            record["role_contract_sha256"],
+        )
+        self.assertEqual(contract["content"], "fixed worker contract\n")
+
     def test_roster_identity_update_changes_only_the_selected_agent(self):
         roster_path = self.root / "roster.json"
         roster_path.write_text(
@@ -308,6 +416,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
 
     def test_valid_revive_passes_same_session_to_spawn_and_clears_stop(self):
         current = {"record": self.lifecycle_record()}
+        original = copy.deepcopy(current["record"])
         spawned = []
         window = {"alive": False}
 
@@ -317,8 +426,8 @@ class ExactSessionSpawnContract(unittest.TestCase):
         def persist(row):
             current["record"] = copy.deepcopy(row)
 
-        def spawn(ns, resume_session=""):
-            spawned.append((ns, resume_session))
+        def spawn(ns, resume_session="", receipt_record=None):
+            spawned.append((ns, resume_session, receipt_record))
             current["record"].update(
                 state="alive",
                 retired=False,
@@ -359,6 +468,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.assertEqual(spawned[0][0].model, "gpt-test")
         self.assertEqual(current["record"]["stop_intent"], "")
         self.assertEqual(current["record"]["session_id"], spawned[0][1])
+        self.assertEqual(spawned[0][2], original)
         old_main.assert_not_called()
 
     def test_failed_exact_revive_restores_deliberate_tombstone(self):
@@ -403,6 +513,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
         *,
         now=1000.0,
         revive_error=None,
+        window_alive=False,
     ):
         self.assertTrue(hasattr(self.mp, "reconcile"), "reconcile is missing")
         current = {"record": copy.deepcopy(record)}
@@ -426,7 +537,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
         with mock.patch.object(self.mp, "load_roster", side_effect=load), \
              mock.patch.object(self.mp, "update_roster", side_effect=persist), \
              mock.patch.object(self.mp, "load_json", return_value={}), \
-             mock.patch.object(self.mp, "window_exists", return_value=False), \
+             mock.patch.object(self.mp, "window_exists", return_value=window_alive), \
              mock.patch.object(self.mp, "revive", side_effect=revive), \
              mock.patch.object(self.mp, "spawn", side_effect=spawn), \
              mock.patch.object(self.mp.time, "time", return_value=now):
@@ -442,6 +553,24 @@ class ExactSessionSpawnContract(unittest.TestCase):
         current, events = self.run_reconcile(record)
         self.assertEqual(events, [])
         self.assertEqual(current, record)
+
+    def test_reconcile_does_not_reset_bootstrap_attempts_for_pending_window(self):
+        pending = self.lifecycle_record(
+            retired=False,
+            stop_intent="",
+            state="starting",
+            session_id="",
+            resume_state="pending",
+            recovery_attempts=2,
+            recovery_state="recovering",
+        )
+        current, events = self.run_reconcile(
+            pending,
+            window_alive=True,
+        )
+        self.assertEqual(events, [])
+        self.assertEqual(current["recovery_attempts"], 2)
+        self.assertEqual(current["recovery_state"], "recovering")
 
     def test_reconcile_uses_exact_revive_and_never_fresh_spawn(self):
         record = self.lifecycle_record(
@@ -552,8 +681,15 @@ class ExactSessionSpawnContract(unittest.TestCase):
         }
         spawned = []
 
-        def spawn(ns, resume_session="", initial_message=""):
-            spawned.append((ns, resume_session, initial_message))
+        def spawn(
+            ns,
+            resume_session="",
+            initial_message="",
+            receipt_record=None,
+        ):
+            spawned.append(
+                (ns, resume_session, initial_message, receipt_record)
+            )
 
         namespace = argparse.Namespace(
             agent_id=record["agent_id"],
@@ -582,12 +718,56 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.assertEqual(spawned[0][0].backend, "claude")
         self.assertEqual(spawned[0][0].model, "claude-test")
         self.assertEqual(spawned[0][0].owner_task, "task-1234")
+        self.assertEqual(spawned[0][3], record)
 
         with mock.patch.object(
             self.mp,
             "validate_fresh_handoff",
             side_effect=SessionError("fresh_handoff_not_authorized"),
             create=True,
+        ), mock.patch.object(self.mp, "spawn") as forbidden_spawn:
+            with self.assertRaisesRegex(
+                SystemExit,
+                "fresh_handoff_not_authorized",
+            ):
+                self.mp.fresh_handoff(namespace)
+        forbidden_spawn.assert_not_called()
+
+    def test_fresh_handoff_rejects_target_profile_binding_mismatch(self):
+        record = self.lifecycle_record(
+            retired=True,
+            stop_intent="deliberate",
+            state="dead",
+        )
+        namespace = argparse.Namespace(
+            agent_id=record["agent_id"],
+            transaction="tx-profile",
+            handoff=str(self.root / "handoff.json"),
+        )
+        authorized = {
+            "record": record,
+            "handoff": {
+                "agent": {"agent_id": record["agent_id"]},
+                "terminalTail": "",
+            },
+            "state": {
+                "targetBackend": "codex",
+                "targetProfile": "codex-secondary",
+                "targetModel": "gpt-test",
+            },
+        }
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PROVIDER_BINDINGS_PATH": str(self.bindings),
+                "PROVIDER_PROFILES_PATH": str(self.profiles),
+                "PROVIDER_HOMES_DIR": str(self.homes),
+            },
+            clear=False,
+        ), mock.patch.object(
+            self.mp,
+            "validate_fresh_handoff",
+            return_value=authorized,
         ), mock.patch.object(self.mp, "spawn") as forbidden_spawn:
             with self.assertRaisesRegex(
                 SystemExit,

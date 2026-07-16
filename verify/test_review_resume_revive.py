@@ -63,6 +63,7 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         aid = "node-1/main:worker"
         session_id = "session-owner-1234"
         record = {"agent_id": aid, "state": "dead", "retired": True, "lifecycle": "owner", "owner_task_id": "task-1", "backend": "codex", "cwd": "/tmp/worker", "boss_id": "node-1/main:Boss", "model": "gpt-5.6-luna", "session_id": session_id, "session_backend": "codex", "session_profile": "", "session_cwd": "/tmp/worker", "resume_state": "available", "stop_intent": "deliberate"}
+        snapshot = dict(record)
         current = {"record": record}
         alive = {"value": False}
         sent = []
@@ -71,8 +72,8 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         mp.window_exists = lambda _target: alive["value"]
         mp.http_json = lambda *_args, **_kwargs: {"tasks": {"task-1": {"state": "working", "assignee": aid}}, "deletedTasks": {}}
         mp.validate_resume_evidence = lambda *_args, **_kwargs: "/private/session.jsonl"
-        def spawn(ns, resume_session=""):
-            sent.append((ns, resume_session))
+        def spawn(ns, resume_session="", receipt_record=None):
+            sent.append((ns, resume_session, receipt_record))
             current["record"] = {**current["record"], "state": "alive", "retired": False, "stop_intent": "", "session_id": resume_session}
             alive["value"] = True
         mp.spawn = spawn
@@ -80,6 +81,7 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         self.assertEqual(sent[0][0].owner_task, "task-1")
         self.assertEqual(sent[0][0].backend, "codex")
         self.assertEqual(sent[0][1], session_id)
+        self.assertEqual(sent[0][2], snapshot)
 
     def test_revive_refuses_active_agent_and_closed_owner_task(self):
         mp = load("revive_mp_guards", "mp")
@@ -114,6 +116,7 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
             "session_cwd": "/tmp/boss",
             "resume_state": "available",
         }
+        snapshot = dict(record)
         current = {"record": record}
         alive = {"value": False}
         sent = []
@@ -121,8 +124,8 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         mp.update_roster = lambda row: current.update(record=dict(row))
         mp.window_exists = lambda _target: alive["value"]
         mp.validate_resume_evidence = lambda *_args, **_kwargs: "/private/session.jsonl"
-        def spawn(ns, resume_session=""):
-            sent.append((ns, resume_session))
+        def spawn(ns, resume_session="", receipt_record=None):
+            sent.append((ns, resume_session, receipt_record))
             current["record"] = {**current["record"], "state": "alive", "retired": False, "session_id": resume_session}
             alive["value"] = True
         mp.spawn = spawn
@@ -133,6 +136,7 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         self.assertTrue(sent[0][0].master)
         self.assertEqual(sent[0][0].model, "gpt-5.6-sol")
         self.assertEqual(sent[0][1], "session-boss-1234")
+        self.assertEqual(sent[0][2], snapshot)
 
     def test_git_failure_detail_redacts_remote_and_secret_shapes(self):
         publisher = load("publisher_failure_detail", "project_publisher.py")

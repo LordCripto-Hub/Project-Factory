@@ -23,17 +23,23 @@ def write(status,summary="",state="alive"):
  if summary:d["summary"]=summary
  tmp=f"{path}.{os.getpid()}.{time.time_ns()}.tmp";json.dump(d,open(tmp,"w"),indent=2);os.replace(tmp,path)
  if session_id:
-  try:
-   record_session_identity(AGENT,{
-    "session_id":session_id,
-    "session_backend":"claude",
-    "session_profile":os.environ.get("MYPEOPLE_PROVIDER_PROFILE",""),
-    "session_cwd":os.path.realpath(os.getcwd()),
-    "session_recorded_at":time.time(),
-    "resume_state":"available",
-    "last_recovery_error":"",
-   })
-  except (OSError,ValueError):pass
+  identity={
+   "session_id":session_id,
+   "session_backend":"claude",
+   "session_profile":os.environ.get("MYPEOPLE_PROVIDER_PROFILE",""),
+   "session_cwd":os.path.realpath(os.getcwd()),
+   "session_recorded_at":time.time(),
+   "resume_state":"available",
+   "last_recovery_error":"",
+  }
+  deadline=time.monotonic()+max(0.0,float(os.environ.get("MYPEOPLE_HOOK_ROSTER_WAIT_SEC","2")))
+  while True:
+   try:
+    record_session_identity(AGENT,identity);break
+   except ValueError as error:
+    if str(error)!="unknown_agent" or time.monotonic()>=deadline:break
+    time.sleep(.05)
+   except OSError:break
 def assistant_text(obj):
  if not isinstance(obj,dict):return ""
  if obj.get("type")=="assistant":

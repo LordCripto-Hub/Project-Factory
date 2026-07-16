@@ -22,7 +22,11 @@ from mpcommon import (
     window_exists,
 )
 from provider_profiles import validate_profile_id
-from agent_session import HANDOFF_SNAPSHOT_FIELDS
+from agent_session import (
+    HANDOFF_SNAPSHOT_FIELDS,
+    SessionError,
+    validate_session_id,
+)
 
 
 RUN_ROOT = os.path.realpath(
@@ -140,6 +144,41 @@ def redact(text: str) -> str:
     return value
 
 
+def sanitize_terminal_tail(text: str) -> str:
+    sensitive_assignment = re.compile(
+        r"(?i)\b(?:queue_secret|secret|password|passwd|access_token|"
+        r"refresh_token|api_key|cookie|set-cookie|session)\b\s*[:=]"
+    )
+    jwt = re.compile(
+        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+        r"(?:\.[A-Za-z0-9_-]+)?\b"
+    )
+    credential_path = re.compile(
+        r"/home/[^/\s]+/(?:\.codex|\.claude|\.config)/[^\s]+"
+    )
+    userinfo = re.compile(r"(?i)(https?://)[^/@\s]+@")
+    output = []
+    in_private_key = False
+    for raw_line in str(text or "").splitlines():
+        line = raw_line
+        if "-----BEGIN " in line and "PRIVATE KEY-----" in line:
+            in_private_key = True
+            output.append("[REDACTED_PRIVATE_KEY]")
+            continue
+        if in_private_key:
+            if "-----END " in line and "PRIVATE KEY-----" in line:
+                in_private_key = False
+            continue
+        line = redact(line)
+        line = credential_path.sub("[REDACTED_CREDENTIAL_PATH]", line)
+        line = userinfo.sub(r"\1[REDACTED_USERINFO]@", line)
+        line = jwt.sub("[REDACTED_JWT]", line)
+        if sensitive_assignment.search(line):
+            line = "[REDACTED_SENSITIVE_LINE]"
+        output.append(line)
+    return "\n".join(output)
+
+
 def build_handoff(record: dict, terminal_tail: str, limit: int = 4000) -> dict:
     public = {}
     for key in PUBLIC_HANDOFF_FIELDS:
@@ -148,7 +187,7 @@ def build_handoff(record: dict, terminal_tail: str, limit: int = 4000) -> dict:
         value = record[key]
         public[key] = redact(value) if isinstance(value, str) else value
     bounded = max(0, int(limit))
-    tail = redact(terminal_tail)
+    tail = sanitize_terminal_tail(terminal_tail)
     if bounded:
         tail = tail[-bounded:]
     else:
@@ -325,6 +364,25 @@ def verify_roles(
             ):
                 failures.append(agent_id)
                 continue
+        try:
+            session_id = validate_session_id(current.get("session_id"))
+        except SessionError:
+            failures.append(agent_id)
+            continue
+        if (
+            current.get("resume_state") != "available"
+            or current.get("session_backend") != current.get("backend")
+            or current.get("session_profile")
+            != current.get("provider_profile", "")
+            or os.path.realpath(str(current.get("session_cwd") or ""))
+            != os.path.realpath(str(current.get("cwd") or ""))
+            or (
+                expected.get("session_id")
+                and session_id == expected.get("session_id")
+            )
+        ):
+            failures.append(agent_id)
+            continue
         if any(
             field in expected and current.get(field) != expected.get(field)
             for field in role_fields
@@ -397,6 +455,10 @@ def _capture_tail(row: dict) -> str:
 
 def command_prepare(args) -> None:
     transaction_dir = _transaction_dir(args.transaction)
+    target_backend = str(getattr(args, "backend", "") or "")
+    target_profile = str(getattr(args, "profile", "") or "")
+    if target_backend != "claude" and not target_profile:
+        raise RuntimeError("target provider profile is required")
     acquire_lock(LOCK_PATH, args.transaction)
     try:
         complete_roster = load_roster()
@@ -420,6 +482,8 @@ def command_prepare(args) -> None:
             state["targetBackend"] = args.backend
         if getattr(args, "model", ""):
             state["targetModel"] = args.model
+        if target_profile:
+            state["targetProfile"] = validate_profile_id(target_profile)
         atomic_json(os.path.join(transaction_dir, "state.json"), state, mode=0o600)
     except Exception:
         release_lock(LOCK_PATH, args.transaction)
@@ -508,6 +572,7 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--agent", default="")
     prepare.add_argument("--backend", choices=["claude", "codex"], default="")
     prepare.add_argument("--model", default="")
+    prepare.add_argument("--profile", default="")
     prepare.set_defaults(function=command_prepare)
     for name, function in (
         ("stop", command_stop),

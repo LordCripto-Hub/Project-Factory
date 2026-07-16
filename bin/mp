@@ -501,7 +501,65 @@ def wait_for_composer(target, timeout=30):
         time.sleep(.5)
     return False
 
-def spawn(ns, resume_session="", initial_message=""):
+def wait_for_stable_window(target, duration=None, poll=0.1):
+    stable_for = (
+        float(os.environ.get("MYPEOPLE_RESUME_STABILITY_SEC", "1"))
+        if duration is None
+        else float(duration)
+    )
+    deadline = time.monotonic() + max(0.0, stable_for)
+    while True:
+        if not window_exists(target):
+            return False
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(max(0.01, float(poll)))
+
+def resolve_owner_runtime(ns, receipt_record=None):
+    if not ns.owner_task:
+        return "", {}, None
+    if receipt_record is None:
+        taskspec_path = compile_owner_task_spec(ns.owner_task)
+        taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
+        return taskspec_path, taskspec_context, materialize_worker_contract()
+    if receipt_record.get("owner_task_id") != ns.owner_task:
+        raise SystemExit("taskspec_receipt_mismatch")
+    validate_record_receipt(
+        receipt_record,
+        "taskspec_path",
+        "taskspec_sha256",
+        "taskspec_receipt_mismatch",
+    )
+    validate_record_receipt(
+        receipt_record,
+        "role_contract_path",
+        "role_contract_sha256",
+        "role_receipt_mismatch",
+    )
+    taskspec_path = str(receipt_record.get("taskspec_path") or "")
+    taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
+    if taskspec_context["taskspec_sha256"] != receipt_record.get("taskspec_sha256"):
+        raise SystemExit("taskspec_receipt_mismatch")
+    try:
+        role_content = pathlib.Path(
+            receipt_record["role_contract_path"]
+        ).read_text(encoding="utf-8")
+    except (KeyError, OSError, UnicodeError) as error:
+        raise SystemExit("role_receipt_mismatch") from error
+    worker_contract = {
+        "path": receipt_record["role_contract_path"],
+        "sha256": receipt_record["role_contract_sha256"],
+        "version": receipt_record.get("role_contract_version"),
+        "content": role_content,
+    }
+    return taskspec_path, taskspec_context, worker_contract
+
+def spawn(
+    ns,
+    resume_session="",
+    initial_message="",
+    receipt_record=None,
+):
     raw_boss = ns.boss
     if raw_boss is not None and not raw_boss.strip(): raise SystemExit("empty --boss is invalid; omit --boss for a top-level agent")
     if (ns.owner_task or ns.temporary) and raw_boss is None: raise SystemExit("--owner-task/--temporary require --boss")
@@ -523,9 +581,11 @@ def spawn(ns, resume_session="", initial_message=""):
     worker_contract = None
     if ns.owner_task:
         try:
-            taskspec_path = compile_owner_task_spec(ns.owner_task)
-            taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
-            worker_contract = materialize_worker_contract()
+            (
+                taskspec_path,
+                taskspec_context,
+                worker_contract,
+            ) = resolve_owner_runtime(ns, receipt_record)
         except TaskSpecError as error:
             message = f"[taskspec] task {ns.owner_task} blocked: {error.code}. Fix the project/profile/context request and retry."
             if boss:
@@ -713,13 +773,21 @@ def spawn(ns, resume_session="", initial_message=""):
         rec["role_contract_path"] = worker_contract["path"]
         rec["role_contract_sha256"] = worker_contract["sha256"]
         rec["role_contract_version"] = worker_contract["version"]
-    if profile_id:
-        rec["provider_profile"] = profile_id
+    rec["provider_profile"] = profile_id
     if ns.master: rec["summary"]="autonomous plan approve queue mp verify fire-and-forget"
     if tab=="Nightwatch": rec["summary"]="nightwatch ceo-equivalent approve whatsapp never-done"
+    if resume_session and created:
+        if (
+            not wait_for_composer(target)
+            or not wait_for_stable_window(target)
+        ):
+            run_tmux(["kill-window","-t",target],check=False)
+            raise RuntimeError("resume_process_failed")
     update_roster(rec); write_status(aid,"starting",rec.get("summary",""),boss_id=boss,backend=ns.backend)
     queue_register(rec); recorder(session,tab)
-    if created and initial_message:
+    if created and resume_session:
+        pass
+    elif created and initial_message:
         wait_for_composer(target)
         tmux_send_message(target, initial_message)
     elif created and ns.master:
@@ -879,13 +947,18 @@ def revive(ns):
             session_id,
             codex_home=provider_home or os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
             claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR",""),
+            expected_cwd=real_cwd,
         )
     except SessionError as error:
         raise SystemExit(error.code) from error
     snapshot=dict(rec)
     update_roster({**rec,"state":"recovering","recovery_state":"recovering"})
     try:
-        spawn(namespace_from_record(rec),resume_session=session_id)
+        spawn(
+            namespace_from_record(rec),
+            resume_session=session_id,
+            receipt_record=rec,
+        )
         if not window_exists(tmux_target(aid)):
             raise RuntimeError("resume_process_failed")
         current=next((x for x in load_roster() if x.get("agent_id")==aid),{})
@@ -941,6 +1014,21 @@ def fresh_handoff(ns):
     runtime.model = state.get("targetModel") or runtime.model
     if runtime.backend not in {"codex", "claude"}:
         raise SystemExit("fresh_handoff_not_authorized")
+    _, _, tab = parse_agent_id(aid)
+    target_profile = str(state.get("targetProfile") or "")
+    if runtime.backend == "codex":
+        _model, effective_profile, _home = resolve_provider_runtime(
+            aid,
+            runtime.backend,
+            bool(runtime.master),
+            tab,
+            runtime.model,
+            runtime.model is not None,
+        )
+        if not target_profile or effective_profile != target_profile:
+            raise SystemExit("fresh_handoff_not_authorized")
+    elif target_profile:
+        raise SystemExit("fresh_handoff_not_authorized")
     validate_record_receipt(
         record,
         "taskspec_path",
@@ -957,6 +1045,7 @@ def fresh_handoff(ns):
         runtime,
         resume_session="",
         initial_message=render_fresh_handoff(authorized["handoff"]),
+        receipt_record=record,
     )
 
 def switch_backend(ns):
@@ -989,9 +1078,13 @@ def reconcile(ns):
         if rec.get("retired") or rec.get("stop_intent")=="deliberate":continue
         if window_exists(tmux_target(aid)):
             if (
+                rec.get("resume_state")=="available"
+                and rec.get("session_id")
+                and (
                 rec.get("recovery_state")!="healthy"
                 or int(rec.get("recovery_attempts") or 0)
                 or float(rec.get("next_recovery_at") or 0)
+                )
             ):
                 update_roster({
                     **rec,

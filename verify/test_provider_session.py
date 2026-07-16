@@ -57,6 +57,32 @@ class ProviderSessionContract(unittest.TestCase):
         self.assertNotIn("must-not-be-copied", rendered)
         self.assertLessEqual(len(handoff["terminalTail"]), 4000)
 
+    def test_handoff_redacts_common_assignments_jwt_pem_and_credential_paths(self):
+        tail = "\n".join(
+            (
+                "QUEUE_SECRET=queue-example-value",
+                "password: password-example-value",
+                "access_token=access-example-value",
+                "Cookie: session=cookie-example-value",
+                "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature",
+                "-----BEGIN PRIVATE KEY-----",
+                "private-key-material",
+                "-----END PRIVATE KEY-----",
+                "/home/mp/.codex/auth.json",
+            )
+        )
+        rendered = json.dumps(module.build_handoff({}, tail))
+        for secret in (
+            "queue-example-value",
+            "password-example-value",
+            "access-example-value",
+            "cookie-example-value",
+            "eyJhbGciOiJIUzI1NiJ9",
+            "private-key-material",
+            "/home/mp/.codex/auth.json",
+        ):
+            self.assertNotIn(secret, rendered)
+
     def test_lock_rejects_concurrent_switches(self):
         module.acquire_lock(self.lock, "tx-one")
         with self.assertRaises(module.SwitchBusy):
@@ -150,7 +176,13 @@ class ProviderSessionContract(unittest.TestCase):
             str(bindings),
             {"globalProfile": "codex-primary", "agentProfiles": {}},
         )
-        args = module.argparse.Namespace(transaction="tx-prepare", agent=agent_id)
+        args = module.argparse.Namespace(
+            transaction="tx-prepare",
+            agent=agent_id,
+            backend="",
+            model="",
+            profile="codex-secondary",
+        )
         with mock.patch.object(module, "TRANSACTIONS_ROOT", str(transactions)), \
              mock.patch.object(module, "LOCK_PATH", self.lock), \
              mock.patch.object(module, "BINDINGS_PATH", str(bindings)), \
@@ -163,6 +195,11 @@ class ProviderSessionContract(unittest.TestCase):
         self.assertEqual(payload["snapshot"]["agent_id"], agent_id)
         self.assertEqual(payload["snapshot"]["cwd"], "/workspace/project")
         self.assertEqual(stat.S_IMODE(handoffs[0].stat().st_mode), 0o600)
+        state = module.load_json(
+            str(transactions / "tx-prepare" / "state.json"),
+            {},
+        )
+        self.assertEqual(state["targetProfile"], "codex-secondary")
 
     def test_forward_revive_uses_transaction_authorized_fresh_handoff(self):
         transaction_dir = self.root / "transactions" / "tx-forward"
@@ -212,9 +249,18 @@ class ProviderSessionContract(unittest.TestCase):
                 "agent_id": "node-1/main:Boss",
                 "is_master": True,
                 "backend": "codex",
+                "cwd": "/workspace/boss",
             }
         ]
-        actual = [{**expected[0], "state": "alive"}]
+        actual = [{
+            **expected[0],
+            "state": "alive",
+            "session_id": "session-1234",
+            "session_backend": "codex",
+            "session_profile": "",
+            "session_cwd": "/workspace/boss",
+            "resume_state": "available",
+        }]
         with mock.patch.object(module, "load_roster", return_value=actual), \
              mock.patch.object(module, "window_exists", return_value=True):
             module.verify_roles(expected)
@@ -232,6 +278,7 @@ class ProviderSessionContract(unittest.TestCase):
                 "backend": "codex",
                 "model": "gpt-old",
                 "provider_profile": "codex-primary",
+                "session_id": "session-old-1234",
             }
         ]
         current = [
@@ -240,6 +287,12 @@ class ProviderSessionContract(unittest.TestCase):
                 "state": "alive",
                 "model": "gpt-new",
                 "provider_profile": "codex-secondary",
+                "cwd": "/workspace/boss",
+                "session_id": "session-new-1234",
+                "session_backend": "codex",
+                "session_profile": "codex-secondary",
+                "session_cwd": "/workspace/boss",
+                "resume_state": "available",
             }
         ]
         bindings = self.root / "provider-bindings.json"
@@ -259,6 +312,17 @@ class ProviderSessionContract(unittest.TestCase):
                 target_model="gpt-new",
             )
 
+        reused = [{**current[0], "session_id": "session-old-1234"}]
+        with mock.patch.object(module, "BINDINGS_PATH", str(bindings)), \
+             mock.patch.object(module, "load_roster", return_value=reused), \
+             mock.patch.object(module, "window_exists", return_value=True):
+            with self.assertRaises(RuntimeError):
+                module.verify_roles(
+                    expected,
+                    target_backend="codex",
+                    target_model="gpt-new",
+                )
+
         wrong = [{**current[0], "model": "gpt-wrong"}]
         with mock.patch.object(module, "BINDINGS_PATH", str(bindings)), \
              mock.patch.object(module, "load_roster", return_value=wrong), \
@@ -269,6 +333,34 @@ class ProviderSessionContract(unittest.TestCase):
                     target_backend="codex",
                     target_model="gpt-new",
                 )
+
+    def test_verify_roles_rejects_fresh_agent_without_captured_session(self):
+        agent_id = "node-1/main:Boss"
+        expected = [{
+            "agent_id": agent_id,
+            "is_master": True,
+            "backend": "claude",
+            "cwd": "/workspace/boss",
+        }]
+        unavailable = [{
+            **expected[0],
+            "state": "alive",
+            "session_id": "",
+            "session_backend": "claude",
+            "session_profile": "",
+            "session_cwd": "/workspace/boss",
+            "resume_state": "unavailable",
+        }]
+        bindings = self.root / "provider-bindings.json"
+        module.atomic_json(
+            str(bindings),
+            {},
+        )
+        with mock.patch.object(module, "BINDINGS_PATH", str(bindings)), \
+             mock.patch.object(module, "load_roster", return_value=unavailable), \
+             mock.patch.object(module, "window_exists", return_value=True):
+            with self.assertRaises(RuntimeError):
+                module.verify_roles(expected)
 
     def test_rollback_restores_bindings_and_revival_snapshot(self):
         transaction_dir = self.root / "tx-rollback"

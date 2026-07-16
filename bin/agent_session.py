@@ -116,6 +116,23 @@ def discover_codex_session(
         time.sleep(max(0.001, float(poll)))
 
 
+def _prepare_private_directory(path: Path) -> Path:
+    candidate = os.path.abspath(path)
+    try:
+        os.makedirs(candidate, mode=0o700, exist_ok=True)
+        if candidate != os.path.realpath(candidate):
+            raise SessionError("session_capture_path_invalid")
+        metadata = os.lstat(candidate)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise SessionError("session_capture_path_invalid")
+        os.chmod(candidate, 0o700)
+        return Path(candidate)
+    except SessionError:
+        raise
+    except OSError as error:
+        raise SessionError("session_capture_path_invalid") from error
+
+
 @contextlib.contextmanager
 def capture_lock(
     lock_root: str,
@@ -127,10 +144,8 @@ def capture_lock(
 ):
     backend_name = _safe_component(backend)
     profile_name = _safe_component(profile or "default")
-    root = Path(os.path.realpath(lock_root))
-    directory = root / backend_name
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(directory, 0o700)
+    root = _prepare_private_directory(Path(os.path.abspath(lock_root)))
+    directory = _prepare_private_directory(root / backend_name)
     path = directory / f"{profile_name}.lock"
     descriptor = os.open(
         path,
@@ -209,7 +224,73 @@ def session_files(
         ]
     else:
         raise SessionError("session_backend_unsupported")
-    return sorted(str(path.resolve()) for path in paths)
+    return sorted(str(path.absolute()) for path in paths)
+
+
+def _strict_session_file(path: str, root: Path) -> Path:
+    candidate = os.path.abspath(path)
+    resolved = os.path.realpath(candidate)
+    root_path = os.path.realpath(root)
+    if (
+        candidate != resolved
+        or os.path.commonpath((root_path, resolved)) != root_path
+    ):
+        raise SessionError("session_identity_mismatch")
+    try:
+        metadata = os.lstat(candidate)
+    except OSError as error:
+        raise SessionError("session_missing") from error
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_mode & 0o077
+    ):
+        raise SessionError("session_identity_mismatch")
+    return Path(candidate)
+
+
+def _validate_claude_transcript(
+    path: Path,
+    session_id: str,
+    expected_cwd: str,
+) -> None:
+    found_id = False
+    found_cwd = False
+    try:
+        with path.open(encoding="utf-8") as stream:
+            for index, raw in enumerate(stream):
+                if index >= 100:
+                    break
+                if not raw.strip():
+                    continue
+                event = json.loads(raw)
+                if not isinstance(event, dict):
+                    continue
+                payload = event.get("payload")
+                if not isinstance(payload, dict):
+                    payload = {}
+                raw_id = (
+                    event.get("sessionId")
+                    or event.get("session_id")
+                    or payload.get("sessionId")
+                    or payload.get("session_id")
+                )
+                if raw_id:
+                    if validate_session_id(raw_id) != session_id:
+                        raise SessionError("session_identity_mismatch")
+                    found_id = True
+                raw_cwd = event.get("cwd") or payload.get("cwd")
+                if raw_cwd:
+                    if os.path.realpath(str(raw_cwd)) != expected_cwd:
+                        raise SessionError("session_cwd_mismatch")
+                    found_cwd = True
+                if found_id and found_cwd:
+                    return
+    except SessionError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as error:
+        raise SessionError("session_identity_mismatch") from error
+    raise SessionError("session_identity_mismatch")
 
 
 def validate_resume_evidence(
@@ -218,7 +299,11 @@ def validate_resume_evidence(
     *,
     codex_home: str = "",
     claude_config_dir: str = "",
+    expected_cwd: str = "",
 ) -> str:
+    cwd = os.path.realpath(str(expected_cwd or ""))
+    if not expected_cwd:
+        raise SessionError("session_identity_mismatch")
     paths = session_files(
         backend,
         session_id,
@@ -227,7 +312,33 @@ def validate_resume_evidence(
     )
     if not paths:
         raise SessionError("session_missing")
-    return paths[0]
+    if len(paths) != 1:
+        raise SessionError("session_identity_mismatch")
+    if backend == "codex":
+        root = _codex_sessions_root(codex_home)
+        path = _strict_session_file(paths[0], root)
+        metadata = read_codex_session_meta(path)
+        if metadata["session_id"] != validate_session_id(session_id):
+            raise SessionError("session_identity_mismatch")
+        if metadata["cwd"] != cwd:
+            raise SessionError("session_cwd_mismatch")
+    elif backend == "claude":
+        root = Path(
+            os.path.realpath(
+                claude_config_dir
+                or os.environ.get("CLAUDE_CONFIG_DIR")
+                or os.path.expanduser("~/.claude")
+            )
+        ) / "projects"
+        path = _strict_session_file(paths[0], root)
+        _validate_claude_transcript(
+            path,
+            validate_session_id(session_id),
+            cwd,
+        )
+    else:
+        raise SessionError("session_backend_unsupported")
+    return str(path)
 
 
 def _read_private_json(path: str):
@@ -345,6 +456,12 @@ def validate_fresh_handoff(
                 raise SessionError("fresh_handoff_not_authorized")
         target_backend = state.get("targetBackend")
         if target_backend and target_backend not in {"codex", "claude"}:
+            raise SessionError("fresh_handoff_not_authorized")
+        effective_backend = target_backend or record.get("backend")
+        target_profile = str(state.get("targetProfile") or "")
+        if effective_backend == "codex":
+            _safe_component(target_profile)
+        elif target_profile:
             raise SessionError("fresh_handoff_not_authorized")
         return {"record": record, "handoff": handoff, "state": state}
     except SessionError as error:

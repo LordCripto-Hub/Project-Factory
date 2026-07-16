@@ -47,7 +47,8 @@ function Invoke-ProviderSession {
     param(
         [Parameter(Mandatory)][string]$Operation,
         [Parameter(Mandatory)][string]$Transaction,
-        [string]$SelectedAgent = ''
+        [string]$SelectedAgent = '',
+        [string]$TargetProfile = ''
     )
     $arguments = @(
         'exec',
@@ -59,6 +60,12 @@ function Invoke-ProviderSession {
     )
     if ($Operation -eq 'prepare' -and $SelectedAgent) {
         $arguments += @('--agent', $SelectedAgent)
+    }
+    if ($Operation -eq 'prepare') {
+        if ([string]::IsNullOrWhiteSpace($TargetProfile)) {
+            throw 'Target profile is required for provider-session prepare.'
+        }
+        $arguments += @('--profile', $TargetProfile)
     }
     $startArguments = @{
         FilePath = 'docker'
@@ -129,10 +136,15 @@ try {
     } else {
         $newBindings.globalProfile = $safeProfile
     }
+    $targetProfile = if ($InheritGlobal) {
+        [string]$newBindings.globalProfile
+    } else {
+        $safeProfile
+    }
 
     $phase = 'provider-session prepare'
     Write-SwitchLog $phase
-    Invoke-ProviderSession -Operation 'prepare' -Transaction $transactionId -SelectedAgent $Agent
+    Invoke-ProviderSession -Operation 'prepare' -Transaction $transactionId -SelectedAgent $Agent -TargetProfile $targetProfile
     $prepared = $true
 
     $handoffDirectory = Join-Path (Join-Path $env:LOCALAPPDATA 'MyPeople\handoffs') $transactionId

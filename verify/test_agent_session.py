@@ -61,6 +61,7 @@ class AgentSessionContract(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+        os.chmod(path, 0o600)
         return path
 
     def test_session_id_accepts_opaque_safe_values_and_rejects_paths(self):
@@ -172,6 +173,24 @@ class AgentSessionContract(unittest.TestCase):
                 ):
                     self.fail("second holder acquired the same profile lock")
 
+    def test_profile_capture_lock_rejects_symlinked_backend_directory(self):
+        lock_root = self.root / "locks"
+        outside = self.root / "outside-locks"
+        outside.mkdir()
+        lock_root.mkdir()
+        (lock_root / "codex").symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "session_capture_path_invalid",
+        ):
+            with runtime.capture_lock(
+                str(lock_root),
+                "codex",
+                "codex-primary",
+                timeout=0,
+            ):
+                self.fail("capture lock followed a symlinked directory")
+
     def test_resume_arguments_preserve_options_and_session_position(self):
         self.assertEqual(
             runtime.apply_resume_args(
@@ -206,6 +225,7 @@ class AgentSessionContract(unittest.TestCase):
                 "codex",
                 codex_id,
                 codex_home=str(self.codex_home),
+                expected_cwd=str(self.cwd),
             ),
             str(codex_path.resolve()),
         )
@@ -219,12 +239,23 @@ class AgentSessionContract(unittest.TestCase):
             / f"{claude_id}.jsonl"
         )
         claude_path.parent.mkdir(parents=True)
-        claude_path.write_text("{}\n", encoding="utf-8")
+        claude_path.write_text(
+            json.dumps(
+                {
+                    "sessionId": claude_id,
+                    "cwd": str(self.cwd),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(claude_path, 0o600)
         self.assertEqual(
             runtime.validate_resume_evidence(
                 "claude",
                 claude_id,
                 claude_config_dir=str(self.root / "claude"),
+                expected_cwd=str(self.cwd),
             ),
             str(claude_path.resolve()),
         )
@@ -234,6 +265,60 @@ class AgentSessionContract(unittest.TestCase):
                 "codex",
                 "019f0000-0000-7000-8000-000000000099",
                 codex_home=str(self.codex_home),
+                expected_cwd=str(self.cwd),
+            )
+
+    def test_resume_evidence_rejects_ambiguous_and_contradictory_codex_files(self):
+        session_id = "019f0000-0000-7000-8000-000000000008"
+        self.write_codex_meta(session_id, name=f"rollout-a-{session_id}.jsonl")
+        self.write_codex_meta(session_id, name=f"rollout-b-{session_id}.jsonl")
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "session_identity_mismatch",
+        ):
+            runtime.validate_resume_evidence(
+                "codex",
+                session_id,
+                codex_home=str(self.codex_home),
+                expected_cwd=str(self.cwd),
+            )
+
+        other_id = "019f0000-0000-7000-8000-000000000009"
+        mismatch = self.write_codex_meta(
+            other_id,
+            name=f"rollout-{session_id}.jsonl",
+        )
+        for old in mismatch.parent.glob(f"*{session_id}*.jsonl"):
+            if old != mismatch:
+                old.unlink()
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "session_identity_mismatch",
+        ):
+            runtime.validate_resume_evidence(
+                "codex",
+                session_id,
+                codex_home=str(self.codex_home),
+                expected_cwd=str(self.cwd),
+            )
+
+    def test_resume_evidence_rejects_symlinked_provider_transcript(self):
+        session_id = "019f0000-0000-7000-8000-000000000010"
+        target = self.write_codex_meta(
+            session_id,
+            name="private-target.jsonl",
+        )
+        linked = target.with_name(f"rollout-{session_id}.jsonl")
+        linked.symlink_to(target)
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "session_identity_mismatch",
+        ):
+            runtime.validate_resume_evidence(
+                "codex",
+                session_id,
+                codex_home=str(self.codex_home),
+                expected_cwd=str(self.cwd),
             )
 
     def fresh_handoff_fixture(self):
@@ -286,7 +371,11 @@ class AgentSessionContract(unittest.TestCase):
             (lock_path, {"transaction": transaction_id}),
             (
                 transaction_dir / "state.json",
-                {"transaction": transaction_id, "phase": "stopped"},
+                {
+                    "transaction": transaction_id,
+                    "phase": "stopped",
+                    "targetProfile": "codex-primary",
+                },
             ),
             (transaction_dir / "roster.json", [record]),
             (handoff_path, handoff),

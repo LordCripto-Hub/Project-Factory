@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 
@@ -24,6 +25,9 @@ class ClaudeSessionHookContract(unittest.TestCase):
         self.status = self.install / "status"
         self.workspace.mkdir()
         self.roster.parent.mkdir(parents=True)
+        self.write_roster()
+
+    def write_roster(self):
         self.roster.write_text(
             json.dumps(
                 [
@@ -104,6 +108,24 @@ class ClaudeSessionHookContract(unittest.TestCase):
         self.assertEqual(completed.stdout, "")
         self.assertEqual(self.roster.read_text(encoding="utf-8"), before)
         self.assertNotIn("../escape", completed.stderr)
+
+    def test_session_start_waits_for_spawn_to_publish_roster_row(self):
+        self.roster.unlink()
+        writer = threading.Timer(0.75, self.write_roster)
+        writer.start()
+        try:
+            completed = self.run_hook("claude-session-race-1234")
+        finally:
+            writer.join(timeout=2)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        boss = next(
+            row
+            for row in self.load_roster()
+            if row["agent_id"].endswith(":Boss")
+        )
+        self.assertEqual(boss["session_id"], "claude-session-race-1234")
+        self.assertEqual(boss["resume_state"], "available")
 
 
 if __name__ == "__main__":
