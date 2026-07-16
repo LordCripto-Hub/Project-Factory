@@ -397,6 +397,140 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.assertGreaterEqual(len(persisted), 2)
         self.assertEqual(persisted[-1], original)
 
+    def run_reconcile(
+        self,
+        record,
+        *,
+        now=1000.0,
+        revive_error=None,
+    ):
+        self.assertTrue(hasattr(self.mp, "reconcile"), "reconcile is missing")
+        current = {"record": copy.deepcopy(record)}
+        events = []
+
+        def load():
+            return [copy.deepcopy(current["record"])]
+
+        def persist(row):
+            current["record"] = copy.deepcopy(row)
+            events.append(("persist", copy.deepcopy(row)))
+
+        def revive(ns):
+            events.append(("revive", ns.agent_id))
+            if revive_error:
+                raise revive_error
+
+        def spawn(ns, resume_session=""):
+            events.append(("bootstrap_retry", ns.agent_id, resume_session))
+
+        with mock.patch.object(self.mp, "load_roster", side_effect=load), \
+             mock.patch.object(self.mp, "update_roster", side_effect=persist), \
+             mock.patch.object(self.mp, "load_json", return_value={}), \
+             mock.patch.object(self.mp, "window_exists", return_value=False), \
+             mock.patch.object(self.mp, "revive", side_effect=revive), \
+             mock.patch.object(self.mp, "spawn", side_effect=spawn), \
+             mock.patch.object(self.mp.time, "time", return_value=now):
+            self.mp.reconcile(argparse.Namespace(agent_id=""))
+        return current["record"], events
+
+    def test_reconcile_skips_deliberate_stop(self):
+        record = self.lifecycle_record(
+            retired=True,
+            stop_intent="deliberate",
+            recovery_state="stopped",
+        )
+        current, events = self.run_reconcile(record)
+        self.assertEqual(events, [])
+        self.assertEqual(current, record)
+
+    def test_reconcile_uses_exact_revive_and_never_fresh_spawn(self):
+        record = self.lifecycle_record(
+            retired=False,
+            stop_intent="",
+            state="alive",
+            recovery_state="healthy",
+            recovery_attempts=0,
+        )
+        _current, events = self.run_reconcile(record)
+        self.assertIn(("revive", record["agent_id"]), events)
+        self.assertNotIn(
+            "bootstrap_retry",
+            [event[0] for event in events],
+        )
+
+    def test_reconcile_honors_cooldown_and_blocks_after_three_failures(self):
+        cooldown = self.lifecycle_record(
+            retired=False,
+            stop_intent="",
+            state="dead",
+            recovery_state="cooldown",
+            recovery_attempts=1,
+            next_recovery_at=1010.0,
+        )
+        unchanged, cooldown_events = self.run_reconcile(cooldown, now=1000.0)
+        self.assertEqual(cooldown_events, [])
+        self.assertEqual(unchanged, cooldown)
+
+        exhausted = self.lifecycle_record(
+            retired=False,
+            stop_intent="",
+            state="dead",
+            recovery_state="cooldown",
+            recovery_attempts=3,
+            next_recovery_at=0,
+        )
+        blocked, blocked_events = self.run_reconcile(exhausted)
+        self.assertNotIn("revive", [event[0] for event in blocked_events])
+        self.assertEqual(blocked["recovery_state"], "blocked")
+        self.assertEqual(
+            blocked["last_recovery_error"],
+            "recovery_attempts_exhausted",
+        )
+
+    def test_third_exact_recovery_failure_becomes_blocked_without_fresh_spawn(self):
+        record = self.lifecycle_record(
+            retired=False,
+            stop_intent="",
+            state="dead",
+            recovery_state="healthy",
+            recovery_attempts=2,
+            next_recovery_at=0,
+        )
+        blocked, events = self.run_reconcile(
+            record,
+            revive_error=RuntimeError("provider failed"),
+        )
+        self.assertEqual(blocked["recovery_attempts"], 3)
+        self.assertEqual(blocked["recovery_state"], "blocked")
+        self.assertEqual(blocked["last_recovery_error"], "resume_process_failed")
+        self.assertNotIn("bootstrap_retry", [event[0] for event in events])
+
+    def test_never_started_agent_has_at_most_three_bootstrap_retries(self):
+        starting = self.lifecycle_record(
+            retired=False,
+            stop_intent="",
+            state="starting",
+            session_id="",
+            resume_state="pending",
+            recovery_attempts=2,
+            created=800.0,
+            next_recovery_at=0,
+        )
+        retried, events = self.run_reconcile(starting, now=1000.0)
+        self.assertIn(
+            ("bootstrap_retry", starting["agent_id"], ""),
+            events,
+        )
+        self.assertEqual(retried["recovery_attempts"], 3)
+
+        exhausted = {
+            **starting,
+            "recovery_attempts": 3,
+        }
+        blocked, events = self.run_reconcile(exhausted, now=1000.0)
+        self.assertNotIn("bootstrap_retry", [event[0] for event in events])
+        self.assertEqual(blocked["recovery_state"], "blocked")
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(
