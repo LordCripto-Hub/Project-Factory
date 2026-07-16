@@ -18,6 +18,9 @@ contract = json.loads(
     (ROOT / "docker" / "state-volumes.json").read_text(encoding="utf-8")
 )
 compose = (ROOT / "docker" / "compose.volume-backed.yml").read_text(encoding="utf-8")
+migration = (ROOT / "windows" / "Migrate-MyPeopleDockerState.ps1").read_text(
+    encoding="utf-8"
+)
 
 assert contract == EXPECTED
 assert "container_name: mypeople" in compose
@@ -29,6 +32,13 @@ assert "down -v" not in compose
 assert "type: bind" in compose
 assert "target: /home/mp/mypeople.seed.md" in compose
 assert "read_only: true" in compose
+assert "tmpfs:" in compose
+assert "/run/mypeople-secrets" in compose
+assert "uid=1000" in compose
+assert "gid=1000" in compose
+assert "mode=0700" in compose
+assert "MYPEOPLE_MEMORY_TOKEN" not in compose
+assert "'bin', 'verify', 'memory-gateway', 'plugins', 'docs', 'docker', 'windows'" in migration
 for volume, target in EXPECTED.items():
     assert f"{volume}:{target}" in compose
     assert f"name: {volume}" in compose

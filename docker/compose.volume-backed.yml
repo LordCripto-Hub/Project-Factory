@@ -7,6 +7,8 @@ services:
     init: true
     restart: unless-stopped
     command: ["/home/mp/mypeople/bin/runtime-supervisor.sh"]
+    tmpfs:
+      - /run/mypeople-secrets:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_add:

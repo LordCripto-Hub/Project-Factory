@@ -268,7 +268,7 @@ try {
     Docker create --name $candidateContainer --user root $snapshotImage sleep infinity
     try {
         Docker start $candidateContainer
-        foreach ($path in @('bin', 'verify', 'memory-gateway', 'plugins', 'docs', 'docker')) {
+        foreach ($path in @('bin', 'verify', 'memory-gateway', 'plugins', 'docs', 'docker', 'windows')) {
             $source = Join-Path $root $path
             if (-not (Test-Path -LiteralPath $source)) { throw "Candidate source path missing: $source" }
             Docker cp $source ('{0}:/home/mp/mypeople/' -f $candidateContainer)

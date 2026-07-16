@@ -336,6 +336,43 @@ mp complete "Fixed the terminal popup" --proof "python verify/test_priorities_te
 
 MyPeople is the execution plane, not another memory system. Each task receives one compiled `TaskSpec`. External durable knowledge and targeted recall may contribute to that packet, but they are not queried automatically alongside complete Codex history. See [Minimal Architecture](MINIMAL-ARCHITECTURE.md).
 
+## Synthetic memory activation and security boundary
+
+The Cloudflare MCP pilot is available only as a one-shot synthetic E2E. It
+uses the fixed endpoint
+`https://mypeople-memory-sandbox.labmkt.workers.dev/mcp`, exposes only
+`recall`, returns at most three provenance-complete claims, fixes graph hops
+at zero, and never writes project memory.
+
+Persistent memory activation is blocked. Boss, engineers, and services
+currently share the same Linux user inside the main container, so a token
+placed there would not be isolated from workers. The permanent design requires
+a separate credential broker identity before real project data or a live
+ProjectProfile can be enabled.
+
+The safe pilot procedure is:
+
+1. Rotate the synthetic Worker bearer and store it under the current Windows
+   account with DPAPI by running `Set-MyPeopleMemoryCredential.ps1`.
+2. Start a disposable agent-free container from the reviewed candidate image
+   with a `tmpfs` mounted at `/run/mypeople-secrets`.
+3. Run `Test-MyPeopleMemoryPilot.ps1 -Container <pilot-container>`.
+4. The runner injects the credential over stdin, compiles positive and
+   cross-project-negative TaskSpecs through the real gateway, and clears the
+   tmpfs credential in `finally`.
+5. Remove the disposable container after the postcondition confirms that the
+   credential file is absent.
+
+Do not target the live `mypeople` container while agents are running. The
+pilot credential is pinned to the exact synthetic MCP URL, the gateway path
+cannot be replaced by runtime configuration, and symlinked credential files
+fail closed.
+
+Keyword recall in this pilot does not intentionally invoke a GPT, Codex,
+OpenAI API, or Workers AI model. Usage is still reported as `not_measured`
+unless provider telemetry proves otherwise. The model-token impact comes only
+from claims embedded in a worker prompt and is bounded to three short claims.
+
 ## Voice dictation
 
 MyPeople exposes a compact microphone on operational surfaces without requiring an API key or paid transcription model.

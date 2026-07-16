@@ -2,7 +2,14 @@ $ErrorActionPreference = 'Stop'
 $installDirectory = Join-Path $env:LOCALAPPDATA 'MyPeople\launcher'
 New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
 
-foreach ($name in @('Start-MyPeople.ps1', 'MyPeople.ProviderProfiles.psm1')) {
+foreach ($name in @(
+    'Start-MyPeople.ps1',
+    'MyPeople.ProviderProfiles.psm1',
+    'MyPeople.Memory.psm1',
+    'Set-MyPeopleMemoryCredential.ps1',
+    'Set-MyPeopleMemoryActivation.ps1',
+    'Test-MyPeopleMemoryPilot.ps1'
+)) {
     $source = Join-Path $PSScriptRoot $name
     if (-not (Test-Path -LiteralPath $source)) { throw "Launcher file missing: $source" }
     $destination = Join-Path $installDirectory $name

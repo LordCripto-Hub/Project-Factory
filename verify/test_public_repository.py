@@ -54,6 +54,15 @@ class PublicRepositoryContract(unittest.TestCase):
             self.assertIn("Never run `docker compose down -v`", text)
             self.assertIn("Cloudflare memory remains disabled", text)
 
+    def test_memory_pilot_documents_the_real_security_boundary(self):
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Test-MyPeopleMemoryPilot.ps1", manual)
+        self.assertIn("disposable agent-free container", manual)
+        self.assertIn("Persistent memory activation is blocked", manual)
+        self.assertIn("same Linux user", manual)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
