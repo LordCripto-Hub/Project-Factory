@@ -59,6 +59,31 @@ class TaskEvidenceContract(unittest.TestCase):
         )
         self.assertEqual(kind, "file")
 
+    def test_only_explicit_http_urls_are_link_evidence(self):
+        self.assertTrue(self.server.is_explicit_http_url("https://example.test/a"))
+        self.assertTrue(self.server.is_explicit_http_url("HTTP://example.test/a"))
+        self.assertFalse(self.server.is_explicit_http_url("bien como van los fix"))
+        self.assertEqual(self.server.classify_media("link", "bien como van los fix"), "text")
+        self.assertEqual(self.server.classify_media("link", "https://example.test/a"), "link")
+
+    def test_legacy_relative_link_proof_migrates_to_comment(self):
+        board = {"version": 2, "order": ["task-1"], "tasks": {"task-1": {
+            "id": "task-1", "comments": [], "proofs": [{"id": "old", "kind": "link",
+            "url": "como van los fix", "body": "", "by": "CEO", "ts": 1}]
+        }}}
+        self.assertTrue(self.server.migrate(board))
+        task = board["tasks"]["task-1"]
+        self.assertEqual(task["proofs"], [])
+        self.assertEqual(task["comments"][0]["body"], "como van los fix")
+
+    def test_ui_composer_routes_text_and_urls_separately(self):
+        source = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
+        self.assertIn("function isDirectUrl", source)
+        self.assertIn("/^https?:\\/\\/[^\\s]+$/i.test(text)", source)
+        self.assertIn("if(url)await api('/todo/proof'", source)
+        self.assertIn("else await api('/todo/comment'", source)
+        self.assertIn("e.key==='Enter'&&!e.shiftKey", source)
+
     def test_proof_metadata_is_auditable(self):
         content = b"visual evidence"
         proof = self.server.proof_metadata(

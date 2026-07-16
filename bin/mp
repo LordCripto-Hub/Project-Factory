@@ -482,7 +482,9 @@ def revive(ns):
             raise SystemExit("owner_task_closed: refusing revive")
         if task.get("state") in ("done","cancelled") or task.get("ownerNeedsReplacement"):
             raise SystemExit("owner_task_closed: refusing revive")
-        if task.get("assignee") and task.get("assignee")!=aid:
+        if not task.get("assignee"):
+            raise SystemExit("owner_task_unassigned: refusing revive")
+        if task.get("assignee")!=aid:
             raise SystemExit("owner_task_reassigned: refusing revive")
     argv=["spawn",aid,"--backend",rec.get("backend","claude"),"--cwd",rec.get("cwd",ROOT)]
     if rec.get("boss_id"):argv += ["--boss",rec["boss_id"]]

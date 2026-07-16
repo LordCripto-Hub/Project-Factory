@@ -7,6 +7,7 @@ from mpcommon import *
 HOST=ENV.get("BIND_ADDR","0.0.0.0"); PORT=int(ENV.get("HUD_PORT","9900")); TODO_PORT=int(ENV.get("TODO_PORT","9933"))
 SECRET=ENV["QUEUE_SECRET"]; DEAD=float(ENV.get("QUEUE_DEAD_AFTER","20")); START=time.time()
 CLIENTS={}; AGENTS={}; TASKS={}; BROWSER=set(); LOCK=threading.RLock()
+REVIVE_LOCKS={}
 
 def now():return time.time()
 def clean():
@@ -58,10 +59,17 @@ def joined_agents():
 
 def revive_agent(agent_id):
     """Run the narrow HUD revival action and preserve a safe failure reason."""
+    aid=str(agent_id or "")
+    with LOCK:
+        lock=REVIVE_LOCKS.setdefault(aid,threading.Lock())
+    if not lock.acquire(blocking=False):
+        return 409,{"ok":False,"error":"revive_in_progress","result":"agent_revive_in_progress: refusing duplicate revive"}
     try:
-        process=subprocess.run([os.path.join(ROOT,"bin","mp"),"revive",agent_id],capture_output=True,text=True,timeout=30)
+        process=subprocess.run([os.path.join(ROOT,"bin","mp"),"revive",aid],capture_output=True,text=True,timeout=30)
     except Exception as error:
         return 500,{"ok":False,"error":"revive_unavailable","result":str(error)}
+    finally:
+        lock.release()
     result=(process.stdout or process.stderr).strip()
     if process.returncode:
         return 400,{"ok":False,"error":"revive_rejected","result":result or "revive rejected"}

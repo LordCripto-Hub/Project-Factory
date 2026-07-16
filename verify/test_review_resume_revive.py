@@ -87,6 +87,18 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "owner_task_closed"):
             mp.revive(type("Args", (), {"agent_id": aid})())
 
+        unassigned = {**closed, "state": "working"}
+        mp.load_roster = lambda: [unassigned]
+        mp.http_json = lambda *_args, **_kwargs: {"tasks": {"task-1": {"state": "working", "assignee": ""}}, "deletedTasks": {}}
+        with self.assertRaisesRegex(SystemExit, "owner_task_unassigned"):
+            mp.revive(type("Args", (), {"agent_id": aid})())
+
+        reassigned = {**closed, "state": "working"}
+        mp.load_roster = lambda: [reassigned]
+        mp.http_json = lambda *_args, **_kwargs: {"tasks": {"task-1": {"state": "working", "assignee": "node-1/main:other"}}, "deletedTasks": {}}
+        with self.assertRaisesRegex(SystemExit, "owner_task_reassigned"):
+            mp.revive(type("Args", (), {"agent_id": aid})())
+
     def test_revive_rehydrates_stale_alive_record_without_tmux_window(self):
         mp = load("revive_mp_stale_alive", "mp")
         aid = "node-1/main:Boss"

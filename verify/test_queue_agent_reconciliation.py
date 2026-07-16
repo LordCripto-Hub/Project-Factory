@@ -7,6 +7,7 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -68,6 +69,19 @@ class QueueAgentReconciliationTests(unittest.TestCase):
             status, body = self.queue.revive_agent("node-1/main:eng-2")
         self.assertEqual(status, 200)
         self.assertEqual(body, {"ok": True, "result": "node-1/main:eng-2"})
+
+    def test_concurrent_revive_is_serialized_per_agent(self):
+        started=threading.Event(); release=threading.Event()
+        def run(*_args, **_kwargs):
+            started.set(); release.wait(2)
+            return type("Completed", (), {"returncode": 0, "stdout": "agent\n", "stderr": ""})()
+        with patch.object(self.queue.subprocess, "run", side_effect=run):
+            first=threading.Thread(target=lambda: self.queue.revive_agent("agent"))
+            first.start(); self.assertTrue(started.wait(1))
+            status, body=self.queue.revive_agent("agent")
+            release.set(); first.join(2)
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "revive_in_progress")
 
 
 if __name__ == "__main__":

@@ -59,7 +59,21 @@ def migrate(board):
             if t.get("assignee") and not any(x.get("kind")=="migrated_existing_owner" for x in t["ownerHistory"]):
                 t["ownerHistory"].append(owner_event("migrated_existing_owner",t["assignee"],"","system"))
         if t.get("ownerNeedsReplacement") is None:t["ownerNeedsReplacement"]=False;changed=True
-        before=json.dumps(t,sort_keys=True);normalize_task(t);changed |= before != json.dumps(t,sort_keys=True)
+        before=json.dumps(t,sort_keys=True);normalize_task(t)
+        # Older composer builds submitted every non-empty string as a link proof.
+        # Keep real URLs as evidence, but restore malformed relative entries to the
+        # comment stream so they remain readable and do not look like evidence.
+        comments=t.setdefault("comments",[]);proofs=[]
+        for proof in t.get("proofs",[]):
+            url=str(proof.get("url","") or "").strip()
+            if proof.get("kind")=="link" and not is_explicit_http_url(url):
+                body=str(proof.get("body","") or url).strip()
+                if body:
+                    comments.append({"id":proof.get("id",secrets.token_hex(8)),"by":proof.get("by",""),"kind":"comment","body":body,"ts":proof.get("ts",time.time())})
+                changed=True
+            else:proofs.append(proof)
+        t["proofs"]=proofs
+        changed |= before != json.dumps(t,sort_keys=True)
     board["order"]=[x for x in board["order"] if x in board["tasks"]]
     for x in board["tasks"]:
         if x not in board["order"]:board["order"].append(x);changed=True
@@ -121,9 +135,12 @@ def classify_media(kind,url,filename="",ctype=""):
     probe=(filename or urllib.parse.urlparse(url or "").path).lower();ct=(ctype or "").lower()
     if ct.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp|svg)$",probe):return "image"
     if ct.startswith("video/") or re.search(r"\.(mp4|webm|mov|m4v)$",probe):return "video"
-    if url and (url.startswith("http://") or url.startswith("https://")) and not filename:return "link" if kind in ("","text",None) else kind
+    if url and is_explicit_http_url(url) and not filename:return "link" if kind in ("","text",None) else kind
     if filename or (url and url.startswith("/todo/proof")):return kind if kind in ("image","video") else "file"
-    return kind if kind in ("image","video","link","file") else "text"
+    return kind if kind in ("image","video","file") else "text"
+
+def is_explicit_http_url(value):
+    return bool(re.match(r"^https?://[^\s]+$",str(value or ""),re.IGNORECASE))
 
 def proof_metadata(content,filename,ctype,by=""):
     content=content or b""
@@ -402,6 +419,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 ext=os.path.splitext(filename)[1].lower() or mimetypes.guess_extension(ctype) or ".bin";name=secrets.token_hex(10)+ext;directory=os.path.join(PROOFS_DIR,tid);os.makedirs(directory,exist_ok=True)
                 with open(os.path.join(directory,name),"wb") as handle:handle.write(content)
                 url=f"/todo/proof/{urllib.parse.quote(tid)}/{urllib.parse.quote(name)}"
+            if not content and not body and url and not is_explicit_http_url(url):body=url;url=""
             k=classify_media(d.get("kind"),url,filename,ctype);audit=content if content is not None else (body or url).encode()
             label=filename or (os.path.basename(urllib.parse.urlparse(url).path) if url else ("evidence.txt" if k=="text" else "reference.url"))
             meta=proof_metadata(audit,label,ctype or ("text/plain" if k=="text" else "text/uri-list" if k=="link" else "application/octet-stream"),by)
