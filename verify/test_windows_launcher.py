@@ -42,6 +42,27 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertIn("& $adapter.ValidateRuntime", text)
         self.assertIn("No provider binding configured", text)
 
+    def test_provider_failure_opens_control_plane_in_degraded_mode(self):
+        text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
+        required = [
+            "$providerReady = $false",
+            "$providerWarning",
+            "providers-pause",
+            "providers-resume",
+            "READY DEGRADED",
+            "if ($providerReady)",
+            "Show-LauncherWarning",
+        ]
+        for value in required:
+            self.assertIn(value, text)
+        self.assertNotIn("Save-MyPeopleProviderProfile.ps1", text)
+        self.assertNotIn("Save-MyPeopleCodexCredential", text)
+        provider_gate = text.index("if ($providerReady)")
+        agent_wait = text.index("'Boss and Nightwatch'")
+        browser_open = text.index("Start-Process 'http://localhost:9933/'")
+        self.assertLess(provider_gate, agent_wait)
+        self.assertLess(agent_wait, browser_open)
+
     def test_launcher_uses_dpapi_to_tmpfs_memory_rehydration(self):
         text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
         self.assertIn("MyPeople.Memory.psm1", text)
