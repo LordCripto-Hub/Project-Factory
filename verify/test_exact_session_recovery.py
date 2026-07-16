@@ -135,9 +135,20 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.exported.update(values)
         return "true"
 
-    def run_spawn(self, discover):
+    def run_spawn(self, discover, namespace=None, composer=True):
         discovery_error = discover if isinstance(discover, BaseException) else None
         discovery_value = discover if isinstance(discover, dict) else None
+
+        def send_message(target, message):
+            self.events.append(('send', target, message))
+            return True
+
+        def discover_session(*_args, **_kwargs):
+            self.events.append(('discover',))
+            if discovery_error:
+                raise discovery_error
+            return discovery_value
+
         environment = {
             "PROVIDER_BINDINGS_PATH": str(self.bindings),
             "PROVIDER_PROFILES_PATH": str(self.profiles),
@@ -152,8 +163,8 @@ class ExactSessionSpawnContract(unittest.TestCase):
              mock.patch.object(self.mp, "write_status", side_effect=lambda *args, **kwargs: self.statuses.append((args, kwargs))), \
              mock.patch.object(self.mp, "queue_register"), \
              mock.patch.object(self.mp, "recorder"), \
-             mock.patch.object(self.mp, "wait_for_composer", return_value=True), \
-             mock.patch.object(self.mp, "tmux_send_message"), \
+             mock.patch.object(self.mp, "wait_for_composer", return_value=composer), \
+             mock.patch.object(self.mp, "tmux_send_message", side_effect=send_message), \
              mock.patch.object(self.mp, "ensure_codex_doctrine"), \
              mock.patch.object(self.mp, "shell_export", side_effect=self.capture_environment), \
              mock.patch.object(self.mp, "capture_lock", side_effect=self.fake_lock, create=True), \
@@ -161,11 +172,65 @@ class ExactSessionSpawnContract(unittest.TestCase):
              mock.patch.object(
                  self.mp,
                  "discover_codex_session",
-                 side_effect=discovery_error,
-                 return_value=discovery_value,
+                 side_effect=discover_session,
                  create=True,
              ):
-            self.mp.spawn(self.namespace())
+            self.mp.spawn(namespace or self.namespace())
+
+    def test_fresh_codex_submits_bootstrap_once_before_discovery(self):
+        self.run_spawn(
+            {
+                "session_id": "019f0000-0000-7000-8000-000000000333",
+                "cwd": os.path.realpath(self.cwd),
+                "path": str(self.root / "rollout.jsonl"),
+            }
+        )
+        sends = [event for event in self.events if event[0] == "send"]
+        self.assertEqual(len(sends), 1)
+        self.assertIn("Read your Boss doctrine", sends[0][2])
+        self.assertLess(
+            self.events.index(sends[0]),
+            self.events.index(("discover",)),
+        )
+
+    def test_temporary_codex_worker_gets_one_bounded_readiness_prompt(self):
+        namespace = self.namespace()
+        namespace.agent_id = "node-1/canary:exact-canary"
+        namespace.boss = "node-1/main:Boss"
+        namespace.master = False
+        namespace.temporary = True
+        self.run_spawn(
+            {
+                "session_id": "019f0000-0000-7000-8000-000000000334",
+                "cwd": os.path.realpath(self.cwd),
+                "path": str(self.root / "rollout.jsonl"),
+            },
+            namespace=namespace,
+        )
+        sends = [event for event in self.events if event[0] == "send"]
+        self.assertEqual(len(sends), 1)
+        self.assertIn("temporary MyPeople worker", sends[0][2])
+        self.assertLess(
+            self.events.index(sends[0]),
+            self.events.index(("discover",)),
+        )
+
+    def test_codex_composer_failure_blocks_discovery_with_typed_state(self):
+        self.run_spawn(
+            {
+                "session_id": "019f0000-0000-7000-8000-000000000335",
+                "cwd": os.path.realpath(self.cwd),
+                "path": str(self.root / "rollout.jsonl"),
+            },
+            composer=False,
+        )
+        self.assertNotIn(("discover",), self.events)
+        self.assertFalse(any(event[0] == "send" for event in self.events))
+        self.assertEqual(self.records[-1]["resume_state"], "unavailable")
+        self.assertEqual(
+            self.records[-1]["last_recovery_error"],
+            "session_process_not_ready",
+        )
 
     def test_fresh_codex_spawn_locks_before_tmux_and_persists_session(self):
         session_id = "019f0000-0000-7000-8000-000000000111"
