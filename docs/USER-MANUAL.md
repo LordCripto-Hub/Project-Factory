@@ -242,6 +242,12 @@ identity. Publication is serialized by a file lock and never uses force push or
 tags. A failed or consumed approval cannot be reused; Boss must review and issue
 a new one.
 
+Creating a valid Boss publication approval is also the review-resume boundary:
+the approved priority is transitioned from `review` to `working` before the
+approval is returned. If that transition cannot be persisted, the pending
+approval is removed and the command fails, so a card cannot silently remain in
+review while publication work resumes.
+
 Git credentials are deliberately not installed by MyPeople. Configure a local
 external credential helper or future secret reference before a real
 publication. Never place a token in `origin`, `.git/config`, the approval
@@ -264,6 +270,20 @@ The bridge never writes or prints the credential. The transient secret exists
 only in the host process, stdin payload, publisher process, and Git askpass
 environment for the duration of that one publication. This is a governance
 boundary, not isolation from a malicious same-user process inside the container.
+
+### Revive semantics
+
+The HUD Revive action calls the queue server, which invokes `mp revive` using
+the persisted roster configuration. Revive is eligible only for a dead or
+retired roster entry. It refuses an already-alive agent or an existing live
+window, and it refuses an owner whose task is done, cancelled, deleted, has a
+fresh-owner replacement pending, or has been reassigned. A valid owner revive
+reuses the saved backend, model, Boss, working directory, and owner-task
+TaskSpec; it does not create a second active owner.
+
+The publisher records a short sanitized Git failure detail in the approval
+ledger. URLs and secret-shaped values are redacted; credential contents are
+never recorded.
 
 ## Known limitations
 

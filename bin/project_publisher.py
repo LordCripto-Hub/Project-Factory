@@ -31,6 +31,13 @@ class PublisherError(RuntimeError):
     pass
 
 
+def safe_failure_detail(value: str) -> str:
+    """Keep useful Git diagnostics while excluding URLs and secret-shaped data."""
+    detail = re.sub(r"https?://[^\s'\"]+", "<remote>", str(value or ""))
+    detail = re.sub(r"(?i)(password|token|secret|credential)[=:][^\s]+", r"\1=<redacted>", detail)
+    return re.sub(r"\s+", " ", detail).strip()[:500]
+
+
 def _run(args, **kwargs):
     return subprocess.run(
         args,
@@ -239,6 +246,7 @@ def publish(
             record["status"] = "failed"
             record["failedAt"] = time.time()
             record["failure"] = "git_push_failed"
+            record["failureDetail"] = safe_failure_detail(getattr(result, "stderr", ""))
             atomic_json(path, record, mode=0o600)
             _append_receipt(root, {
                 "approvalId": approval_id,
@@ -289,7 +297,7 @@ def approve_runtime(
     board = http_json("/todo/board", base=todo_base, token=ENV.get("QUEUE_SECRET", ""))
     task = (board.get("tasks") or {}).get(task_id)
     profile = load_profile(project_slug, profiles_root())
-    return create_approval(
+    record=create_approval(
         task_id=task_id,
         project_slug=project_slug,
         commit=commit,
@@ -301,4 +309,19 @@ def approve_runtime(
         approvals_dir=approvals_root(),
         ttl_seconds=ttl_seconds,
     )
-
+    try:
+        result=http_json("/todo/status", "POST", {
+            "task_id": task_id,
+            "state": "working",
+            "verified": False,
+            "by": actor,
+        }, base=todo_base, token=ENV.get("QUEUE_SECRET", ""))
+        if isinstance(result, dict) and result.get("ok") is False:
+            raise RuntimeError("todo status update was rejected")
+    except Exception as error:
+        try:
+            os.unlink(approval_path(record["approvalId"], approvals_root()))
+        except OSError:
+            pass
+        raise PublisherError(f"approval_resume_failed: {error}") from error
+    return record

@@ -466,6 +466,22 @@ def kill(ns):
 def revive(ns):
     aid=full_agent_id(ns.agent_id); rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
     if not rec:raise SystemExit("unknown agent")
+    if rec.get("state")=="alive" or rec.get("retired") is False and window_exists(tmux_target(aid)):
+        raise SystemExit("agent_already_alive: refusing duplicate revive")
+    task_id=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else ""
+    if task_id:
+        try:
+            board=http_json("/todo/board",token=ENV.get("QUEUE_SECRET",""))
+        except Exception as error:
+            raise SystemExit(f"owner_task_verification_failed: {error}") from error
+        task=(board.get("tasks") or {}).get(task_id)
+        deleted=(board.get("deletedTasks") or {}).get(task_id)
+        if deleted or not task:
+            raise SystemExit("owner_task_closed: refusing revive")
+        if task.get("state") in ("done","cancelled") or task.get("ownerNeedsReplacement"):
+            raise SystemExit("owner_task_closed: refusing revive")
+        if task.get("assignee") and task.get("assignee")!=aid:
+            raise SystemExit("owner_task_reassigned: refusing revive")
     argv=["spawn",aid,"--backend",rec.get("backend","claude"),"--cwd",rec.get("cwd",ROOT)]
     if rec.get("boss_id"):argv += ["--boss",rec["boss_id"]]
     if rec.get("is_master"):argv += ["--master"]
