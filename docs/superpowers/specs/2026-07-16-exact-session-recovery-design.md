@@ -124,10 +124,25 @@ Before creating a Codex tmux window, `mp spawn`:
 2. acquires a private startup lock scoped to that Codex profile;
 3. records the existing session files and launch timestamp;
 4. starts the tmux window;
-5. polls for a new `session_meta` record created after the snapshot;
-6. requires its real `cwd` to equal the agent's resolved cwd;
-7. persists the UUID in status and roster;
-8. releases the lock.
+5. waits for the composer and sends the role's bootstrap message exactly once;
+6. polls for a new `session_meta` record created after the snapshot;
+7. requires its real `cwd` to equal the agent's resolved cwd;
+8. persists the UUID in status and roster;
+9. releases the lock.
+
+Codex 0.144.3 may defer creating the transcript until it receives the first
+user prompt. The bootstrap message is therefore computed before launch and sent
+while startup discovery still owns the profile capture lock. Boss, Nightwatch,
+owner workers, and fresh provider handoffs use their existing doctrine,
+TaskSpec, or sanitized handoff prompt. Temporary or otherwise unclassified
+workers receive one bounded generic readiness prompt so they also establish a
+recoverable session. The message must not be sent a second time after roster
+persistence.
+
+If the composer never becomes ready or the bootstrap message cannot be
+submitted, startup records a typed unavailable state and does not claim exact
+recovery readiness. This ordering changes no Claude hook behavior and adds no
+probe message when a real role prompt already exists.
 
 The lock is held only during provider startup and session identification. It
 does not serialize prompts, tools, or subsequent work. The default discovery
@@ -314,6 +329,10 @@ state.
 ### Unit and contract tests
 
 - Codex snapshot discovery accepts exactly one new matching `session_meta`.
+- Fresh Codex startup submits one role bootstrap prompt before discovery and
+  never duplicates it after roster persistence.
+- Temporary Codex workers establish a transcript with one bounded readiness
+  prompt before their session identity is captured.
 - Codex discovery rejects stale, malformed, ambiguous, and wrong-cwd records.
 - Profile-scoped startup locking prevents double claims.
 - Claude hook copies session ID into status and roster.
