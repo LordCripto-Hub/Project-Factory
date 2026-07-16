@@ -168,6 +168,7 @@ contract.
 
 - [User manual](docs/USER-MANUAL.md)
 - [Minimal architecture](docs/MINIMAL-ARCHITECTURE.md)
+- [Upstream MyPeople implementation review](docs/UPSTREAM-MYPEOPLE-REVIEW.md)
 
 ## Safe full verification
 
