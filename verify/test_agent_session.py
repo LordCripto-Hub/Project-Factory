@@ -191,6 +191,25 @@ class AgentSessionContract(unittest.TestCase):
             ):
                 self.fail("capture lock followed a symlinked directory")
 
+    def test_profile_capture_lock_does_not_mutate_symlink_target(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        linked = self.root / "linked"
+        linked.symlink_to(outside, target_is_directory=True)
+        escaped = outside / "capture"
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "session_capture_path_invalid",
+        ):
+            with runtime.capture_lock(
+                str(linked / "capture"),
+                "codex",
+                "codex-primary",
+                timeout=0,
+            ):
+                self.fail("capture lock crossed an intermediate symlink")
+        self.assertFalse(escaped.exists())
+
     def test_resume_arguments_preserve_options_and_session_position(self):
         self.assertEqual(
             runtime.apply_resume_args(
@@ -320,6 +339,21 @@ class AgentSessionContract(unittest.TestCase):
                 codex_home=str(self.codex_home),
                 expected_cwd=str(self.cwd),
             )
+
+    def test_resume_evidence_privately_normalizes_owned_regular_transcript(self):
+        session_id = "019f0000-0000-7000-8000-000000000011"
+        path = self.write_codex_meta(session_id)
+        os.chmod(path, 0o644)
+        self.assertEqual(
+            runtime.validate_resume_evidence(
+                "codex",
+                session_id,
+                codex_home=str(self.codex_home),
+                expected_cwd=str(self.cwd),
+            ),
+            str(path),
+        )
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def fresh_handoff_fixture(self):
         transaction_id = "tx-one"

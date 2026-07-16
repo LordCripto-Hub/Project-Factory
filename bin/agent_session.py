@@ -117,20 +117,42 @@ def discover_codex_session(
 
 
 def _prepare_private_directory(path: Path) -> Path:
-    candidate = os.path.abspath(path)
+    candidate = Path(os.path.abspath(path))
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = None
     try:
-        os.makedirs(candidate, mode=0o700, exist_ok=True)
-        if candidate != os.path.realpath(candidate):
-            raise SessionError("session_capture_path_invalid")
-        metadata = os.lstat(candidate)
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise SessionError("session_capture_path_invalid")
-        os.chmod(candidate, 0o700)
-        return Path(candidate)
+        descriptor = os.open(candidate.anchor, flags)
+        components = candidate.parts[1:]
+        for index, component in enumerate(components):
+            created = False
+            try:
+                os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                created = True
+            except FileExistsError:
+                pass
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise SessionError("session_capture_path_invalid")
+            if created or index == len(components) - 1:
+                if metadata.st_uid != os.geteuid():
+                    raise SessionError("session_capture_path_invalid")
+                os.fchmod(descriptor, 0o700)
+        return candidate
     except SessionError:
         raise
     except OSError as error:
         raise SessionError("session_capture_path_invalid") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 @contextlib.contextmanager
@@ -236,16 +258,31 @@ def _strict_session_file(path: str, root: Path) -> Path:
         or os.path.commonpath((root_path, resolved)) != root_path
     ):
         raise SessionError("session_identity_mismatch")
+    descriptor = None
     try:
-        metadata = os.lstat(candidate)
-    except OSError as error:
+        descriptor = os.open(
+            candidate,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise SessionError("session_identity_mismatch")
+        if metadata.st_mode & 0o077:
+            os.fchmod(descriptor, 0o600)
+            metadata = os.fstat(descriptor)
+        if metadata.st_mode & 0o077:
+            raise SessionError("session_identity_mismatch")
+    except FileNotFoundError as error:
         raise SessionError("session_missing") from error
-    if (
-        stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_mode & 0o077
-    ):
-        raise SessionError("session_identity_mismatch")
+    except SessionError:
+        raise
+    except OSError as error:
+        raise SessionError("session_identity_mismatch") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     return Path(candidate)
 
 

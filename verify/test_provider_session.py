@@ -69,6 +69,8 @@ class ProviderSessionContract(unittest.TestCase):
                 "private-key-material",
                 "-----END PRIVATE KEY-----",
                 "/home/mp/.codex/auth.json",
+                "MYPEOPLE_MEMORY_TOKEN=memory-example-value",
+                "/home/mp/mypeople/run/provider-homes/codex/profile/auth.json",
             )
         )
         rendered = json.dumps(module.build_handoff({}, tail))
@@ -80,6 +82,8 @@ class ProviderSessionContract(unittest.TestCase):
             "eyJhbGciOiJIUzI1NiJ9",
             "private-key-material",
             "/home/mp/.codex/auth.json",
+            "memory-example-value",
+            "/home/mp/mypeople/run/provider-homes/codex/profile/auth.json",
         ):
             self.assertNotIn(secret, rendered)
 

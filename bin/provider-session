@@ -146,15 +146,16 @@ def redact(text: str) -> str:
 
 def sanitize_terminal_tail(text: str) -> str:
     sensitive_assignment = re.compile(
-        r"(?i)\b(?:queue_secret|secret|password|passwd|access_token|"
-        r"refresh_token|api_key|cookie|set-cookie|session)\b\s*[:=]"
+        r"(?i)(?:\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|"
+        r"PRIVATE_KEY|COOKIE|SESSION)[A-Z0-9_]*\b|\bset-cookie\b)\s*[:=]"
     )
     jwt = re.compile(
         r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
         r"(?:\.[A-Za-z0-9_-]+)?\b"
     )
     credential_path = re.compile(
-        r"/home/[^/\s]+/(?:\.codex|\.claude|\.config)/[^\s]+"
+        r"/home/[^/\s]+/(?:(?:\.codex|\.claude|\.config)/|"
+        r"mypeople/run/provider-homes/)[^\s]+"
     )
     userinfo = re.compile(r"(?i)(https?://)[^/@\s]+@")
     output = []
