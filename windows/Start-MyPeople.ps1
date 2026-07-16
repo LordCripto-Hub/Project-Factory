@@ -33,6 +33,24 @@ function Show-LauncherError([string]$Message) {
     }
 }
 
+function Show-LauncherWarning([string]$Message) {
+    Write-LauncherLog "WARNING $Message"
+    if ($NonInteractive) {
+        Write-Output "WARNING $Message"
+        return
+    }
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        $Message,
+        'MyPeople started without agents',
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    ) | Out-Null
+}
+
+$providerReady = $false
+$providerWarning = ''
+
 function Test-DockerEngine {
     try {
         & docker info *> $null
@@ -97,17 +115,33 @@ try {
     $bindings = Get-MyPeopleProviderBindings
     $activeProfile = [string]$bindings.globalProfile
     if ($activeProfile) {
-        $profiles = Get-MyPeopleProviderProfiles
-        $profileProperty = $profiles.PSObject.Properties[$activeProfile]
-        if ($null -eq $profileProperty -or -not $profileProperty.Value.enabled) {
-            throw "Active provider profile is missing or disabled: $activeProfile"
+        try {
+            $profiles = Get-MyPeopleProviderProfiles
+            $profileProperty = $profiles.PSObject.Properties[$activeProfile]
+            if ($null -eq $profileProperty -or -not $profileProperty.Value.enabled) {
+                throw 'The configured provider profile is missing or disabled.'
+            }
+            $adapter = Get-MyPeopleProviderAdapter -Provider ([string]$profileProperty.Value.provider)
+            Write-LauncherLog "Rehydrate provider profile $activeProfile"
+            & $adapter.ActivateProfile $activeProfile 'mypeople' | Out-Null
+            & $adapter.ValidateRuntime $activeProfile 'mypeople' | Out-Null
+            $providerReady = $true
+        } catch {
+            $providerWarning = 'The provider could not be validated. MyPeople is available, but new agents remain paused. Refresh the saved provider profile and run the shortcut again.'
         }
-        $adapter = Get-MyPeopleProviderAdapter -Provider ([string]$profileProperty.Value.provider)
-        Write-LauncherLog "Rehydrate provider profile $activeProfile"
-        & $adapter.ActivateProfile $activeProfile 'mypeople' | Out-Null
-        & $adapter.ValidateRuntime $activeProfile 'mypeople' | Out-Null
     } else {
         Write-LauncherLog 'No provider binding configured'
+        $providerWarning = 'No global provider profile is configured. MyPeople is available, but new agents remain paused.'
+    }
+
+    if ($providerReady) {
+        Write-LauncherLog 'Resume provider launches'
+        & docker exec mypeople /home/mp/mypeople/bin/mp providers-resume | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to resume provider launches.' }
+    } else {
+        Write-LauncherLog 'Pause provider launches for degraded startup'
+        & docker exec mypeople /home/mp/mypeople/bin/mp providers-pause --reason launcher_provider_unavailable | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to pause provider launches safely.' }
     }
 
     Write-LauncherLog 'docker exec mypeople mypeople up --detach'
@@ -138,19 +172,24 @@ try {
         } catch { return $false }
     } 30 'terminal web'
 
-    Wait-Until {
-        try {
-            $statusOutput = @(& docker exec mypeople /home/mp/mypeople/bin/mp status 2>$null)
-            $statusExitCode = $LASTEXITCODE
-            $statusText = $statusOutput -join "`n"
-            return $statusExitCode -eq 0 `
-                -and $statusText -match 'main:Boss \[alive\]' `
-                -and $statusText -match 'nightwatch:Nightwatch \[alive\]'
-        } catch { return $false }
-    } $ServiceTimeoutSeconds 'Boss and Nightwatch'
+    if ($providerReady) {
+        Wait-Until {
+            try {
+                $statusOutput = @(& docker exec mypeople /home/mp/mypeople/bin/mp status 2>$null)
+                $statusExitCode = $LASTEXITCODE
+                $statusText = $statusOutput -join "`n"
+                return $statusExitCode -eq 0 `
+                    -and $statusText -match 'main:Boss \[alive\]' `
+                    -and $statusText -match 'nightwatch:Nightwatch \[alive\]'
+            } catch { return $false }
+        } $ServiceTimeoutSeconds 'Boss and Nightwatch'
+        Write-LauncherLog 'READY http://localhost:9933/'
+    } else {
+        Write-LauncherLog 'READY DEGRADED http://localhost:9933/'
+    }
 
-    Write-LauncherLog 'READY http://localhost:9933/'
     if (-not $NoBrowser) { Start-Process 'http://localhost:9933/' }
+    if ($providerWarning) { Show-LauncherWarning $providerWarning }
 } catch {
     Show-LauncherError $_.Exception.Message
     exit 1
