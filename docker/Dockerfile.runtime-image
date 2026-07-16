@@ -1,6 +1,12 @@
 ARG BASE_IMAGE=mypeople-node:integration-a54d9e3
 FROM ${BASE_IMAGE}
 
+USER root
+COPY --chown=mp:mp . /home/mp/mypeople
+RUN chmod +x /home/mp/mypeople/bin/* \
+    /home/mp/mypeople/install.sh \
+    /home/mp/mypeople/plugins/tmux-boss-hooks/scripts/emit-event
+
 USER mp
 WORKDIR /home/mp
 
