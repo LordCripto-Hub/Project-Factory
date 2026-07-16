@@ -14,6 +14,8 @@ import unittest
 import sys
 from unittest.mock import patch
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def load_runtime(path: str):
     module_dir = str(Path(path).resolve().parent)
@@ -30,7 +32,9 @@ def load_runtime(path: str):
 
 class WorkerHandoffContract(unittest.TestCase):
     def setUp(self):
-        self.mp = load_runtime(os.environ.get("MYPEOPLE_MP_BIN", "/home/mp/mypeople/bin/mp"))
+        self.mp = load_runtime(
+            os.environ.get("MYPEOPLE_MP_BIN", str(ROOT / "bin" / "mp"))
+        )
 
     def write_taskspec(self, directory):
         path = Path(directory) / "task.json"

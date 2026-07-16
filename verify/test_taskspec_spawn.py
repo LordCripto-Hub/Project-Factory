@@ -109,11 +109,17 @@ class TaskSpecSpawnContract(unittest.TestCase):
             taskspec = self.write_taskspec(temp, workspace)
             self.mp.compile_owner_task_spec = lambda _task_id: taskspec
             self.mp.window_exists = lambda _target: False
+            notices = []
+            self.mp.notify_agent = lambda target, message: notices.append(
+                (target, message)
+            )
             self.mp.run_tmux = lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError("tmux creation must not run")
             )
             with self.assertRaisesRegex(SystemExit, "working_directory_mismatch"):
                 self.mp.spawn(namespace(str(other)))
+            self.assertEqual(notices[0][0], "node-1/main:Boss")
+            self.assertIn("working_directory_mismatch", notices[0][1])
 
     def test_existing_owner_target_is_rejected_before_context_compilation(self):
         order = []
