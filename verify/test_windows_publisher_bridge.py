@@ -34,6 +34,9 @@ assert "--state all" in windows
 assert "--limit 1" in windows
 assert "$pullRequestCandidates" in windows
 assert "$parsedPullRequests" in windows
+assert "if (-not $pullRequestListText)" in windows
+assert "$pullRequestListText.StartsWith('[')" in windows
+assert "$pullRequestListText.EndsWith(']')" in windows
 assert "if ($null -ne $parsedPullRequests)" in windows
 assert "headRefName,baseRefName 2>$null | Out-String" not in windows
 assert "--draft" in windows
