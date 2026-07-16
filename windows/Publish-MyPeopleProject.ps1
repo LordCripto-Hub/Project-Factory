@@ -117,8 +117,25 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
 }
 
 $repositorySlug = $repositoryPath -replace '\.git$', ''
-$pullRequestText = (& gh pr view $result.headBranch --repo $repositorySlug --json number,url,state,isDraft,headRefName,baseRefName 2>$null | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or -not $pullRequestText) {
+$pullRequestListText = (& gh pr list --repo $repositorySlug --head $result.headBranch --state all --json number,url,state,isDraft,headRefName,baseRefName --limit 1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw 'GitHub pull request discovery failed; the approved branch remains pushed for an idempotent retry'
+}
+if (-not $pullRequestListText) {
+    throw 'GitHub pull request discovery returned no JSON; the approved branch remains pushed for an idempotent retry'
+}
+if (
+    -not $pullRequestListText.StartsWith('[') -or
+    -not $pullRequestListText.EndsWith(']')
+) {
+    throw 'GitHub pull request discovery returned an invalid JSON contract; the approved branch remains pushed for an idempotent retry'
+}
+$pullRequestCandidates = @()
+$parsedPullRequests = $pullRequestListText | ConvertFrom-Json
+if ($null -ne $parsedPullRequests) {
+    $pullRequestCandidates = @($parsedPullRequests)
+}
+if ($pullRequestCandidates.Count -eq 0) {
     & gh pr create --draft --repo $repositorySlug --base $result.baseBranch --head $result.headBranch --title $result.prTitle --body $result.prBody | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw 'GitHub draft PR creation failed; the approved branch remains pushed for an idempotent retry'
@@ -127,8 +144,10 @@ if ($LASTEXITCODE -ne 0 -or -not $pullRequestText) {
     if ($LASTEXITCODE -ne 0 -or -not $pullRequestText) {
         throw 'GitHub draft PR was created but could not be inspected; rerun to finalize it'
     }
+    $pullRequest = $pullRequestText | ConvertFrom-Json
+} else {
+    $pullRequest = $pullRequestCandidates[0]
 }
-$pullRequest = $pullRequestText | ConvertFrom-Json
 if (
     $pullRequest.state -ne 'OPEN' -or
     $pullRequest.isDraft -ne $true -or
