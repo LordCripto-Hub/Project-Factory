@@ -127,6 +127,22 @@ def update_roster(record: dict):
         rows = [x for x in load_roster() if x.get("agent_id") != record["agent_id"]]
         rows.append(record); save_roster(rows)
 
+def record_session_identity(agent_id: str, identity: dict) -> dict:
+    with json_lock(roster_path()):
+        rows = load_roster()
+        current = next(
+            (dict(row) for row in rows if row.get("agent_id") == agent_id),
+            None,
+        )
+        if current is None:
+            raise ValueError("unknown_agent")
+        current.update(identity)
+        save_roster([
+            current if row.get("agent_id") == agent_id else row
+            for row in rows
+        ])
+    return current
+
 def remove_roster(agent_id: str):
     with json_lock(roster_path()):
         save_roster([x for x in load_roster() if x.get("agent_id") != agent_id])

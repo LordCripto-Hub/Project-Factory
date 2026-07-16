@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, hashlib, json, mimetypes, os, pathlib, shlex, signal, stat, subprocess, sys, time, uuid, urllib.request
+import argparse, contextlib, hashlib, json, mimetypes, os, pathlib, shlex, signal, stat, subprocess, sys, time, uuid, urllib.request
+from agent_session import (
+    SessionError,
+    capture_lock,
+    discover_codex_session,
+    snapshot_codex_sessions,
+)
 from mpcommon import *
 from provider_profiles import (
     codex_home,
@@ -539,16 +545,96 @@ def spawn(ns):
     if os.environ.get("VERIFY_RESERVED_OWNER_ID"):
         launch_env["VERIFY_RESERVED_OWNER_ID"]=os.environ["VERIFY_RESERVED_OWNER_ID"]
     command=shell_export(launch_env)+"; exec "+shlex.join(args)
+    previous=next((x for x in load_roster() if x.get("agent_id")==aid),{})
+    if target_exists:
+        session_id = str(previous.get("session_id") or "")
+        resume_state = previous.get("resume_state") or (
+            "available" if session_id else "unavailable"
+        )
+    else:
+        session_id = ""
+        resume_state = "pending"
+    session_identity = {
+        "session_id": session_id,
+        "session_backend": previous.get("session_backend", ns.backend),
+        "session_profile": previous.get("session_profile", profile_id),
+        "session_cwd": previous.get("session_cwd", cwd),
+        "session_recorded_at": previous.get("session_recorded_at", 0),
+        "resume_state": resume_state,
+        "recovery_attempts": previous.get("recovery_attempts", 0),
+        "next_recovery_at": previous.get("next_recovery_at", 0),
+        "recovery_state": previous.get("recovery_state", "healthy"),
+        "last_recovery_error": previous.get("last_recovery_error", ""),
+    }
+    capture_enabled = ns.backend == "codex" and not target_exists
+    capture_home = (
+        provider_home
+        or os.environ.get("CODEX_HOME")
+        or os.path.expanduser("~/.codex")
+    )
+    capture_root = os.environ.get(
+        "MYPEOPLE_SESSION_CAPTURE_DIR",
+        os.path.join(ROOT, "run", "session-capture"),
+    )
+    capture_context = (
+        capture_lock(
+            capture_root,
+            "codex",
+            profile_id or "default",
+            timeout=float(
+                os.environ.get("MYPEOPLE_SESSION_CAPTURE_LOCK_SEC", "5")
+            ),
+        )
+        if capture_enabled
+        else contextlib.nullcontext()
+    )
     created=False
-    if not target_exists:
-        if run_tmux(["has-session","-t",f"mc-{session}"],check=False).returncode:
-            run_tmux(["new-session","-d","-s",f"mc-{session}","-n",tab,"-c",cwd,command])
-            run_tmux(["set-option","-t",f"mc-{session}","-g","automatic-rename","off"],check=False)
-        else:
-            run_tmux(["new-window","-d","-t",f"mc-{session}","-n",tab,"-c",cwd,command])
-        run_tmux(["set-option","-t",target,"-w","automatic-rename","off"])
-        run_tmux(["set-option","-t",target,"-w","allow-rename","off"])
-        run_tmux(["rename-window","-t",target,tab]); created=True
+    with capture_context:
+        capture_before = (
+            snapshot_codex_sessions(capture_home)
+            if capture_enabled
+            else set()
+        )
+        if not target_exists:
+            if run_tmux(["has-session","-t",f"mc-{session}"],check=False).returncode:
+                run_tmux(["new-session","-d","-s",f"mc-{session}","-n",tab,"-c",cwd,command])
+                run_tmux(["set-option","-t",f"mc-{session}","-g","automatic-rename","off"],check=False)
+            else:
+                run_tmux(["new-window","-d","-t",f"mc-{session}","-n",tab,"-c",cwd,command])
+            run_tmux(["set-option","-t",target,"-w","automatic-rename","off"])
+            run_tmux(["set-option","-t",target,"-w","allow-rename","off"])
+            run_tmux(["rename-window","-t",target,tab]); created=True
+        if created and capture_enabled:
+            try:
+                discovered = discover_codex_session(
+                    capture_home,
+                    cwd,
+                    capture_before,
+                    timeout=float(
+                        os.environ.get(
+                            "MYPEOPLE_SESSION_CAPTURE_TIMEOUT_SEC",
+                            "45",
+                        )
+                    ),
+                )
+                session_identity.update(
+                    session_id=discovered["session_id"],
+                    session_backend="codex",
+                    session_profile=profile_id,
+                    session_cwd=cwd,
+                    session_recorded_at=time.time(),
+                    resume_state="available",
+                    last_recovery_error="",
+                )
+            except SessionError as error:
+                session_identity.update(
+                    session_id="",
+                    session_backend="codex",
+                    session_profile=profile_id,
+                    session_cwd=cwd,
+                    resume_state="unavailable",
+                    last_recovery_error=error.code,
+                )
     lifecycle="owner" if ns.owner_task else "temporary" if ns.temporary else "unclassified"
     audit=["mp","spawn",aid,"--backend",ns.backend,"--cwd",cwd]
     if boss:audit += ["--boss",boss]
@@ -556,10 +642,10 @@ def spawn(ns):
     if model:audit += ["--model",model]
     if ns.owner_task:audit += ["--owner-task",ns.owner_task]
     if ns.temporary:audit += ["--temporary"]
-    previous=next((x for x in load_roster() if x.get("agent_id")==aid),{})
     rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"state":"alive",
          "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
-         "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time())}
+         "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time()),
+         **session_identity}
     if taskspec_path:
         rec["taskspec_path"] = taskspec_path
         rec["taskspec_sha256"] = taskspec_context["taskspec_sha256"]
