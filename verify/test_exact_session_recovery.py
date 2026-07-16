@@ -531,6 +531,71 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.assertNotIn("bootstrap_retry", [event[0] for event in events])
         self.assertEqual(blocked["recovery_state"], "blocked")
 
+    def test_fresh_handoff_requires_authorization_and_starts_without_resume(self):
+        self.assertTrue(
+            hasattr(self.mp, "fresh_handoff"),
+            "fresh_handoff is missing",
+        )
+        record = self.lifecycle_record(
+            retired=True,
+            stop_intent="deliberate",
+            state="dead",
+            lifecycle="owner",
+            owner_task_id="task-1234",
+        )
+        handoff = {
+            "agent": {
+                "agent_id": record["agent_id"],
+                "summary": "continue the same task",
+            },
+            "terminalTail": "verified progress",
+        }
+        spawned = []
+
+        def spawn(ns, resume_session="", initial_message=""):
+            spawned.append((ns, resume_session, initial_message))
+
+        namespace = argparse.Namespace(
+            agent_id=record["agent_id"],
+            transaction="tx-one",
+            handoff=str(self.root / "handoff.json"),
+        )
+        with mock.patch.object(
+            self.mp,
+            "validate_fresh_handoff",
+            return_value={
+                "record": record,
+                "handoff": handoff,
+                "state": {
+                    "targetBackend": "claude",
+                    "targetModel": "claude-test",
+                },
+            },
+            create=True,
+        ), mock.patch.object(self.mp, "spawn", side_effect=spawn):
+            self.mp.fresh_handoff(namespace)
+
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(spawned[0][1], "")
+        self.assertIn("continue the same task", spawned[0][2])
+        self.assertIn("verified progress", spawned[0][2])
+        self.assertEqual(spawned[0][0].backend, "claude")
+        self.assertEqual(spawned[0][0].model, "claude-test")
+        self.assertEqual(spawned[0][0].owner_task, "task-1234")
+
+        with mock.patch.object(
+            self.mp,
+            "validate_fresh_handoff",
+            side_effect=SessionError("fresh_handoff_not_authorized"),
+            create=True,
+        ), mock.patch.object(self.mp, "spawn") as forbidden_spawn:
+            with self.assertRaisesRegex(
+                SystemExit,
+                "fresh_handoff_not_authorized",
+            ):
+                self.mp.fresh_handoff(namespace)
+        forbidden_spawn.assert_not_called()
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(

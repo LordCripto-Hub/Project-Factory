@@ -8,11 +8,26 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import time
 
 
 SESSION_ID = re.compile(r"[A-Za-z0-9._-]{8,160}")
 SAFE_COMPONENT = re.compile(r"[A-Za-z0-9._-]{1,80}")
+HANDOFF_SNAPSHOT_FIELDS = (
+    "agent_id",
+    "backend",
+    "model",
+    "provider_profile",
+    "cwd",
+    "lifecycle",
+    "owner_task_id",
+    "boss_id",
+    "is_master",
+    "taskspec_sha256",
+    "role_contract_sha256",
+    "role_contract_version",
+)
 
 
 class SessionError(RuntimeError):
@@ -213,3 +228,128 @@ def validate_resume_evidence(
     if not paths:
         raise SessionError("session_missing")
     return paths[0]
+
+
+def _read_private_json(path: str):
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
+            raise SessionError("fresh_handoff_not_authorized")
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            descriptor = -1
+            return json.load(stream)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _require_private_directory(path: str) -> None:
+    metadata = os.lstat(path)
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_mode & 0o077
+    ):
+        raise SessionError("fresh_handoff_not_authorized")
+
+
+def validate_fresh_handoff(
+    transactions_root: str,
+    switch_lock: str,
+    transaction_id: str,
+    handoff_path: str,
+    agent_id: str,
+) -> dict:
+    try:
+        transaction = _safe_component(transaction_id)
+        root = os.path.realpath(transactions_root)
+        transaction_candidate = os.path.abspath(
+            os.path.join(root, transaction)
+        )
+        transaction_dir = os.path.realpath(transaction_candidate)
+        if (
+            transaction_candidate != transaction_dir
+            or
+            transaction_dir == root
+            or os.path.commonpath((root, transaction_dir)) != root
+        ):
+            raise SessionError("fresh_handoff_not_authorized")
+        _require_private_directory(transaction_dir)
+
+        lock_candidate = os.path.abspath(switch_lock)
+        resolved_lock = os.path.realpath(lock_candidate)
+        if lock_candidate != resolved_lock:
+            raise SessionError("fresh_handoff_not_authorized")
+        lock = _read_private_json(resolved_lock)
+        state = _read_private_json(
+            os.path.join(transaction_dir, "state.json")
+        )
+        if (
+            not isinstance(lock, dict)
+            or lock.get("transaction") != transaction
+            or not isinstance(state, dict)
+            or state.get("transaction") != transaction
+            or state.get("phase") != "stopped"
+        ):
+            raise SessionError("fresh_handoff_not_authorized")
+
+        handoff_candidate = os.path.abspath(handoff_path)
+        resolved_handoff = os.path.realpath(handoff_candidate)
+        if (
+            handoff_candidate != resolved_handoff
+            or
+            resolved_handoff == transaction_dir
+            or os.path.commonpath((transaction_dir, resolved_handoff))
+            != transaction_dir
+        ):
+            raise SessionError("fresh_handoff_not_authorized")
+        _require_private_directory(os.path.dirname(resolved_handoff))
+        handoff = _read_private_json(resolved_handoff)
+
+        roster = _read_private_json(
+            os.path.join(transaction_dir, "roster.json")
+        )
+        if not isinstance(roster, list):
+            raise SessionError("fresh_handoff_not_authorized")
+        matches = [
+            row
+            for row in roster
+            if isinstance(row, dict) and row.get("agent_id") == agent_id
+        ]
+        if len(matches) != 1:
+            raise SessionError("fresh_handoff_not_authorized")
+        record = matches[0]
+        if (
+            not isinstance(handoff, dict)
+            or not isinstance(handoff.get("agent"), dict)
+            or handoff["agent"].get("agent_id") != agent_id
+            or not isinstance(handoff.get("snapshot"), dict)
+        ):
+            raise SessionError("fresh_handoff_not_authorized")
+        snapshot = handoff["snapshot"]
+        for field in HANDOFF_SNAPSHOT_FIELDS:
+            if field not in snapshot:
+                raise SessionError("fresh_handoff_not_authorized")
+            expected = record.get(field)
+            actual = snapshot.get(field)
+            if field == "cwd":
+                expected = os.path.realpath(str(expected or ""))
+                actual = os.path.realpath(str(actual or ""))
+            if actual != expected:
+                raise SessionError("fresh_handoff_not_authorized")
+        target_backend = state.get("targetBackend")
+        if target_backend and target_backend not in {"codex", "claude"}:
+            raise SessionError("fresh_handoff_not_authorized")
+        return {"record": record, "handoff": handoff, "state": state}
+    except SessionError as error:
+        if error.code == "fresh_handoff_not_authorized":
+            raise
+        raise SessionError("fresh_handoff_not_authorized") from error
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+        raise SessionError("fresh_handoff_not_authorized") from error

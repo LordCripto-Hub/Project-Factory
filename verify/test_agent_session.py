@@ -236,6 +236,183 @@ class AgentSessionContract(unittest.TestCase):
                 codex_home=str(self.codex_home),
             )
 
+    def fresh_handoff_fixture(self):
+        transaction_id = "tx-one"
+        transactions_root = self.root / "transactions"
+        transaction_dir = transactions_root / transaction_id
+        handoff_dir = transaction_dir / "handoffs"
+        handoff_dir.mkdir(parents=True, mode=0o700)
+        os.chmod(transaction_dir, 0o700)
+        os.chmod(handoff_dir, 0o700)
+        lock_path = self.root / "provider-switch.lock"
+        record = {
+            "agent_id": "node-1/main:Engineer-1",
+            "backend": "codex",
+            "model": "gpt-test",
+            "provider_profile": "codex-primary",
+            "cwd": str(self.cwd),
+            "lifecycle": "owner",
+            "owner_task_id": "task-1234",
+            "boss_id": "node-1/main:Boss",
+            "is_master": False,
+            "taskspec_sha256": "a" * 64,
+            "role_contract_sha256": "b" * 64,
+            "role_contract_version": 1,
+        }
+        snapshot = {
+            key: record.get(key)
+            for key in (
+                "agent_id",
+                "backend",
+                "model",
+                "provider_profile",
+                "cwd",
+                "lifecycle",
+                "owner_task_id",
+                "boss_id",
+                "is_master",
+                "taskspec_sha256",
+                "role_contract_sha256",
+                "role_contract_version",
+            )
+        }
+        handoff = {
+            "agent": {"agent_id": record["agent_id"], "summary": "continue"},
+            "terminalTail": "bounded progress",
+            "snapshot": snapshot,
+        }
+        handoff_path = handoff_dir / "agent.json"
+        for path, payload in (
+            (lock_path, {"transaction": transaction_id}),
+            (
+                transaction_dir / "state.json",
+                {"transaction": transaction_id, "phase": "stopped"},
+            ),
+            (transaction_dir / "roster.json", [record]),
+            (handoff_path, handoff),
+        ):
+            path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+            os.chmod(path, 0o600)
+        return transactions_root, lock_path, handoff_path, record
+
+    def test_fresh_handoff_accepts_owned_stopped_private_transaction(self):
+        roots, lock_path, handoff_path, record = self.fresh_handoff_fixture()
+        authorized = runtime.validate_fresh_handoff(
+            str(roots),
+            str(lock_path),
+            "tx-one",
+            str(handoff_path),
+            record["agent_id"],
+        )
+        self.assertEqual(authorized["record"], record)
+        self.assertEqual(
+            authorized["handoff"]["terminalTail"],
+            "bounded progress",
+        )
+
+    def test_fresh_handoff_rejects_wrong_lock_or_non_stopped_phase(self):
+        roots, lock_path, handoff_path, record = self.fresh_handoff_fixture()
+        lock_path.write_text(
+            json.dumps({"transaction": "tx-other"}) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "fresh_handoff_not_authorized",
+        ):
+            runtime.validate_fresh_handoff(
+                str(roots),
+                str(lock_path),
+                "tx-one",
+                str(handoff_path),
+                record["agent_id"],
+            )
+
+        lock_path.write_text(
+            json.dumps({"transaction": "tx-one"}) + "\n",
+            encoding="utf-8",
+        )
+        state_path = roots / "tx-one" / "state.json"
+        state_path.write_text(
+            json.dumps({"transaction": "tx-one", "phase": "prepared"}) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "fresh_handoff_not_authorized",
+        ):
+            runtime.validate_fresh_handoff(
+                str(roots),
+                str(lock_path),
+                "tx-one",
+                str(handoff_path),
+                record["agent_id"],
+            )
+
+    def test_fresh_handoff_rejects_outside_private_path_and_snapshot_mismatch(self):
+        roots, lock_path, handoff_path, record = self.fresh_handoff_fixture()
+        outside = self.root / "outside.json"
+        outside.write_text(handoff_path.read_text(encoding="utf-8"), encoding="utf-8")
+        os.chmod(outside, 0o600)
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "fresh_handoff_not_authorized",
+        ):
+            runtime.validate_fresh_handoff(
+                str(roots),
+                str(lock_path),
+                "tx-one",
+                str(outside),
+                record["agent_id"],
+            )
+
+        payload = json.loads(handoff_path.read_text(encoding="utf-8"))
+        payload["snapshot"]["cwd"] = str(self.root / "wrong")
+        handoff_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        os.chmod(handoff_path, 0o600)
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "fresh_handoff_not_authorized",
+        ):
+            runtime.validate_fresh_handoff(
+                str(roots),
+                str(lock_path),
+                "tx-one",
+                str(handoff_path),
+                record["agent_id"],
+            )
+
+    def test_fresh_handoff_rejects_symlinked_handoff_and_lock(self):
+        roots, lock_path, handoff_path, record = self.fresh_handoff_fixture()
+        linked_handoff = handoff_path.parent / "linked.json"
+        linked_handoff.symlink_to(handoff_path)
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "fresh_handoff_not_authorized",
+        ):
+            runtime.validate_fresh_handoff(
+                str(roots),
+                str(lock_path),
+                "tx-one",
+                str(linked_handoff),
+                record["agent_id"],
+            )
+
+        real_lock = self.root / "provider-switch-real.lock"
+        lock_path.replace(real_lock)
+        lock_path.symlink_to(real_lock)
+        with self.assertRaisesRegex(
+            runtime.SessionError,
+            "fresh_handoff_not_authorized",
+        ):
+            runtime.validate_fresh_handoff(
+                str(roots),
+                str(lock_path),
+                "tx-one",
+                str(handoff_path),
+                record["agent_id"],
+            )
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(AgentSessionContract)

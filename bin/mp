@@ -7,6 +7,7 @@ from agent_session import (
     capture_lock,
     discover_codex_session,
     snapshot_codex_sessions,
+    validate_fresh_handoff,
     validate_resume_evidence,
 )
 from mpcommon import *
@@ -500,7 +501,7 @@ def wait_for_composer(target, timeout=30):
         time.sleep(.5)
     return False
 
-def spawn(ns, resume_session=""):
+def spawn(ns, resume_session="", initial_message=""):
     raw_boss = ns.boss
     if raw_boss is not None and not raw_boss.strip(): raise SystemExit("empty --boss is invalid; omit --boss for a top-level agent")
     if (ns.owner_task or ns.temporary) and raw_boss is None: raise SystemExit("--owner-task/--temporary require --boss")
@@ -576,6 +577,7 @@ def spawn(ns, resume_session=""):
         launch_env["VERIFY_RESERVED_OWNER_ID"]=os.environ["VERIFY_RESERVED_OWNER_ID"]
     command=shell_export(launch_env)+"; exec "+shlex.join(args)
     previous=next((x for x in load_roster() if x.get("agent_id")==aid),{})
+    fresh_session = not target_exists and not resume_session
     if target_exists or resume_session:
         session_id = str(resume_session or previous.get("session_id") or "")
         resume_state = previous.get("resume_state") or (
@@ -586,10 +588,26 @@ def spawn(ns, resume_session=""):
         resume_state = "pending"
     session_identity = {
         "session_id": session_id,
-        "session_backend": previous.get("session_backend", ns.backend),
-        "session_profile": previous.get("session_profile", profile_id),
-        "session_cwd": previous.get("session_cwd", cwd),
-        "session_recorded_at": previous.get("session_recorded_at", 0),
+        "session_backend": (
+            ns.backend
+            if fresh_session
+            else previous.get("session_backend", ns.backend)
+        ),
+        "session_profile": (
+            profile_id
+            if fresh_session
+            else previous.get("session_profile", profile_id)
+        ),
+        "session_cwd": (
+            cwd
+            if fresh_session
+            else previous.get("session_cwd", cwd)
+        ),
+        "session_recorded_at": (
+            0
+            if fresh_session
+            else previous.get("session_recorded_at", 0)
+        ),
         "resume_state": resume_state,
         "recovery_attempts": previous.get("recovery_attempts", 0),
         "next_recovery_at": previous.get("next_recovery_at", 0),
@@ -701,7 +719,10 @@ def spawn(ns, resume_session=""):
     if tab=="Nightwatch": rec["summary"]="nightwatch ceo-equivalent approve whatsapp never-done"
     update_roster(rec); write_status(aid,"starting",rec.get("summary",""),boss_id=boss,backend=ns.backend)
     queue_register(rec); recorder(session,tab)
-    if created and ns.master:
+    if created and initial_message:
+        wait_for_composer(target)
+        tmux_send_message(target, initial_message)
+    elif created and ns.master:
         wait_for_composer(target)
         tmux_send_message(target,"Read your Boss doctrine now. Internalize the queue quickstart, operate autonomously, and reply with a concise readiness summary containing plan, queue, mp, and verify.")
     elif created and tab=="Nightwatch":
@@ -876,6 +897,67 @@ def revive(ns):
     except BaseException:
         update_roster(snapshot)
         raise
+
+def render_fresh_handoff(handoff):
+    agent = handoff.get("agent") if isinstance(handoff, dict) else {}
+    if not isinstance(agent, dict):
+        agent = {}
+    tail = str(handoff.get("terminalTail") or "")[-4000:]
+    return (
+        "This is a fresh provider session authorized by a provider-switch "
+        "transaction; do not claim exact session resume. Read the mounted "
+        "role doctrine and TaskSpec when present, preserve the same task and "
+        "working directory, and continue from this sanitized handoff.\n\n"
+        "Agent snapshot:\n"
+        + json.dumps(agent, ensure_ascii=False, sort_keys=True)
+        + "\n\nRecent terminal progress:\n"
+        + tail
+    )
+
+def fresh_handoff(ns):
+    transactions_root = os.environ.get(
+        "PROVIDER_TRANSACTIONS_DIR",
+        os.path.join(ROOT, "run", "provider-transactions"),
+    )
+    switch_lock = os.environ.get(
+        "PROVIDER_SWITCH_LOCK",
+        os.path.join(ROOT, "run", "provider-switch.lock"),
+    )
+    aid = full_agent_id(ns.agent_id)
+    try:
+        authorized = validate_fresh_handoff(
+            transactions_root,
+            switch_lock,
+            ns.transaction,
+            ns.handoff,
+            aid,
+        )
+    except SessionError as error:
+        raise SystemExit(error.code) from error
+    record = authorized["record"]
+    state = authorized.get("state") or {}
+    runtime = namespace_from_record(record)
+    runtime.backend = state.get("targetBackend") or runtime.backend
+    runtime.model = state.get("targetModel") or runtime.model
+    if runtime.backend not in {"codex", "claude"}:
+        raise SystemExit("fresh_handoff_not_authorized")
+    validate_record_receipt(
+        record,
+        "taskspec_path",
+        "taskspec_sha256",
+        "taskspec_receipt_mismatch",
+    )
+    validate_record_receipt(
+        record,
+        "role_contract_path",
+        "role_contract_sha256",
+        "role_receipt_mismatch",
+    )
+    spawn(
+        runtime,
+        resume_session="",
+        initial_message=render_fresh_handoff(authorized["handoff"]),
+    )
 
 def switch_backend(ns):
     aid=full_agent_id(ns.agent_id); host,session,tab=parse_agent_id(aid)
@@ -1075,6 +1157,7 @@ def parser():
     q=sub.add_parser("kill");q.add_argument("agent_id");q.add_argument("--reason");q.set_defaults(fn=kill)
     q=sub.add_parser("revive");q.add_argument("agent_id");q.set_defaults(fn=revive)
     q=sub.add_parser("switch");q.add_argument("agent_id");q.add_argument("--backend",required=True,choices=["claude","codex"]);q.add_argument("--model",required=True);q.set_defaults(fn=switch_backend)
+    q=sub.add_parser("fresh-handoff");q.add_argument("agent_id");q.add_argument("--transaction",required=True);q.add_argument("--handoff",required=True);q.set_defaults(fn=fresh_handoff)
     q=sub.add_parser("reconcile");q.add_argument("--agent",dest="agent_id",default="");q.set_defaults(fn=reconcile)
     q=sub.add_parser("answer");q.add_argument("agent_id");q.add_argument("choice",type=int);q.set_defaults(fn=answer)
     q=sub.add_parser("status");q.set_defaults(fn=status)
