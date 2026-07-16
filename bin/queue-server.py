@@ -56,6 +56,17 @@ def joined_agents():
         out.append(z)
     return sorted(out,key=lambda x:(not x.get("is_master",False),x["agent_id"]))
 
+def revive_agent(agent_id):
+    """Run the narrow HUD revival action and preserve a safe failure reason."""
+    try:
+        process=subprocess.run([os.path.join(ROOT,"bin","mp"),"revive",agent_id],capture_output=True,text=True,timeout=30)
+    except Exception as error:
+        return 500,{"ok":False,"error":"revive_unavailable","result":str(error)}
+    result=(process.stdout or process.stderr).strip()
+    if process.returncode:
+        return 400,{"ok":False,"error":"revive_rejected","result":result or "revive rejected"}
+    return 200,{"ok":True,"result":result}
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version="MyPeopleQueue/2"
     def log_message(self,fmt,*args):
@@ -160,11 +171,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if tid in TASKS:TASKS[tid].update(status="done",ok=bool(b.get("ok")),result=b.get("result"),completed_at=now())
             return self.json({"ok":True})
         if path=="/revive":
-            aid=b.get("agent_id","")
-            try:
-                p=subprocess.run([os.path.join(ROOT,"bin","mp"),"revive",aid],capture_output=True,text=True,timeout=30)
-                return self.json({"ok":p.returncode==0,"result":p.stdout or p.stderr},200 if p.returncode==0 else 400)
-            except Exception as e:return self.json({"ok":False,"error":str(e)},500)
+            status,body=revive_agent(b.get("agent_id",""))
+            return self.json(body,status)
         self.json({"error":"not_found"},404)
 
 if __name__=="__main__":

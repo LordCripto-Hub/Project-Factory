@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +54,20 @@ class QueueAgentReconciliationTests(unittest.TestCase):
         self.queue.reconcile_host_agents("node-1", [])
 
         self.assertIn("node-2/main:Boss", self.queue.AGENTS)
+
+    def test_revive_rejection_preserves_safe_runtime_reason(self):
+        completed = type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "owner_task_closed: refusing revive\n"})()
+        with patch.object(self.queue.subprocess, "run", return_value=completed):
+            status, body = self.queue.revive_agent("node-1/main:eng-2")
+        self.assertEqual(status, 400)
+        self.assertEqual(body, {"ok": False, "error": "revive_rejected", "result": "owner_task_closed: refusing revive"})
+
+    def test_revive_success_returns_queue_result(self):
+        completed = type("Completed", (), {"returncode": 0, "stdout": "node-1/main:eng-2\n", "stderr": ""})()
+        with patch.object(self.queue.subprocess, "run", return_value=completed):
+            status, body = self.queue.revive_agent("node-1/main:eng-2")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"ok": True, "result": "node-1/main:eng-2"})
 
 
 if __name__ == "__main__":
