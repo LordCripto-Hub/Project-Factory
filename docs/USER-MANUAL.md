@@ -350,11 +350,29 @@ docker exec mypeople python3 /home/mp/mypeople/verify/test_project_workspace.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_project_publisher.py
 ```
 
-Complete suite:
+Complete suite (always disposable and isolated):
 
 ```powershell
-docker exec mypeople bash /home/mp/mypeople/verify/verify.sh
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image <reviewed-local-image>
 ```
+
+On Linux or from a Docker-capable shell:
+
+```bash
+MYPEOPLE_VERIFY_IMAGE=<reviewed-local-image> bash verify/verify.sh
+```
+
+Do not run the full suite with `docker exec mypeople`. Both host launchers
+create a unique Compose project with no host ports, external network, live
+volumes, Docker socket, or provider credentials. A timeout is enforced and
+cleanup always targets only that unique project. Evidence is deleted on
+success and retained under the printed temporary path on failure. Exit codes
+are `0` success, `1` suite failure, `124` timeout, and `125` host or cleanup
+failure.
+
+Provider and Tailnet-dependent runtime fixtures are synthetic. Use separate,
+read-only diagnostics when live provider authentication or remote Tailnet
+reachability must be checked.
 
 The release process records fresh results before publication; do not rely on an older chat statement as verification.
 

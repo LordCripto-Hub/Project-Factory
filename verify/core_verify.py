@@ -18,6 +18,11 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import request, parse, error
 
+if os.environ.get("MP_VERIFY_ISOLATED") != "1":
+    raise SystemExit(
+        "Refusing to run the full verifier outside its isolated disposable container."
+    )
+
 ROOT = pathlib.Path(os.environ.get("INSTALL_DIR", "/home/mp/mypeople")).resolve()
 VERIFY = ROOT / "verify"
 BIN = ROOT / "bin"
@@ -46,6 +51,7 @@ TMP_VIDEO = VERIFY / "videos"
 TMP_SHOTS = VERIFY / "screenshots"
 VERIFIER_ARTIFACT_IDS = [f"{HOST_ID}/verify-browser:Owner", f"{HOST_ID}/verify-owner:Owner", f"{HOST_ID}/verify-owner2:Owner2"]
 VERIFIER_FIXTURE_TEXTS = {"verify ping card", "verify browser live core"}
+SANDBOX_PROJECT_SLUG = "verify-project"
 
 
 class Failure(RuntimeError):
@@ -141,6 +147,9 @@ class Sandbox:
         self.agents = self.root / "agents.json"
         self.status = self.root / "status"
         self.proofs = self.root / "proofs"
+        self.project_profiles = self.root / "project-profiles"
+        self.taskspecs = self.root / "taskspecs"
+        self.workspace = self.root / "workspace"
         self.capture_dir = self.root / "captures"
         self.capture_dir.mkdir(parents=True, exist_ok=True)
         self.procs: list[Proc] = []
@@ -167,6 +176,8 @@ class Sandbox:
             "AGENTS_PATH": str(self.agents),
             "STATUS_DIR": str(self.status),
             "EXPORT_REPO": str(self.root / "export"),
+            "PROJECT_PROFILES_DIR": str(self.project_profiles),
+            "TASKSPECS_DIR": str(self.taskspecs),
             "MYPEOPLE_MP_BIN": str(ROOT / "bin" / "mp"),
             "MYPEOPLE_TODO_URL": self.todo_url,
             "QUEUE_SECRET": QUEUE_SECRET,
@@ -182,6 +193,32 @@ class Sandbox:
     def start(self):
         self.status.mkdir(parents=True, exist_ok=True)
         self.proofs.mkdir(parents=True, exist_ok=True)
+        self.project_profiles.mkdir(parents=True, exist_ok=True)
+        self.taskspecs.mkdir(parents=True, exist_ok=True)
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        (self.workspace / "README.md").write_text("Disposable verifier workspace.\n")
+        profile = {
+            "schemaVersion": 1,
+            "revision": 1,
+            "slug": SANDBOX_PROJECT_SLUG,
+            "repository": "https://github.com/example/verify-project.git",
+            "workingDirectory": str(self.workspace),
+            "allowedBranches": ["main"],
+            "contextFiles": ["README.md"],
+            "verificationCommands": ["python3 -m unittest"],
+            "allowedActions": ["read", "edit", "test"],
+            "forbiddenActions": ["deploy", "push", "delete"],
+            "limits": {
+                "contextChars": 6000,
+                "memoryTopK": 3,
+                "memoryHops": 0,
+                "memoryTimeoutSeconds": 8,
+            },
+            "memory": {"enabled": False, "serverUrl": "https://memory.example.invalid/mcp", "credentialRef": "env://MYPEOPLE_MEMORY_TOKEN"},
+        }
+        (self.project_profiles / f"{SANDBOX_PROJECT_SLUG}.json").write_text(
+            json.dumps(profile, indent=2) + "\n"
+        )
         self.board.write_text(json.dumps({"version": 2, "order": [], "pinSeq": 0, "tasks": {}}, indent=2) + "\n")
         self.roster.write_text("[]\n")
         self.agents.write_text("[]\n")
@@ -414,8 +451,9 @@ def assert_browser_discovery_safety():
     check("sentinel" not in deleted, "concurrent user card would be deleted")
 
 
-def add_sandbox_task(text: str, test=False, by="CEO") -> str:
-    res = sandbox_api("/todo/update", "POST", {"op": "add", "text": text, "by": by, "test": test})
+def add_sandbox_task(text: str, test=False, by="CEO", project_slug="") -> str:
+    payload = {"op": "add", "text": text, "by": by, "test": test, "projectSlug": project_slug}
+    res = sandbox_api("/todo/update", "POST", payload)
     return res["id"]
 
 
@@ -584,7 +622,7 @@ def assert_owner_lifecycle():
     info("J25/J25a/J50/J51: owner lifecycle and migration")
     sandbox.start()
     try:
-        fixture = add_sandbox_task("owner fixture", test=True)
+        fixture = add_sandbox_task("owner fixture", test=True, project_slug=SANDBOX_PROJECT_SLUG)
         owner_id = f"{HOST_ID}/verify-owner:Owner"
         res = run([
             str(ROOT / "bin" / "mp"), "spawn", owner_id, "--backend", "claude",
@@ -811,7 +849,7 @@ def build_sandbox_fixtures():
     modal_id = add_sandbox_task("modal fixture", test=True)
     scroll_id = add_sandbox_task("scroll fixture", test=True)
     safe_md_id = add_sandbox_task("safe markdown fixture", test=True)
-    owner_task = add_sandbox_task("owner browser fixture", test=True)
+    owner_task = add_sandbox_task("owner browser fixture", test=True, project_slug=SANDBOX_PROJECT_SLUG)
     pin_ids = [add_sandbox_task(f"pin fixture {i}", test=True) for i in range(7)]
     unread_id = add_sandbox_task("unread fixture", test=True)
     proof_id = add_sandbox_task("proof fixture", test=True)

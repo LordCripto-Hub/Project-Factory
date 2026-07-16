@@ -125,6 +125,26 @@ contract.
 - [User manual](docs/USER-MANUAL.md)
 - [Minimal architecture](docs/MINIMAL-ARCHITECTURE.md)
 
+## Safe full verification
+
+The full suite runs only in a disposable, credential-free container. It never
+targets the live `mypeople` container or its board volumes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image <reviewed-local-image>
+```
+
+```bash
+MYPEOPLE_VERIFY_IMAGE=<reviewed-local-image> bash verify/verify.sh
+```
+
+The launchers publish no host ports, apply a bounded timeout, always remove
+their unique Compose project, delete evidence after success, and print the
+retained evidence path after failure. Exit codes are `0` for success, `1` for
+a suite failure, `124` for timeout, and `125` for orchestration failure.
+Provider and Tailnet-dependent runtime fixtures are synthetic; this suite does
+not validate live provider authentication or remote Tailnet reachability.
+
 ## Memory boundary
 
 MyPeople is an execution plane, not another memory system. Each task receives one compact, explicit context packet. External knowledge systems may help compile that packet, but MyPeople does not query several memory layers automatically.

@@ -1,49 +1,88 @@
 #!/bin/bash
-set -euo pipefail
-ROOT=${INSTALL_DIR:-$HOME/mypeople}
-VERIFY="$ROOT/verify"
-export INSTALL_DIR="$ROOT" PYTHONPATH="$ROOT/bin" PATH="$HOME/.local/bin:$ROOT/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-test -r "$HOME/.config/mypeople/queue.env"
-set -a
-. "$HOME/.config/mypeople/queue.env"
-set +a
+set -uo pipefail
 
-need=()
-for c in curl jq git tmux node npm ss ffmpeg; do command -v "$c" >/dev/null 2>&1 || need+=("$c"); done
-if ((${#need[@]})); then
-  sudo -n apt-get update -qq
-  sudo -n apt-get install -y -qq curl jq git tmux nodejs npm iproute2 ffmpeg
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd -P)
+COMPOSE="$SCRIPT_DIR/compose.isolated.yml"
+IMAGE=${MYPEOPLE_VERIFY_IMAGE:-mypeople-node:integration-a54d9e3}
+TIMEOUT_SECONDS=${MP_VERIFY_TIMEOUT_SECONDS:-1800}
+EVIDENCE_BASE=${MP_VERIFY_EVIDENCE_ROOT:-${TMPDIR:-/tmp}/mypeople-verify}
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
+PROJECT="mypeople-verify-${RUN_ID,,}"
+RUN_DIR="$EVIDENCE_BASE/$RUN_ID"
+OUTPUT="$RUN_DIR/verify.log"
+RESULT=125
+CLEANED=0
+mkdir -p "$RUN_DIR"
+: >"$OUTPUT"
+
+cleanup() {
+  local rc=0
+  (( CLEANED )) && return 0
+  CLEANED=1
+  docker compose --project-name "$PROJECT" -f "$COMPOSE" down --remove-orphans --timeout 10 >>"$OUTPUT" 2>&1 || rc=$?
+  return "$rc"
+}
+
+fallback_cleanup() {
+  cleanup || true
+}
+trap fallback_cleanup EXIT INT TERM
+
+fail_host() {
+  printf 'Isolated verifier host error: %s\n' "$1" >&2
+  RESULT=125
+}
+
+if ! [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  fail_host "MP_VERIFY_TIMEOUT_SECONDS must be a positive integer"
+elif ! command -v docker >/dev/null 2>&1; then
+  fail_host "docker is required"
+elif ! command -v timeout >/dev/null 2>&1; then
+  fail_host "the coreutils timeout command is required"
+elif ! docker compose version >/dev/null 2>&1; then
+  fail_host "Docker Compose v2 is required"
+else
+  export MYPEOPLE_VERIFY_IMAGE="$IMAGE"
+  export MP_VERIFY_SOURCE="$ROOT"
+  export MP_VERIFY_EVIDENCE_DIR="$RUN_DIR"
+
+  if docker compose --project-name "$PROJECT" -f "$COMPOSE" config --quiet >>"$OUTPUT" 2>&1; then
+    timeout --foreground "${TIMEOUT_SECONDS}s" \
+      docker compose --project-name "$PROJECT" -f "$COMPOSE" run --rm --no-deps verify \
+      >>"$OUTPUT" 2>&1
+    run_rc=$?
+    case "$run_rc" in
+      0) RESULT=0 ;;
+      124) RESULT=124 ;;
+      125|126|127) RESULT=125 ;;
+      *) RESULT=1 ;;
+    esac
+  else
+    RESULT=125
+  fi
+
+  if (( RESULT != 0 )); then
+    docker compose --project-name "$PROJECT" -f "$COMPOSE" ps --all >>"$RUN_DIR/compose-ps.log" 2>&1 || true
+    docker compose --project-name "$PROJECT" -f "$COMPOSE" logs --no-color >>"$RUN_DIR/compose.log" 2>&1 || true
+  fi
 fi
-mkdir -p "$VERIFY/videos" "$VERIFY/screenshots"
-if [[ ! -d "$VERIFY/node_modules/playwright" ]]; then
-  (cd "$VERIFY" && npm install --no-audit --no-fund playwright@1.61.1)
+
+cleanup_rc=0
+cleanup || cleanup_rc=$?
+trap - EXIT INT TERM
+if (( cleanup_rc != 0 && RESULT == 0 )); then
+  RESULT=125
 fi
-(cd "$VERIFY" && npx playwright install chromium webkit >/dev/null)
-python3 "$VERIFY/test_task_project_fields.py"
-python3 "$VERIFY/test_durable_control_queue.py"
-python3 "$VERIFY/test_board_export_persistence.py"
-python3 "$VERIFY/test_project_context.py"
-python3 "$VERIFY/test_memory_gateway.py"
-python3 "$VERIFY/test_memory_profile.py"
-python3 "$VERIFY/test_memory_activation_e2e.py"
-python3 "$VERIFY/test_taskspec_spawn.py"
-python3 "$VERIFY/test_project_workspace.py"
-python3 "$VERIFY/test_project_publisher.py"
-python3 "$VERIFY/test_windows_publisher_bridge.py"
-npm test --prefix "$ROOT/memory-gateway"
-python3 "$VERIFY/test_task_evidence.py"
-python3 "$VERIFY/test_windows_dictation_only.py"
-python3 "$VERIFY/test_local_default_network.py"
-python3 "$VERIFY/test_scorpion_theme.py"
-python3 "$VERIFY/test_windows_launcher.py"
-python3 "$VERIFY/test_windows_memory.py"
-python3 "$VERIFY/test_provider_profiles.py"
-python3 "$VERIFY/test_provider_session.py"
-python3 "$VERIFY/test_windows_provider_profiles.py"
-python3 "$VERIFY/test_worker_handoff.py"
-python3 "$VERIFY/test_priorities_terminal_popup.py"
-python3 "$VERIFY/test_public_repository.py"
-python3 "$VERIFY/test_docker_persistence.py"
-python3 "$VERIFY/test_runtime_supervisor.py"
-node "$VERIFY/test_browser_error_filter.js"
-exec python3 "$VERIFY/core_verify.py"
+
+if [[ -f "$OUTPUT" ]]; then
+  sed -n '1,4000p' "$OUTPUT"
+fi
+if (( RESULT == 0 )); then
+  rm -rf -- "$RUN_DIR"
+  rmdir --ignore-fail-on-non-empty "$EVIDENCE_BASE" 2>/dev/null || true
+  printf 'Isolated MyPeople verification passed.\n'
+else
+  printf 'Isolated MyPeople verification failed with exit %s. Evidence retained at: %s\n' "$RESULT" "$RUN_DIR" >&2
+fi
+exit "$RESULT"
