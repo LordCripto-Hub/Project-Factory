@@ -39,6 +39,7 @@ assert "gid=1000" in compose
 assert "mode=0700" in compose
 assert "MYPEOPLE_MEMORY_TOKEN" not in compose
 assert "'bin', 'verify', 'memory-gateway', 'plugins', 'docs', 'docker', 'windows'" in migration
+assert "compose.tailscale.yml" in migration
 for volume, target in EXPECTED.items():
     assert f"{volume}:{target}" in compose
     assert f"name: {volume}" in compose

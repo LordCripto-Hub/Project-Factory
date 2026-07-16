@@ -26,7 +26,7 @@ $deploymentDirectory = Join-Path $env:LOCALAPPDATA 'MyPeople\deployment'
 $environmentPath = Join-Path $deploymentDirectory '.env'
 if (Test-Path -LiteralPath $environmentPath) {
     $projectRoot = Split-Path $PSScriptRoot -Parent
-    foreach ($name in @('compose.volume-backed.yml', 'state-volumes.json')) {
+    foreach ($name in @('compose.volume-backed.yml', 'compose.tailscale.yml', 'state-volumes.json')) {
         $source = Join-Path $projectRoot "docker\$name"
         if (-not (Test-Path -LiteralPath $source)) {
             throw "Deployment file missing: $source"

@@ -32,6 +32,17 @@ Default interfaces:
 - Writable terminal: <http://localhost:7681/>
 - Read-only terminal: <http://localhost:7682/>
 
+The standard Compose deployment binds these ports to **127.0.0.1**, does not
+request **NET_ADMIN** or **/dev/net/tun**, and never starts Tailscale. To
+dictate text, focus a MyPeople text box or writable terminal and press
+**Win + H**; Windows owns microphone permission and transcription.
+
+Remote networking is optional. An operator may explicitly add
+docker/compose.tailscale.yml to the Compose command to enable the bundled
+Tailscale runtime, or configure UPSTREAM_QUEUE_URL, UPSTREAM_QUEUE_SECRET, and
+TTYD_PUBLIC_URL for another LAN, VPN, or authenticated proxy. The one-click
+launcher never enables the remote override automatically.
+
 Windows operators can install the desktop shortcut with:
 
 ```powershell
@@ -113,7 +124,6 @@ contract.
 
 - [User manual](docs/USER-MANUAL.md)
 - [Minimal architecture](docs/MINIMAL-ARCHITECTURE.md)
-- [Voice Dock](docs/VOICE-DOCK.md)
 
 ## Memory boundary
 

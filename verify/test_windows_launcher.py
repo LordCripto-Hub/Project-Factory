@@ -66,6 +66,8 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertIn("docker compose", text)
         self.assertNotIn("compose down", text)
         self.assertNotIn("volume rm", text)
+        self.assertNotIn("compose.tailscale.yml", text)
+        self.assertNotIn("TS_AUTHKEY", text)
 
     def test_launcher_supports_noninteractive_migration_verification(self):
         launcher = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
@@ -89,9 +91,20 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertIn("Set-MyPeopleMemoryCredential.ps1", text)
         self.assertIn("Set-MyPeopleMemoryActivation.ps1", text)
         self.assertIn("compose.volume-backed.yml", text)
+        self.assertIn("compose.tailscale.yml", text)
         self.assertIn("state-volumes.json", text)
         self.assertIn("-WindowStyle Hidden", text)
         self.assertIn("MyPeople.lnk", text)
+
+    def test_public_docs_use_windows_dictation_and_explicit_remote_opt_in(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(encoding="utf-8")
+        for text in (readme, manual):
+            self.assertIn("Win + H", text)
+            self.assertIn("compose.tailscale.yml", text)
+            self.assertIn("127.0.0.1", text)
+            self.assertNotIn("Ctrl + Windows", text)
+            self.assertNotIn("Voice Dock", text)
 
 
 if __name__ == "__main__":

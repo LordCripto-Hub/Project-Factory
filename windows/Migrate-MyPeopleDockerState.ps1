@@ -374,6 +374,7 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
     $deployment = Join-Path $stateRoot 'deployment'
     New-Item -ItemType Directory -Path $deployment -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'docker\compose.volume-backed.yml') -Destination (Join-Path $deployment 'compose.volume-backed.yml') -Force
+    Copy-Item -LiteralPath (Join-Path $root 'docker\compose.tailscale.yml') -Destination (Join-Path $deployment 'compose.tailscale.yml') -Force
     Copy-Item -LiteralPath (Join-Path $root 'docker\state-volumes.json') -Destination (Join-Path $deployment 'state-volumes.json') -Force
     $composeSeedPath = $script:SeedPath -replace '\\', '/'
     $environmentPath = Join-Path $deployment '.env'

@@ -211,6 +211,20 @@ If a post-stop stage fails, rollback removes only the failed new container, rena
 
 The launcher reads `%LOCALAPPDATA%\MyPeople\deployment\.env` and `compose.volume-backed.yml`. It may recreate the container from the pinned image, but never rebuilds implicitly or deletes state.
 
+The standard deployment publishes Priorities, HUD, and terminal ports only on
+127.0.0.1. It does not grant NET_ADMIN, mount /dev/net/tun, request a Tailscale
+auth key, or start tailscaled.
+
+Tailscale remains an explicit remote-network override:
+
+    docker compose --project-name mypeople --env-file .env -f compose.volume-backed.yml -f compose.tailscale.yml up -d
+
+Only use that second file when remote access is intentionally configured.
+Alternatively, cross-host nodes can use explicit UPSTREAM_QUEUE_URL,
+UPSTREAM_QUEUE_SECRET, and TTYD_PUBLIC_URL values with a LAN, VPN, or
+authenticated reverse proxy. The desktop launcher always uses the local
+Compose file alone.
+
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Preserved containers, images, backups, and restore-test volumes are cleaned only in a separate human-approved operation.
 
 Cloudflare memory remains disabled until the Docker migration, restore drill, desktop-launcher recovery, and rollback rehearsal all pass.
@@ -401,17 +415,19 @@ OpenAI API, or Workers AI model. Usage is still reported as `not_measured`
 unless provider telemetry proves otherwise. The model-token impact comes only
 from claims embedded in a worker prompt and is bounded to three short claims.
 
-## Voice dictation
+## Windows dictation
 
-MyPeople exposes a compact microphone on operational surfaces without requiring an API key or paid transcription model.
+MyPeople does not request microphone permission, upload audio, run a
+transcription model, or expose a browser microphone control.
 
-1. Focus a text field or open the intended terminal.
-2. Click the microphone or press `Ctrl + Windows`.
-3. Animated bars indicate listening.
-4. Speak; final text is inserted directly.
-5. Trigger the control again to stop.
+1. Focus the intended text field or writable terminal.
+2. Press **Win + H**.
+3. Speak and let Windows insert the recognized text.
+4. Review the text before sending it or pressing Enter.
 
-Terminal dictation pastes text but never sends Enter. If Windows intercepts the shortcut or the browser denies microphone access, click the control or use `Win + H`. See [Voice Dock](VOICE-DOCK.md) for privacy and offline limitations.
+Windows owns microphone permission, language selection, transcription, and
+the dictation UI. This works in Brave and other browsers because MyPeople only
+receives the text Windows types into the focused control.
 
 ## Recommended next stage
 
