@@ -27,7 +27,15 @@ assert "$credentialRequest | & git credential fill" not in windows
 assert "docker exec -i mypeople" in windows
 assert "publish-with-credential" in windows
 assert "gh pr create" in windows
+assert "gh pr list" in windows
 assert "gh pr view" in windows
+assert "--head $result.headBranch" in windows
+assert "--state all" in windows
+assert "--limit 1" in windows
+assert "$pullRequestCandidates" in windows
+assert "$parsedPullRequests" in windows
+assert "if ($null -ne $parsedPullRequests)" in windows
+assert "headRefName,baseRefName 2>$null | Out-String" not in windows
 assert "--draft" in windows
 assert "publish-pr-complete" in windows
 assert "branch_pushed" in windows
