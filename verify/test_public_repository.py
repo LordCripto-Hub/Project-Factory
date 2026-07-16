@@ -9,8 +9,6 @@ PUBLIC_FILES = [
     ROOT / "CONTRIBUTING.md",
     ROOT / "docs" / "MINIMAL-ARCHITECTURE.md",
     ROOT / "docs" / "USER-MANUAL.md",
-    ROOT / "docs" / "VOICE-DOCK.md",
-    ROOT / "bin" / "voice-dock.js",
     ROOT / "windows" / "Start-MyPeople.ps1",
     ROOT / "windows" / "Install-MyPeopleShortcut.ps1",
 ]
@@ -19,7 +17,7 @@ PUBLIC_FILES = [
 class PublicRepositoryContract(unittest.TestCase):
     def test_public_document_names_are_english(self):
         names = {path.name for path in (ROOT / "docs").glob("*.md")}
-        self.assertEqual(names, {"MINIMAL-ARCHITECTURE.md", "USER-MANUAL.md", "VOICE-DOCK.md"})
+        self.assertEqual(names, {"MINIMAL-ARCHITECTURE.md", "USER-MANUAL.md"})
 
     def test_public_surfaces_exist_and_are_nonempty(self):
         for path in PUBLIC_FILES:

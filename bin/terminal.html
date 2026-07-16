@@ -1,4 +1,4 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MyPeople Terminal</title><link rel="stylesheet" href="/assets/mypeople-ui.css"></head><body data-terminal-agent=""><main class="terminal-shell"><div class="terminal-topbar" id="terminalLabel">Connecting to terminal…</div><iframe id="terminalFrame" title="Interactive terminal"></iframe></main><script>
 'use strict';
 (async()=>{const q=new URL(location.href).searchParams,agent=q.get('agent')||'';document.body.dataset.terminalAgent=agent;const r=await fetch('/todo/attach?agent='+encodeURIComponent(agent),{credentials:'same-origin',cache:'no-store'}),j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||'agent_unavailable');document.querySelector('#terminalLabel').textContent=agent;document.querySelector('#terminalFrame').src=j.direct})().catch(e=>{document.querySelector('#terminalLabel').textContent='Terminal unavailable · '+e.message});
-</script><script src="/assets/voice-dock.js" defer></script></body></html>
+</script></body></html>

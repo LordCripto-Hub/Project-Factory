@@ -148,9 +148,6 @@ def proof_file_path(task_id,filename):
     if not directory.startswith(root+os.sep) or not path.startswith(directory+os.sep):return None
     return path
 
-def safe_terminal_text(text):
-    return re.sub(r"[\x00-\x1f\x7f]+"," ",str(text or "")).strip()[:8000]
-
 def queue_get(path):return http_json(path,base=ENV.get("QUEUE_URL","http://127.0.0.1:9900"))
 
 def geometry():
@@ -235,9 +232,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def route_get(self,head=False):
         u=urllib.parse.urlparse(self.path);p=u.path
         if p=="/favicon.ico":return self.send_bytes(b"",204,"image/x-icon",head=head)
-        if p=="/health":return self.json({"status":"ok","uptime":int(time.time()-START),"build":max((int(os.path.getmtime(os.path.join(ROOT,"bin",x))) for x in ("todos.html","mypeople-ui.css","voice-dock.js") if os.path.exists(os.path.join(ROOT,"bin",x))),default=0)},head=head)
+        if p=="/health":return self.json({"status":"ok","uptime":int(time.time()-START),"build":max((int(os.path.getmtime(os.path.join(ROOT,"bin",x))) for x in ("todos.html","mypeople-ui.css") if os.path.exists(os.path.join(ROOT,"bin",x))),default=0)},head=head)
         if p=="/assets/mypeople-ui.css":return self.asset("mypeople-ui.css","text/css; charset=utf-8",head)
-        if p=="/assets/voice-dock.js":return self.asset("voice-dock.js","application/javascript; charset=utf-8",head)
         if p in ("/","/todos"):return self.page("todos.html",head)
         if p=="/wall":return self.page("wall.html",head)
         if p=="/terminal-graph":return self.page("terminal-graph.html",head)
@@ -295,7 +291,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p=="/todo/comment":return self.comment(kind,body)
         if p=="/todo/status":return self.status(kind,body)
         if p=="/todo/proof":return self.proof(kind,body,raw)
-        if p=="/voice/paste":return self.voice_paste(kind,body)
         if p=="/todo/owner":return self.owner(kind,body)
         if p=="/nightwatch/inbound":return self.inbound(kind,body)
         if p=="/nightwatch/outbound":return self.outbound(kind,body)
@@ -406,16 +401,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             label=filename or (os.path.basename(urllib.parse.urlparse(url).path) if url else ("evidence.txt" if k=="text" else "reference.url"))
             meta=proof_metadata(audit,label,ctype or ("text/plain" if k=="text" else "text/uri-list" if k=="link" else "application/octet-stream"),by)
             pr={"id":secrets.token_hex(8),"kind":k,"url":url if k!="text" else "","body":body,"ts":time.time(),**meta};t["proofs"].append(pr);t["updated"]=time.time();save_board(b);return self.json({"ok":True,"proof":pr})
-    def voice_paste(self,kind,d):
-        aid=str(d.get("agent","") or "");text=safe_terminal_text(d.get("text",""))
-        if not text:return self.json({"ok":False,"error":"text_required"},400)
-        try:h,s,t=parse_agent_id(aid);target=f"mc-{s}:{t}"
-        except Exception:return self.json({"ok":False,"error":"invalid_agent"},400)
-        record=roster_map().get(aid,{})
-        if h!=HOST_ID or record.get("state")!="alive" or record.get("retired") or not window_exists(target):return self.json({"ok":False,"error":"agent_unavailable"},404)
-        try:run_tmux(["set-buffer","--",text]);run_tmux(["paste-buffer","-d","-t",target])
-        except Exception as e:return self.json({"ok":False,"error":"terminal_paste_failed","detail":str(e)},502)
-        return self.json({"ok":True,"chars":len(text)})
     def owner(self,kind,d):
         if kind!="machine" or d.get("by")!=BOSS_FULL:return self.json({"ok":False,"error":"boss_only"},403)
         action=d.get("action");tid=d.get("task_id","");aid=d.get("agent_id","")

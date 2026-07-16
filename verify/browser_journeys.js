@@ -128,72 +128,6 @@ async function liveCore(page) {
   await saveShot(page, 'live-core');
 }
 
-async function voiceMock(page) {
-  await page.addInitScript(() => {
-    class FakeSpeechRecognition {
-      constructor() {
-        window.__voiceRecognition = this;
-        this.started = false;
-      }
-      start() {
-        this.started = true;
-        window.__voiceStarts = (window.__voiceStarts || 0) + 1;
-        if (this.onstart) this.onstart();
-      }
-      stop() {
-        this.started = false;
-        if (this.onend) this.onend();
-      }
-      emit(text) {
-        const result = [{ transcript: text }];
-        result.isFinal = true;
-        if (this.onresult) this.onresult({ resultIndex: 0, results: [result] });
-      }
-    }
-    window.SpeechRecognition = FakeSpeechRecognition;
-    window.webkitSpeechRecognition = FakeSpeechRecognition;
-  });
-
-  await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.voice-dock__trigger');
-  const beforeTasks = (await board(page)).order.length;
-  await page.fill('#taskInput', 'start');
-  await page.focus('#taskInput');
-  await page.click('.voice-dock__trigger');
-  await page.waitForSelector('.voice-dock.listening');
-  await page.evaluate(text => window.__voiceRecognition.emit(text), 'native voice test');
-  await page.waitForFunction(() => document.querySelector('#taskInput').value === 'start native voice test');
-  await expect((await board(page)).order.length === beforeTasks, 'dictation submitted the task');
-
-  await page.click('.voice-dock__trigger');
-  const startsBefore = await page.evaluate(() => window.__voiceStarts || 0);
-  await page.evaluate(() => {
-    const event = () => new KeyboardEvent('keydown', { ctrlKey: true, metaKey: true, bubbles: true });
-    document.dispatchEvent(event());
-    document.dispatchEvent(event());
-  });
-  await expect(await page.locator('.voice-dock__trigger').getAttribute('aria-pressed') === 'true', 'Ctrl+Windows did not start dictation');
-  await expect(await page.evaluate(() => window.__voiceStarts) === startsBefore + 1, 'shortcut latch toggled twice');
-  await page.evaluate(() => {
-    document.dispatchEvent(new KeyboardEvent('keyup', { ctrlKey: false, metaKey: false, bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, metaKey: true, bubbles: true }));
-  });
-  await expect(await page.locator('.voice-dock__trigger').getAttribute('aria-pressed') === 'false', 'second Ctrl+Windows chord did not stop dictation');
-
-  let pasted = null;
-  await page.route('**/voice/paste', async route => {
-    pasted = JSON.parse(route.request().postData() || '{}');
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
-  });
-  await page.evaluate(() => { document.body.dataset.terminalAgent = 'verify-host/main:eng-1'; });
-  await page.click('.voice-dock__trigger');
-  await page.evaluate(text => window.__voiceRecognition.emit(text), 'safe echo');
-  await page.waitForFunction(() => document.querySelector('.voice-dock__hint').textContent.includes('Text inserted'));
-  await expect(pasted && pasted.agent === 'verify-host/main:eng-1', 'terminal target missing');
-  await expect(pasted.text === 'safe echo' && !/[\r\n]/.test(pasted.text), 'terminal paste changed or submitted text');
-  await page.click('.voice-dock__trigger');
-  await saveShot(page, 'voice-mock');
-}
 async function sandboxSuite(page) {
   const s = manifest.sandbox || {};
   const taskIds = s.taskIds || [];
@@ -255,7 +189,6 @@ async function sandboxSuite(page) {
   await pop.waitForURL(url => !url.toString().endsWith('about:blank') && url.toString().includes('/todo/terminal?agent='), { timeout: 5000 });
   await pop.waitForSelector('#terminalFrame');
   await pop.waitForFunction(() => document.querySelector('#terminalFrame')?.src.includes('?arg=-t&arg='));
-  await expect(await pop.locator('.voice-dock').count() === 1, 'terminal Voice Dock missing');
   await pop.close();
   await closeCard(page);
 
@@ -364,8 +297,6 @@ async function sandboxSuite(page) {
       await liveCore(page);
     } else if (scenario === 'sandbox_suite') {
       await sandboxSuite(page);
-    } else if (scenario === 'voice_mock') {
-      await voiceMock(page);
     } else {
       throw new Error(`unknown scenario: ${scenario}`);
     }
