@@ -18,7 +18,8 @@ status` reports a stored session while a bounded `codex exec` probe returns
 
 ## Chosen Approach
 
-The launcher will support two explicit outcomes after Docker and bounded memory
+The launcher will establish a provider-launch gate before the runtime supervisor
+can start, then support two explicit outcomes after Docker and bounded memory
 rehydration:
 
 - **Ready:** the configured provider profile activates and passes its bounded
@@ -36,17 +37,21 @@ stored provider profile remains an explicit operator action through
 ## Startup Flow
 
 1. Validate or start Docker Desktop.
-2. Start or recreate the pinned volume-backed Compose deployment.
-3. Rehydrate the bounded memory credential state. Memory cleanup or secret
+2. Establish the provider-launch gate before container startup. The pinned
+   deployment runs a profile-scoped, networkless helper with access only to the
+   runtime volume. The legacy fallback copies the same marker into the stopped
+   container before `docker start`.
+3. Start or recreate the pinned volume-backed Compose deployment.
+4. Rehydrate the bounded memory credential state. Memory cleanup or secret
    boundary failures remain fatal.
-4. Resolve the configured global provider profile.
-5. Attempt profile activation and the real bounded runtime probe inside Docker.
-6. On success, run `mp providers-resume` before `mypeople up --detach`.
-7. On missing profile or provider failure, run `mp providers-pause` with a
+5. Resolve the configured global provider profile.
+6. Attempt profile activation and the real bounded runtime probe inside Docker.
+7. On success, run `mp providers-resume` before `mypeople up --detach`.
+8. On missing profile or provider failure, run `mp providers-pause` with a
    non-secret reason before `mypeople up --detach`.
-8. In both outcomes, require Priorities, HUD, and terminal health.
-9. Require Boss and Nightwatch only in the Ready outcome.
-10. Open Priorities. In degraded mode, also show a concise warning in
+9. In both outcomes, require Priorities, HUD, and terminal health.
+10. Require Boss and Nightwatch only in the Ready outcome.
+11. Open Priorities. In degraded mode, also show a concise warning in
     interactive launches and print it in non-interactive launches.
 
 ## Error And State Contract
@@ -59,6 +64,8 @@ stored provider profile remains an explicit operator action through
   or raw HTTP response bodies.
 - Degraded startup does not kill already-running agents, change bindings, copy
   credentials, or revive new agents.
+- The pre-start gate prevents Boss or Nightwatch from being revived during the
+  provider validation window; pausing only after Compose startup is forbidden.
 - A later successful launcher run removes the pause marker and restores normal
   Boss/Nightwatch startup.
 - The desktop shortcut stays hidden and continues to open

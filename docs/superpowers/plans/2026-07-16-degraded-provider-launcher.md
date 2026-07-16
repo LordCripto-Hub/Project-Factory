@@ -4,7 +4,7 @@
 
 **Goal:** Make the Windows one-click launcher keep Priorities, HUD, and the terminal available when the configured provider cannot be validated, while pausing new agent launches safely.
 
-**Architecture:** Keep Docker, Compose, memory rehydration, and control-plane health as fatal gates. Convert only the provider phase into an explicit Ready/Ready-degraded decision, drive the existing `mp providers-resume` or `mp providers-pause` control, and condition the Boss/Nightwatch gate on provider readiness. No new dependency or credential mechanism is needed.
+**Architecture:** Keep Docker, Compose, memory rehydration, and control-plane health as fatal gates. Establish a durable provider-launch pause before the runtime supervisor can start, convert only the provider phase into an explicit Ready/Ready-degraded decision, drive the existing `mp providers-resume` or `mp providers-pause` control, and condition the Boss/Nightwatch gate on provider readiness. No new dependency or credential mechanism is needed.
 
 **Tech Stack:** Windows PowerShell 5.1, Docker Desktop/Compose v2, existing MyPeople `mp` provider pause/resume commands, Python static contracts.
 
@@ -325,3 +325,16 @@ gh pr view --repo LordCripto-Hub/Project-Factory --json state,mergeable,mergeSta
 ```
 
 Expected: `mergeable: MERGEABLE` and no failing required checks before merge.
+
+### Review correction: close the pre-validation launch race
+
+Independent review found that starting Compose before writing the durable pause
+marker allowed `boss-supervisor.sh` to revive an agent during provider
+validation. The corrected implementation must:
+
+- add a profile-scoped `provider-launch-gate` helper to Compose;
+- give the helper no network and only the `mypeople-run` volume;
+- run the helper before the pinned deployment starts;
+- copy an equivalent marker before `docker start` in the legacy fallback;
+- prove ordering in `verify/test_windows_launcher.py`; and
+- run a real pause/status/resume helper smoke before installation.

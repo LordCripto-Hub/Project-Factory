@@ -67,6 +67,28 @@ function Wait-Until([scriptblock]$Probe, [int]$TimeoutSeconds, [string]$Descript
     throw "Timeout while waiting for $Description ($TimeoutSeconds s)."
 }
 
+function Set-LegacyProviderLaunchGate {
+    param([Parameter(Mandatory)][string]$Container)
+    $temporary = Join-Path $env:TEMP ("mypeople-provider-launch-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    $record = [ordered]@{
+        schemaVersion = 1
+        paused = $true
+        reason = 'launcher_bootstrap'
+        pausedAt = [DateTime]::UtcNow.ToString('o')
+    }
+    try {
+        [IO.File]::WriteAllText(
+            $temporary,
+            (($record | ConvertTo-Json -Compress) + [Environment]::NewLine),
+            [Text.UTF8Encoding]::new($false)
+        )
+        & docker cp $temporary "${Container}:/home/mp/mypeople/run/provider-launch.paused" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to establish the legacy provider launch gate.' }
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
 try {
     Write-LauncherLog 'START one-click launcher'
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -93,6 +115,9 @@ try {
     }
 
     if ($hasCompose -and $hasEnvironment) {
+        Write-LauncherLog 'Establish provider launch gate before pinned deployment startup'
+        & docker compose --project-name mypeople --env-file $environmentPath -f $composePath run --rm --no-deps provider-launch-gate | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to establish the provider launch gate.' }
         Write-LauncherLog 'docker compose pinned deployment up'
         & docker compose --project-name mypeople --env-file $environmentPath -f $composePath up -d
         if ($LASTEXITCODE -ne 0) { throw 'Pinned docker compose up failed.' }
@@ -101,6 +126,7 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw 'The mypeople container and pinned deployment manifest are both missing.'
         }
+        Set-LegacyProviderLaunchGate -Container 'mypeople'
         $running = (& docker inspect -f '{{.State.Running}}' mypeople 2>$null).Trim()
         if ($running -ne 'true') {
             Write-LauncherLog 'docker start mypeople'

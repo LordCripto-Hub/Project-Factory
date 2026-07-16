@@ -63,6 +63,27 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertLess(provider_gate, agent_wait)
         self.assertLess(agent_wait, browser_open)
 
+    def test_provider_launch_gate_precedes_every_container_start(self):
+        launcher = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(
+            encoding="utf-8"
+        )
+        compose = (ROOT / "docker" / "compose.volume-backed.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("provider-launch-gate:", compose)
+        self.assertIn('profiles: ["launcher"]', compose)
+        self.assertIn("network_mode: none", compose)
+        self.assertIn("provider-launch-gate", launcher)
+        self.assertIn("Set-LegacyProviderLaunchGate", launcher)
+
+        pinned_gate = launcher.index("run --rm --no-deps provider-launch-gate")
+        pinned_start = launcher.index("docker compose pinned deployment up")
+        legacy_gate = launcher.index("Set-LegacyProviderLaunchGate -Container 'mypeople'")
+        legacy_start = launcher.index("docker start mypeople")
+        self.assertLess(pinned_gate, pinned_start)
+        self.assertLess(legacy_gate, legacy_start)
+
     def test_launcher_uses_dpapi_to_tmpfs_memory_rehydration(self):
         text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
         self.assertIn("MyPeople.Memory.psm1", text)
