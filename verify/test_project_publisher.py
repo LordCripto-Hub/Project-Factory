@@ -8,6 +8,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -138,6 +139,15 @@ class ProjectPublisherContract(unittest.TestCase):
         )
         return profiles
 
+    def broker_environment(self, root: pathlib.Path):
+        askpass = root / "askpass"
+        askpass.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        askpass.chmod(0o700)
+        return mock.patch.dict(self.module.os.environ, {
+            "GIT_ASKPASS": str(askpass),
+            "GIT_TERMINAL_PROMPT": "0",
+        })
+
     def test_only_live_master_boss_can_approve_review_with_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -182,14 +192,15 @@ class ProjectPublisherContract(unittest.TestCase):
             approval = self.create(root)
             profiles = self.save_profile(root)
             runner = GitRunner()
-            result = self.module.publish(
-                approval["approvalId"],
-                approvals_dir=str(root / "approvals"),
-                profiles_dir=str(profiles),
-                runner=runner,
-                now=1100.0,
-                execute=True,
-            )
+            with self.broker_environment(root):
+                result = self.module.publish(
+                    approval["approvalId"],
+                    approvals_dir=str(root / "approvals"),
+                    profiles_dir=str(profiles),
+                    runner=runner,
+                    now=1100.0,
+                    execute=True,
+                )
             expected = [
                 "git", "-C", str(root / "workspace"), "push", "--porcelain",
                 "origin", f"{COMMIT}:refs/heads/main",
@@ -207,6 +218,34 @@ class ProjectPublisherContract(unittest.TestCase):
                     now=1101.0,
                     execute=True,
                 )
+
+    def test_missing_credential_broker_preserves_pending_approval(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            approval = self.create(root)
+            profiles = self.save_profile(root)
+            runner = GitRunner()
+            with mock.patch.dict(self.module.os.environ, {
+                "GIT_ASKPASS": "",
+                "GIT_TERMINAL_PROMPT": "",
+            }), self.assertRaisesRegex(
+                self.module.PublisherError, "Windows credential bridge"
+            ):
+                self.module.publish(
+                    approval["approvalId"],
+                    approvals_dir=str(root / "approvals"),
+                    profiles_dir=str(profiles),
+                    runner=runner,
+                    now=1100.0,
+                    execute=True,
+                )
+            saved = json.loads(
+                (root / "approvals" / (approval["approvalId"] + ".json")).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(saved["status"], "pending")
+            self.assertFalse(any("push" in call for call in runner.calls))
 
     def test_expired_dirty_or_mismatched_state_never_pushes(self):
         cases = (
@@ -240,4 +279,3 @@ if __name__ == "__main__":
     if not result.wasSuccessful():
         raise SystemExit(1)
     print("PASS Boss-authorized single-use project publisher contract")
-

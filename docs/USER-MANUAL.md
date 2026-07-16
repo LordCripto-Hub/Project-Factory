@@ -231,8 +231,8 @@ mp approve-publish <task-id> --project project-factory --commit <40-character-sh
 # Safe validation: checks the ledger and Git state without network mutation.
 mp publish <approval-id> --check
 
-# Consumes the approval once and pushes only the approved object.
-mp publish <approval-id>
+# This direct command is reserved for the credential bridge. Running it in a
+# regular Boss or worker shell is rejected and leaves the approval pending.
 mp publish-status <approval-id>
 ```
 

@@ -210,6 +210,16 @@ def _append_receipt(root: str, record: dict) -> None:
     os.chmod(path, 0o600)
 
 
+def _credential_broker_ready() -> bool:
+    askpass = os.environ.get("GIT_ASKPASS", "")
+    return bool(
+        askpass
+        and os.path.isfile(askpass)
+        and os.access(askpass, os.X_OK)
+        and os.environ.get("GIT_TERMINAL_PROMPT") == "0"
+    )
+
+
 def publish(
     approval_id: str,
     *,
@@ -234,6 +244,11 @@ def publish(
         _preflight(record, profile, runner)
         if not execute:
             return {**record, "status": "validated", "validatedAt": current}
+        if not _credential_broker_ready():
+            raise PublisherError(
+                "publication requires the Windows credential bridge; "
+                "the approval remains pending"
+            )
         record["status"] = "publishing"
         record["publishingAt"] = current
         atomic_json(path, record, mode=0o600)
