@@ -380,6 +380,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         with STORE_LOCK:
             b=load_board();t=b["tasks"].get(tid)
             if not t:return self.json({"ok":False,"error":"unknown_task"},404)
+            if "expected_updated" in d and float(d["expected_updated"]) != float(t.get("updated",0)):
+                return self.json({"ok":False,"error":"stale_task_version"},409)
             old=t["state"];verified=transition_verified(old,state,d.get("verified"),t.get("verified",False));err=done_transition_error(t,state,verified)
             if err:return self.json({"ok":False,"error":err},409)
             t["state"]=state;t["verified"]=verified;t["updated"]=time.time();self.close_reopen(t,old,state,d.get("by",d.get("actor","")));save_board(b)

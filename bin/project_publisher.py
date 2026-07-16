@@ -315,6 +315,7 @@ def approve_runtime(
             "state": "working",
             "verified": False,
             "by": actor,
+            "expected_updated": task.get("updated"),
         }, base=todo_base, token=ENV.get("QUEUE_SECRET", ""))
         if isinstance(result, dict) and result.get("ok") is False:
             raise RuntimeError("todo status update was rejected")
