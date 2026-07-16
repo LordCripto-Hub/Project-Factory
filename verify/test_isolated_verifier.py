@@ -104,6 +104,17 @@ class IsolatedVerifierContract(unittest.TestCase):
             "MYPEOPLE_MEMORY_TOKEN",
         ):
             self.assertIn(name, text)
+        self.assertNotIn('cp -a "$SOURCE/." "$ROOT/"', text)
+        for excluded in (
+            "--exclude=.env",
+            "--exclude=run",
+            "--exclude=status",
+            "--exclude=todos",
+            "--exclude=recordings",
+            "--exclude=.codex",
+            "--exclude=.claude",
+        ):
+            self.assertIn(excluded, text)
 
     def test_core_owner_fixtures_use_a_synthetic_memory_disabled_project(self):
         text = self.read("verify/core_verify.py")

@@ -39,7 +39,28 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$ROOT" "$EVIDENCE" "$VERIFY_HOME"
-cp -a "$SOURCE/." "$ROOT/"
+if ! command -v tar >/dev/null 2>&1; then
+  echo "The isolated verifier image must provide tar." >&2
+  exit 125
+fi
+if ! tar -C "$SOURCE" \
+  --exclude=.git \
+  --exclude=.env \
+  --exclude=.env.* \
+  --exclude=.codex \
+  --exclude=.claude \
+  --exclude=run \
+  --exclude=status \
+  --exclude=todos \
+  --exclude=recordings \
+  --exclude=verify/node_modules \
+  --exclude=verify/screenshots \
+  --exclude=verify/videos \
+  --exclude=memory-gateway/node_modules \
+  -cf - . | tar -C "$ROOT" -xf -; then
+  echo "Unable to copy the sanitized verifier source tree." >&2
+  exit 125
+fi
 for relative in verify/node_modules memory-gateway/node_modules; do
   packaged="/home/mp/mypeople/$relative"
   target="$ROOT/$relative"
