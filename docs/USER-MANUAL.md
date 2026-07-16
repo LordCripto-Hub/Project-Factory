@@ -59,6 +59,25 @@ docker exec -it mypeople tmux attach -t mc-nightwatch
 
 Detach without stopping the session with `Ctrl+B`, then `D`.
 
+## Durable control queue
+
+Control commands are persisted in `run/control-queue.json` inside the durable
+runtime volume. A restart automatically preserves commands that were still
+`queued`. Commands already handed to a client but lacking a result become
+`uncertain`; they are never replayed automatically because `send`, `answer`,
+`spawn`, `kill`, and `revive` can have side effects.
+
+Inspect or explicitly retry one queue command:
+
+```bash
+mp queue-status <queue-task-id>
+mp queue-retry <queue-task-id>
+```
+
+Only `failed` or `uncertain` commands are retryable. The journal is private,
+atomic, bounded to active work plus the newest 500 terminal records, and stores
+no provider or Git credential.
+
 ## Switching models
 
 Boss to Sol:
@@ -299,6 +318,9 @@ never recorded.
 - Ports are currently published on `0.0.0.0`; port 7681 allows terminal writes.
 - The complete verifier creates temporary cards; run it without active work or in an isolated environment.
 - The board Git exporter may quarantine small snapshots during heavy test churn; review them before treating the exporter as backup.
+- The board Git exporter defaults to `todos/board-backup/` inside the durable
+  `mypeople-todos` volume. An explicit `EXPORT_REPO` may override it for an
+  operator-controlled external target.
 - Preserved migration containers, images, backups, and restore-test volumes require an explicit cleanup review; startup never removes them.
 
 ## Technical verification

@@ -546,6 +546,14 @@ def publish_pr_complete(ns):
         raise SystemExit(str(error)) from error
     print(json.dumps(record,sort_keys=True))
 
+def queue_retry(ns):
+    result=http_json("/task/retry","POST",{"task_id":ns.task_id})
+    print(json.dumps(result,sort_keys=True))
+
+def queue_task_status(ns):
+    result=http_json("/task/"+urllib.parse.quote(ns.task_id,safe=""))
+    print(json.dumps(result,sort_keys=True))
+
 def parser():
     p=argparse.ArgumentParser(prog="mp"); sub=p.add_subparsers(dest="verb",required=True)
     q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="claude",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.set_defaults(fn=spawn)
@@ -561,6 +569,8 @@ def parser():
     q=sub.add_parser("publish");q.add_argument("approval_id");q.add_argument("--check",action="store_true");q.set_defaults(fn=run_publish)
     q=sub.add_parser("publish-status");q.add_argument("approval_id");q.set_defaults(fn=publish_status)
     q=sub.add_parser("publish-pr-complete");q.add_argument("approval_id");q.add_argument("--number",type=int,required=True);q.add_argument("--url",required=True);q.set_defaults(fn=publish_pr_complete)
+    q=sub.add_parser("queue-retry");q.add_argument("task_id");q.set_defaults(fn=queue_retry)
+    q=sub.add_parser("queue-status");q.add_argument("task_id");q.set_defaults(fn=queue_task_status)
     return p
 
 def main(argv=None):

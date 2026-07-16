@@ -7,8 +7,81 @@ from mpcommon import *
 HOST=ENV.get("BIND_ADDR","0.0.0.0"); PORT=int(ENV.get("HUD_PORT","9900")); TODO_PORT=int(ENV.get("TODO_PORT","9933"))
 SECRET=ENV["QUEUE_SECRET"]; DEAD=float(ENV.get("QUEUE_DEAD_AFTER","20")); START=time.time()
 CLIENTS={}; AGENTS={}; TASKS={}; BROWSER=set(); LOCK=threading.RLock()
+QUEUE_PATH=os.path.realpath(os.environ.get("QUEUE_STATE_PATH") or os.path.join(ROOT,"run","control-queue.json"))
+TASK_TYPES={"send","peek","kill","spawn","answer","revive"}
+TASK_STATUSES={"queued","delivered","done","failed","uncertain"}
+TERMINAL_TASK_STATUSES={"done","failed","uncertain"}
+TERMINAL_TASK_LIMIT=500
 
 def now():return time.time()
+
+def _valid_task(task_id, row):
+    return bool(
+        isinstance(task_id,str) and task_id
+        and isinstance(row,dict) and row.get("task_id")==task_id
+        and row.get("type") in TASK_TYPES
+        and row.get("status") in TASK_STATUSES
+        and isinstance(row.get("target_agent"),str)
+        and isinstance(row.get("payload"),dict)
+    )
+
+def persist_tasks(path=QUEUE_PATH,timestamp=None):
+    current=now() if timestamp is None else float(timestamp)
+    with LOCK:
+        active=[];terminal=[]
+        for task_id,row in TASKS.items():
+            if not _valid_task(task_id,row):continue
+            (terminal if row.get("status") in TERMINAL_TASK_STATUSES else active).append((task_id,row))
+        terminal.sort(key=lambda item:float(item[1].get("completed_at") or item[1].get("recovered_at") or item[1].get("created_at") or 0),reverse=True)
+        selected=active+terminal[:TERMINAL_TASK_LIMIT]
+        TASKS.clear();TASKS.update((task_id,dict(row)) for task_id,row in selected)
+        atomic_json(path,{"schemaVersion":1,"updatedAt":current,"tasks":TASKS},mode=0o600)
+
+def load_tasks(path=QUEUE_PATH,timestamp=None):
+    current=now() if timestamp is None else float(timestamp)
+    body=load_json(path,{})
+    rows=body.get("tasks",{}) if isinstance(body,dict) and body.get("schemaVersion")==1 else {}
+    recovered={};changed=False
+    for task_id,row in rows.items() if isinstance(rows,dict) else ():
+        if not _valid_task(task_id,row):continue
+        item=dict(row)
+        if item.get("status")=="delivered":
+            item.update(status="uncertain",recovery="server_restart_after_delivery",recovered_at=current)
+            changed=True
+        recovered[task_id]=item
+    with LOCK:TASKS.clear();TASKS.update(recovered)
+    if changed:persist_tasks(path,current)
+    return {task_id:dict(row) for task_id,row in TASKS.items()}
+
+def claim_tasks_for_host(host,path=QUEUE_PATH,timestamp=None):
+    current=now() if timestamp is None else float(timestamp);out=[]
+    with LOCK:
+        for row in TASKS.values():
+            if row.get("status")=="queued" and row.get("target_agent","").split("/",1)[0]==host:
+                row.update(status="delivered",delivered_at=current,attempt=max(1,int(row.get("attempt") or 0)))
+                out.append(dict(row))
+        if out:persist_tasks(path,current)
+    return out
+
+def complete_task(task_id,ok,result,path=QUEUE_PATH,timestamp=None):
+    current=now() if timestamp is None else float(timestamp)
+    with LOCK:
+        if task_id not in TASKS:raise ValueError("unknown task")
+        TASKS[task_id].update(status="done" if ok else "failed",ok=bool(ok),result=result,completed_at=current)
+        persist_tasks(path,current)
+        return dict(TASKS[task_id])
+
+def retry_task(task_id,path=QUEUE_PATH,timestamp=None):
+    current=now() if timestamp is None else float(timestamp)
+    with LOCK:
+        row=TASKS.get(task_id)
+        if not row:raise ValueError("unknown task")
+        if row.get("status") not in {"failed","uncertain"}:raise ValueError("task is not retryable")
+        for key in ("delivered_at","completed_at","recovered_at","recovery","ok","result"):
+            row.pop(key,None)
+        row.update(status="queued",retried_at=current,attempt=max(1,int(row.get("attempt") or 1))+1)
+        persist_tasks(path,current)
+        return dict(row)
 def clean():
     while True:
         time.sleep(2)
@@ -112,10 +185,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json(rows,head=head)
         if path=="/task/poll":
             host=urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("hostname",[""])[0];out=[]
-            with LOCK:
-                for t in TASKS.values():
-                    if t.get("status")=="queued" and t.get("target_agent","").split("/",1)[0]==host:
-                        t["status"]="delivered";t["delivered_at"]=now();out.append(dict(t))
+            out=claim_tasks_for_host(host)
             return self.json(out,head=head)
         if path.startswith("/task/"):
             tid=path.rsplit("/",1)[-1]
@@ -152,13 +222,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             typ=b.get("type") or b.get("action")
             if typ not in ("send","peek","kill","spawn","answer","revive"):return self.json({"ok":False,"error":"invalid_type"},400)
             tid=secrets.token_hex(12);t={"task_id":tid,"type":typ,"target_agent":b.get("target_agent",""),"payload":b.get("payload",{}),"status":"queued","created_at":now()}
-            with LOCK:TASKS[tid]=t
+            with LOCK:TASKS[tid]=t;persist_tasks()
             return self.json({"task_id":tid})
         if path=="/task/result":
             tid=b.get("task_id","")
-            with LOCK:
-                if tid in TASKS:TASKS[tid].update(status="done",ok=bool(b.get("ok")),result=b.get("result"),completed_at=now())
+            try:complete_task(tid,bool(b.get("ok")),b.get("result"))
+            except ValueError:return self.json({"ok":False,"error":"unknown_task"},404)
             return self.json({"ok":True})
+        if path=="/task/retry":
+            try:return self.json({"ok":True,"task":retry_task(str(b.get("task_id") or ""))})
+            except ValueError as error:return self.json({"ok":False,"error":str(error)},400)
         if path=="/revive":
             aid=b.get("agent_id","")
             try:
@@ -169,4 +242,5 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__=="__main__":
     os.makedirs(os.path.join(ROOT,"run"),exist_ok=True)
+    load_tasks()
     http.server.ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()

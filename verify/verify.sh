@@ -20,6 +20,8 @@ if [[ ! -d "$VERIFY/node_modules/playwright" ]]; then
 fi
 (cd "$VERIFY" && npx playwright install chromium webkit >/dev/null)
 python3 "$VERIFY/test_task_project_fields.py"
+python3 "$VERIFY/test_durable_control_queue.py"
+python3 "$VERIFY/test_board_export_persistence.py"
 python3 "$VERIFY/test_project_context.py"
 python3 "$VERIFY/test_memory_gateway.py"
 python3 "$VERIFY/test_memory_profile.py"

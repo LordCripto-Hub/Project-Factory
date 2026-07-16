@@ -52,6 +52,11 @@ MyPeople uses a pinned local image plus eight named volumes:
 - `mypeople-recordings` for terminal recordings.
 - `mypeople-workspaces` for managed Git working trees, local commits, and branches.
 
+The control queue journal also lives in `mypeople-run`. Queued commands survive
+a queue-server restart. Commands with an unknown post-delivery outcome are
+quarantined as `uncertain` and require explicit `mp queue-retry`; MyPeople does
+not automatically duplicate side effects.
+
 The migration is dry-run-first:
 
 ```powershell
