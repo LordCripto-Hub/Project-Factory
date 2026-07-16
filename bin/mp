@@ -404,6 +404,7 @@ def spawn(ns):
 def notify_agent(agent_id, message):
     aid=full_agent_id(agent_id); host,_,_=parse_agent_id(aid)
     if host==ENV.get("HOST_ID"):
+        write_status(aid,"working",activity_event="direct_send")
         if not tmux_send_message(tmux_target(aid),message):
             raise SystemExit(f"unable to notify {aid}")
     else:
@@ -443,6 +444,7 @@ def complete(ns):
     for url in urls:http_json("/todo/proof","POST",{"task_id":task_id,"kind":"link","url":url,"by":actor})
     for file_path in files:http_multipart("/todo/proof",{"task_id":task_id,"by":actor},file_path)
     http_json("/todo/status","POST",{"task_id":task_id,"state":"review","verified":False,"by":actor})
+    write_status(actor,"idle",summary,activity_event="worker_handoff")
     notify_agent(boss,f"[worker handoff] {task_id} is ready for review from {actor}: {summary}")
     print(f"{task_id} -> review")
 

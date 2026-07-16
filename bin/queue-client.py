@@ -30,10 +30,10 @@ def live_roster():
                 # status forever in the HUD.
                 status=load_json(status_path(aid),{})
                 if status.get("status")=="starting":
-                    write_status(aid,"ready",status.get("summary",""),
+                    write_status(aid,"idle",status.get("summary",""),activity_event="bootstrap_ready",
                                  boss_id=status.get("boss_id",row.get("boss_id","")),
                                  backend=status.get("backend",row.get("backend","")))
-                    row["status"]="ready"
+                    row["status"]="idle"
                 elif status.get("status"):
                     row["status"]=status["status"]
                 if status.get("summary"):
@@ -50,7 +50,9 @@ def heartbeat():
 
 def execute(task):
     typ=task.get("type") or task.get("action");aid=task.get("target_agent","");p=task.get("payload") or {}
-    if typ=="send":return tmux_send_message(tmux_target(aid),p.get("message")),"delivered"
+    if typ=="send":
+        write_status(aid,"working",activity_event="queue_send")
+        return tmux_send_message(tmux_target(aid),p.get("message")),"delivered"
     if typ=="peek":
         x=run_tmux(["capture-pane","-p","-S","-200","-t",tmux_target(aid)],capture=True);return True,x.stdout
     if typ=="kill":

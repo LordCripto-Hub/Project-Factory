@@ -143,9 +143,12 @@ def trust_claude(cwd: str):
 def status_path(agent_id: str):
     _, s, t = parse_agent_id(agent_id); return os.path.join(os.path.realpath(ENV.get("STATUS_DIR", os.path.join(ROOT, "status"))), f"mc-{s}", t + ".json")
 
+ACTIVITY_STATES={"starting","working","idle","blocked"}
+
 def write_status(agent_id, status, summary="", **extra):
+    if status not in ACTIVITY_STATES:raise ValueError(f"invalid activity status: {status}")
     old = load_json(status_path(agent_id), {})
-    old.update(status=status, summary=summary or old.get("summary", ""), timestamp=time.time(),
+    old.update(status=status, summary=summary or old.get("summary", ""), timestamp=time.time(),activity_updated_at=time.time(),
                session_id=old.get("session_id", ""), state="alive", **extra)
     atomic_json(status_path(agent_id), old)
 

@@ -168,7 +168,7 @@ def wall_data(graph=False):
         r=rr.get(a["agent_id"],{})
         if a.get("state")!="alive" or r.get("retired"):continue
         if a.get("host")==HOST_ID and a.get("tmux_target") not in geo:continue
-        status=a.get("status","ready");display="working" if status in ("working","starting") else status if status in ("idle","blocked") else "ready"
+        status=a.get("status","idle");display=status if status in ("starting","working","idle","blocked") else "idle"
         cols,lines=geo.get(a["tmux_target"],(120,36))
         rows.append({"agent_id":a["agent_id"],"boss_id":a.get("boss_id",""),"is_master":bool(a.get("is_master")),"target":a["tmux_target"],"tmux_target":a["tmux_target"],"state":display,"host":a.get("host"),"cols":cols,"rows":lines,"read_port":int(ENV.get("TTYD_RO_PORT","7682")),"write_port":int(ENV.get("TTYD_PORT","7681"))})
     rows.sort(key=lambda x:(x["state"]!="working",not x["is_master"],x["agent_id"]))
