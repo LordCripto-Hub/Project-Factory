@@ -4,6 +4,7 @@ import json, os, subprocess, time, traceback
 from mpcommon import *
 
 HOST=ENV.get("HOST_ID",os.uname().nodename.split('.')[0]); INTERVAL=float(ENV.get("HEARTBEAT_INTERVAL","3"))
+TAILSCALE_ENABLED = ENV.get("MYPEOPLE_TAILSCALE_ENABLED", "0") == "1"
 
 def reconcile_prompt_idle(aid, target, status):
     """A provider's visible composer prompt is the event that work is complete."""
@@ -14,6 +15,8 @@ def reconcile_prompt_idle(aid, target, status):
         write_status(aid,"idle",activity_event="composer_prompt_ready")
 
 def tail_ip():
+    if not TAILSCALE_ENABLED:
+        return ""
     for cmd in (["tailscale","ip","-4"],["sudo","tailscale","--socket",os.path.join(ROOT,"run","tailscale-state","tailscaled.sock"),"ip","-4"]):
         try:
             p=subprocess.run(cmd,capture_output=True,text=True,timeout=5)
@@ -53,7 +56,12 @@ def live_roster():
     atomic_json(agents_path(),live);return live
 
 def heartbeat():
-    ip=tail_ip();base=f"http://{ip}:{ENV.get('TTYD_PORT','7681')}" if ip else ENV.get("TTYD_PUBLIC_URL","")
+    ip = tail_ip()
+    base = (
+        f"http://{ip}:{ENV.get('TTYD_PORT', '7681')}"
+        if ip
+        else ENV.get("TTYD_PUBLIC_URL", "")
+    )
     if any(x in base for x in ("127.0.0.1","localhost","0.0.0.0")):base=""
     http_json("/heartbeat","POST",{"hostname":HOST,"attach_base":base,"substrate_ready":True,
       "purpose":ENV.get("NODE_PURPOSE","mypeople"),"node_type":ENV.get("NODE_TYPE","system-agent"),
