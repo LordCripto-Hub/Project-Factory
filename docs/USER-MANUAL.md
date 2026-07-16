@@ -248,6 +248,23 @@ publication. Never place a token in `origin`, `.git/config`, the approval
 ledger, a priority comment, Docker Compose, or Git. Portable backups remove
 credential helper and extra-header configuration from copied Git metadata.
 
+For this private repository on Windows, the supported operator bridge reads the
+existing Git Credential Manager entry into memory and sends it over stdin only
+to the approved publisher process:
+
+```powershell
+# Validate the Boss approval without reading a credential or pushing.
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Publish-MyPeopleProject.ps1 -ApprovalId <approval-id> -CheckOnly
+
+# Consume the approval and publish the exact commit.
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Publish-MyPeopleProject.ps1 -ApprovalId <approval-id>
+```
+
+The bridge never writes or prints the credential. The transient secret exists
+only in the host process, stdin payload, publisher process, and Git askpass
+environment for the duration of that one publication. This is a governance
+boundary, not isolation from a malicious same-user process inside the container.
+
 ## Known limitations
 
 - The transient queue is lost when its process restarts.
