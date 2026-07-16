@@ -76,6 +76,13 @@ class PublicRepositoryContract(unittest.TestCase):
             self.assertIn("providers-resume", text)
             self.assertIn("never imports another Windows login automatically", text)
 
+    def test_worker_context_isolation_is_public(self):
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(encoding="utf-8")
+        self.assertIn("TaskSpec-owned working directory", manual)
+        self.assertIn("never modifies", manual)
+        self.assertIn("the project's `AGENTS.md` or `CLAUDE.md`", manual)
+        self.assertIn("role contract SHA-256", manual)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

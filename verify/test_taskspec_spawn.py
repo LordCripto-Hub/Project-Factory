@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.machinery
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -40,13 +41,98 @@ def namespace(cwd, owner="task-1"):
 class TaskSpecSpawnContract(unittest.TestCase):
     def setUp(self):
         self.mp = load_runtime()
-        self.mp.ensure_worker_doctrine = lambda _cwd: None
+        if hasattr(self.mp, "materialize_worker_contract"):
+            self.mp.materialize_worker_contract = lambda: {
+                "path": "/tmp/worker-contract.md",
+                "sha256": "a" * 64,
+                "version": "1.0.0",
+                "content": "worker contract",
+            }
         self.mp.load_roster = lambda: []
         self.mp.update_roster = lambda _rec: None
         self.mp.write_status = lambda *_args, **_kwargs: None
         self.mp.queue_register = lambda _rec: None
         self.mp.recorder = lambda *_args: None
         self.mp.shell_export = lambda _env: "true"
+
+    def write_taskspec(self, directory, working_directory):
+        path = Path(directory) / "task.json"
+        path.write_text(
+            json.dumps({"workingDirectory": str(working_directory)}),
+            encoding="utf-8",
+        )
+        return str(path)
+
+    def test_owner_cwd_is_derived_from_taskspec_and_matching_explicit_cwd_passes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp) / "workspace"
+            workspace.mkdir()
+            taskspec = self.write_taskspec(temp, workspace)
+            derived = self.mp.resolve_owner_task_context(taskspec, None)
+            explicit = self.mp.resolve_owner_task_context(taskspec, str(workspace))
+
+            self.assertEqual(derived["cwd"], os.path.realpath(workspace))
+            self.assertEqual(explicit["cwd"], os.path.realpath(workspace))
+            self.assertRegex(derived["taskspec_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_owner_cwd_rejects_conflict_missing_directory_and_malformed_spec(self):
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp) / "workspace"
+            workspace.mkdir()
+            taskspec = self.write_taskspec(temp, workspace)
+            other = Path(temp) / "other"
+            other.mkdir()
+            with self.assertRaisesRegex(
+                self.mp.TaskSpecError, "working_directory_mismatch"
+            ):
+                self.mp.resolve_owner_task_context(taskspec, str(other))
+
+            missing = self.write_taskspec(temp, Path(temp) / "missing")
+            with self.assertRaisesRegex(
+                self.mp.TaskSpecError, "working_directory_missing"
+            ):
+                self.mp.resolve_owner_task_context(missing, None)
+
+            malformed = Path(temp) / "malformed.json"
+            malformed.write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(
+                self.mp.TaskSpecError, "taskspec_runtime_invalid"
+            ):
+                self.mp.resolve_owner_task_context(str(malformed), None)
+
+            unreadable = Path(temp) / "unreadable"
+            unreadable.mkdir()
+            unreadable.chmod(0)
+            try:
+                with self.assertRaisesRegex(
+                    self.mp.TaskSpecError, "working_directory_unreadable"
+                ):
+                    self.mp.resolve_owner_task_context(
+                        self.write_taskspec(temp, unreadable), None
+                    )
+            finally:
+                unreadable.chmod(0o700)
+
+    def test_spawn_rejects_cwd_mismatch_before_tmux_creation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp) / "workspace"
+            workspace.mkdir()
+            other = Path(temp) / "other"
+            other.mkdir()
+            taskspec = self.write_taskspec(temp, workspace)
+            self.mp.compile_owner_task_spec = lambda _task_id: taskspec
+            self.mp.window_exists = lambda _target: False
+            notices = []
+            self.mp.notify_agent = lambda target, message: notices.append(
+                (target, message)
+            )
+            self.mp.run_tmux = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("tmux creation must not run")
+            )
+            with self.assertRaisesRegex(SystemExit, "working_directory_mismatch"):
+                self.mp.spawn(namespace(str(other)))
+            self.assertEqual(notices[0][0], "node-1/main:Boss")
+            self.assertIn("working_directory_mismatch", notices[0][1])
 
     def test_existing_owner_target_is_rejected_before_context_compilation(self):
         order = []

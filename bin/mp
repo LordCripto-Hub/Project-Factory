@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, json, mimetypes, os, pathlib, shlex, signal, subprocess, sys, time, uuid, urllib.request
+import argparse, hashlib, json, mimetypes, os, pathlib, shlex, signal, stat, subprocess, sys, time, uuid, urllib.request
 from mpcommon import *
 from provider_profiles import (
     codex_home,
@@ -155,19 +155,202 @@ Use `gpt-5.6-luna` for routine delegated work. Escalate deliberately to
 Do not spawn a Claude worker while Claude remains disabled.
 """
 
+WORKER_CONTRACT_VERSION = "1.0.0"
 WORKER_POLICY = """
-<!-- mypeople-worker-contract:v1 -->
-## MyPeople worker handoff
+# MyPeople owner worker contract
 
-Work only on the task in `OWNER_TASK_ID`. When implementation and checks finish,
-report them with:
+Work only on the task in `OWNER_TASK_ID`. Read the TaskSpec at
+`MYPEOPLE_TASKSPEC_PATH` before changing files. Follow the repository's own
+instructions independently; MyPeople does not modify them.
+
+Respect the TaskSpec acceptance criteria, verification commands, allowed
+actions, forbidden actions, and context limits. When implementation and checks
+finish, report them with:
 
 `mp complete "<concise summary>" --proof "<verification command and result>"`
 
 Attach visual or executable results with repeatable `--proof-file <path>` and
-`--proof-url <url>`. This command moves the task to `review` and notifies the Boss. Do not close the
-task yourself; Boss/CEO owns verification and closure.
+`--proof-url <url>`. This command moves the task to `review` and notifies
+the Boss. Do not close the task yourself; Boss/CEO owns verification and
+closure.
 """
+
+def resolve_owner_task_context(taskspec_path, requested_cwd):
+    try:
+        raw = pathlib.Path(taskspec_path).read_bytes()
+        document = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise TaskSpecError("taskspec_runtime_invalid") from error
+    if not isinstance(document, dict):
+        raise TaskSpecError("taskspec_runtime_invalid")
+    working_directory = str(document.get("workingDirectory") or "").strip()
+    if not working_directory or not os.path.isabs(working_directory):
+        raise TaskSpecError("working_directory_invalid")
+    cwd = os.path.realpath(working_directory)
+    if not os.path.isdir(cwd):
+        raise TaskSpecError("working_directory_missing")
+    if not os.access(cwd, os.R_OK | os.X_OK):
+        raise TaskSpecError("working_directory_unreadable")
+    if requested_cwd and os.path.realpath(requested_cwd) != cwd:
+        raise TaskSpecError("working_directory_mismatch")
+    return {
+        "cwd": cwd,
+        "taskspec_sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+def _open_absolute_directory_without_symlinks(path):
+    absolute = pathlib.Path(path)
+    if not absolute.is_absolute():
+        raise OSError("role storage must be absolute")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = os.open(os.path.sep, flags)
+    try:
+        for component in absolute.parts[1:]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+def _open_private_child(parent_descriptor, name):
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_descriptor)
+    except FileExistsError:
+        pass
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    child = os.open(name, flags, dir_fd=parent_descriptor)
+    os.fchmod(child, 0o700)
+    return child
+
+def _read_private_regular_file(parent_descriptor, name):
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("role contract is not a regular file")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+def _write_private_regular_file(parent_descriptor, name, content):
+    temporary = f".{name}.{os.getpid()}.{time.time_ns()}.tmp"
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = os.open(temporary, flags, 0o600, dir_fd=parent_descriptor)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+
+def materialize_worker_contract():
+    content = WORKER_POLICY.strip() + "\n"
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    isolated_override = (
+        os.environ.get("MP_VERIFY_ISOLATED") == "1"
+        and os.environ.get("MYPEOPLE_ROLE_BUNDLES_DIR")
+    )
+    if isolated_override:
+        base = pathlib.Path(isolated_override)
+        components = ("worker", digest)
+        make_base_private = True
+    else:
+        base = pathlib.Path(ROOT) / "run"
+        components = ("roles", "worker", digest)
+        make_base_private = False
+    base = pathlib.Path(os.path.abspath(base))
+    target_dir = base.joinpath(*components)
+    if os.path.commonpath((str(base), str(target_dir))) != str(base):
+        raise OSError("role contract path escaped runtime storage")
+
+    descriptor = _open_absolute_directory_without_symlinks(base)
+    try:
+        if make_base_private:
+            os.fchmod(descriptor, 0o700)
+        for component in components:
+            child = _open_private_child(descriptor, component)
+            os.close(descriptor)
+            descriptor = child
+        current = _read_private_regular_file(descriptor, "CONTRACT.md")
+        if current != content:
+            _write_private_regular_file(descriptor, "CONTRACT.md", content)
+        contract_descriptor = os.open(
+            "CONTRACT.md",
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=descriptor,
+        )
+        try:
+            if not stat.S_ISREG(os.fstat(contract_descriptor).st_mode):
+                raise OSError("role contract is not a regular file")
+            os.fchmod(contract_descriptor, 0o600)
+        finally:
+            os.close(contract_descriptor)
+    finally:
+        os.close(descriptor)
+    return {
+        "path": str(target_dir / "CONTRACT.md"),
+        "sha256": digest,
+        "version": WORKER_CONTRACT_VERSION,
+        "content": content,
+    }
+
+def mount_worker_contract(args, backend, contract):
+    mounted = list(args)
+    if backend == "codex":
+        mounted += [
+            "--config",
+            "developer_instructions=" + json.dumps(
+                contract["content"].rstrip(), ensure_ascii=False
+            ),
+        ]
+    elif backend == "claude":
+        mounted += ["--append-system-prompt-file", contract["path"]]
+    else:
+        raise ValueError(f"unsupported backend: {backend}")
+    return mounted
 
 def ensure_codex_doctrine(cwd, source=None):
     source_path = pathlib.Path(source or os.path.join(ROOT, "boss-CLAUDE.md"))
@@ -180,27 +363,6 @@ def ensure_codex_doctrine(cwd, source=None):
             return str(target)
     except FileNotFoundError:
         pass
-    temporary = target.with_name(f"{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
-    with temporary.open("w", encoding="utf-8") as handle:
-        handle.write(rendered)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, target)
-    return str(target)
-
-def ensure_worker_doctrine(cwd):
-    target_dir = pathlib.Path(os.path.realpath(cwd))
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / "AGENTS.md"
-    marker = "<!-- mypeople-worker-contract:v1 -->"
-    try:
-        existing = target.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        existing = ""
-    if marker in existing:
-        return str(target)
-    rendered = (existing.rstrip() + "\n\n" if existing.strip() else "") + WORKER_POLICY.strip() + "\n"
     temporary = target.with_name(f"{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
     with temporary.open("w", encoding="utf-8") as handle:
         handle.write(rendered)
@@ -300,11 +462,20 @@ def spawn(ns):
     if ns.owner_task and target_exists:
         raise SystemExit(f"target_already_exists: {target}")
     taskspec_path = ""
+    taskspec_context = {}
+    worker_contract = None
     if ns.owner_task:
         try:
             taskspec_path = compile_owner_task_spec(ns.owner_task)
+            taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
+            worker_contract = materialize_worker_contract()
         except TaskSpecError as error:
             message = f"[taskspec] task {ns.owner_task} blocked: {error.code}. Fix the project/profile/context request and retry."
+            if boss:
+                notify_agent(boss, message)
+            raise SystemExit(message) from error
+        except OSError as error:
+            message = f"[role] task {ns.owner_task} blocked: worker_contract_unavailable. Fix runtime role storage and retry."
             if boss:
                 notify_agent(boss, message)
             raise SystemExit(message) from error
@@ -342,7 +513,12 @@ def spawn(ns):
             os.makedirs(provider_home, mode=0o700, exist_ok=True)
             os.chmod(provider_home, 0o700)
     aid, host, session, tab, cwd, boss, args = _build_launch_args(
-        aid, ns.cwd, boss, ns.master, model, ns.backend
+        aid,
+        taskspec_context.get("cwd") if ns.owner_task else ns.cwd,
+        boss,
+        ns.master,
+        model,
+        ns.backend,
     )
     if ns.backend == "codex" and ns.master:
         ensure_codex_doctrine(cwd)
@@ -350,8 +526,8 @@ def spawn(ns):
         nightwatch_source = os.path.join(cwd, "CLAUDE.md")
         if os.path.exists(nightwatch_source):
             ensure_codex_doctrine(cwd, nightwatch_source)
-    elif ns.backend == "codex" and ns.owner_task:
-        ensure_worker_doctrine(cwd)
+    if ns.owner_task:
+        args = mount_worker_contract(args, ns.backend, worker_contract)
     if ns.model is not None and ns.master is False and tab != "Nightwatch":
         pass
     launch_env={"AGENT_ID":aid,"QUEUE_URL":ENV.get("QUEUE_URL","http://127.0.0.1:9900"),"TODO_URL":os.environ.get("MYPEOPLE_TODO_URL") or os.environ.get("TODO_URL") or f"http://127.0.0.1:{ENV.get('TODO_PORT','9933')}","QUEUE_SECRET":ENV["QUEUE_SECRET"],
@@ -386,6 +562,11 @@ def spawn(ns):
          "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time())}
     if taskspec_path:
         rec["taskspec_path"] = taskspec_path
+        rec["taskspec_sha256"] = taskspec_context["taskspec_sha256"]
+    if worker_contract:
+        rec["role_contract_path"] = worker_contract["path"]
+        rec["role_contract_sha256"] = worker_contract["sha256"]
+        rec["role_contract_version"] = worker_contract["version"]
     if profile_id:
         rec["provider_profile"] = profile_id
     if ns.master: rec["summary"]="autonomous plan approve queue mp verify fire-and-forget"
@@ -401,8 +582,7 @@ def spawn(ns):
         tmux_send_message(target,f"Read {doctrine_name} and internalize the Nightwatch approve/edit/reject protocol. Reply with a concise nightwatch, CEO-equivalent, approve, WhatsApp, never-done readiness summary.")
     elif created and ns.owner_task:
         wait_for_composer(target)
-        doctrine_name = "AGENTS.md" if ns.backend == "codex" else "CLAUDE.md"
-        tmux_send_message(target,f"Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH, then read {doctrine_name}. Work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
+        tmux_send_message(target,f"Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH. The MyPeople worker contract is already mounted; also follow the repository's own instructions. Work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
     print(aid)
 
 def notify_agent(agent_id, message):

@@ -143,10 +143,13 @@ Profile switching currently uses PowerShell. HUD controls for global and per-age
 Boss normally creates workers. For an advanced owner-task test:
 
 ```powershell
-docker exec mypeople /home/mp/mypeople/bin/mp spawn main:Worker-1 --backend codex --model gpt-5.6-luna --boss main:Boss --owner-task CARD_ID --cwd /home/mp/mypeople/run/eng/Worker-1
+docker exec mypeople /home/mp/mypeople/bin/mp spawn main:Worker-1 --backend codex --model gpt-5.6-luna --boss main:Boss --owner-task CARD_ID
 ```
 
-Keep the explicit Codex backend and model while Claude is disabled.
+Omit `--cwd` for the normal path. The owner worker uses the TaskSpec-owned
+working directory from its ProjectProfile. An explicit `--cwd` is accepted only
+when it resolves to that exact directory; a mismatch fails before tmux
+creation. Keep the explicit Codex backend and model while Claude is disabled.
 
 ## One-click Windows startup
 
@@ -447,7 +450,11 @@ The release process records fresh results before publication; do not rely on an 
 - Terminal routes redirect to the local wrapper with the exact tmux target.
 - Terminal Graph uses the same native link path.
 - Heartbeats replace each host's agent set, and Wall/Graph discard nonexistent local tmux windows.
-- Owner-task Codex workers pass the trust gate and receive their handoff contract.
+- Owner workers start in the TaskSpec-owned working directory. MyPeople mounts
+  one digest-addressed runtime contract for Codex or Claude and never modifies
+  the project's `AGENTS.md` or `CLAUDE.md`.
+- Owner roster records retain the TaskSpec SHA-256, role contract SHA-256,
+  contract version, and runtime paths as compact context receipts.
 - `mp complete` requires a summary and proof, comments on the card, moves it to review with `verified=false`, and notifies Boss.
 - Workers cannot close their own cards; Boss or CEO verifies and integrates.
 
@@ -527,7 +534,7 @@ Phase A gives every owner task one explicit project contract without turning MyP
 1. Copy `examples/project-profile.example.json` to `run/project-profiles/<project-slug>.json`.
 2. Set the repository, working directory, context files, verification commands, allowed actions, forbidden actions, and limits in that local ProjectProfile.
 3. In Priorities, set **Project** to the matching slug. Add a **Context question** only when the task needs targeted durable recall.
-4. When Boss starts an owner worker, MyPeople compiles a mode-0600 TaskSpec under `run/taskspecs/` before creating the process. The worker reads `$MYPEOPLE_TASKSPEC_PATH` first.
+4. When Boss starts an owner worker, MyPeople compiles a mode-0600 TaskSpec under `run/taskspecs/` before creating the process. The worker reads `$MYPEOPLE_TASKSPEC_PATH` first, starts in its declared `workingDirectory`, and receives the same external MyPeople lifecycle contract on Codex or Claude without changing project files.
 
 No Context question means no memory process or network call. A profile with `memory.enabled=false` also makes no memory call. When recall is requested, timeout, authorization, project-isolation, response-shape, or budget failures stop worker creation and return only a typed error.
 

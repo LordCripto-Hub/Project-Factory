@@ -626,7 +626,7 @@ def assert_owner_lifecycle():
         owner_id = f"{HOST_ID}/verify-owner:Owner"
         res = run([
             str(ROOT / "bin" / "mp"), "spawn", owner_id, "--backend", "claude",
-            "--cwd", str(TMP / "owner-work"), "--boss", f"{HOST_ID}/verify:Boss", "--owner-task", fixture
+            "--cwd", str(sandbox.workspace), "--boss", f"{HOST_ID}/verify:Boss", "--owner-task", fixture
         ], env=sandbox.env(), timeout=120)
         sandbox.created_agent_ids.append(owner_id)
         deadline = time.time() + 20
@@ -642,6 +642,7 @@ def assert_owner_lifecycle():
         row = next((a for a in agents if a["agent_id"] == owner_id), None)
         check(row is not None and row.get("spawn_cmd"), "spawn_cmd missing")
         check(row.get("revive_cmd") == f"mp revive {owner_id}", "revive_cmd wrong")
+        check(row.get("cwd") == str(sandbox.workspace), "TaskSpec cwd was not enforced")
         assign_res = sandbox_api("/todo/owner", "POST", {"action": "assign", "task_id": fixture, "agent_id": owner_id, "by": f"{HOST_ID}/verify:Boss"})
         check(assign_res.get("ok") is True, "owner assign endpoint rejected")
         board = sandbox_api("/todo/board")
@@ -658,7 +659,7 @@ def assert_owner_lifecycle():
         new_owner = f"{HOST_ID}/verify-owner2:Owner2"
         run([
             str(ROOT / "bin" / "mp"), "spawn", new_owner, "--backend", "claude",
-            "--cwd", str(TMP / "owner-work2"), "--boss", f"{HOST_ID}/verify:Boss", "--owner-task", fixture
+            "--cwd", str(sandbox.workspace), "--boss", f"{HOST_ID}/verify:Boss", "--owner-task", fixture
         ], env=sandbox.env(), timeout=120)
         sandbox.created_agent_ids.append(new_owner)
         sandbox_api("/todo/owner", "POST", {"action": "replace", "task_id": fixture, "agent_id": new_owner, "by": f"{HOST_ID}/verify:Boss"})
@@ -863,7 +864,7 @@ def build_sandbox_fixtures():
     # Create owner agent and assign via real owner endpoint.
     owner_id = f"{HOST_ID}/verify-browser:Owner"
     env = sandbox.env()
-    run([str(ROOT / "bin" / "mp"), "spawn", owner_id, "--backend", "claude", "--cwd", str(TMP / "browser-owner"), "--boss", f"{HOST_ID}/verify:Boss", "--owner-task", owner_task], env=env, timeout=120)
+    run([str(ROOT / "bin" / "mp"), "spawn", owner_id, "--backend", "claude", "--cwd", str(sandbox.workspace), "--boss", f"{HOST_ID}/verify:Boss", "--owner-task", owner_task], env=env, timeout=120)
     sandbox.created_agent_ids.append(owner_id)
     deadline = time.time() + 20
     while time.time() < deadline and not window_exists(tmux_target(owner_id)):
