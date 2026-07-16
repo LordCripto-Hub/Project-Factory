@@ -76,6 +76,7 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         aid = "node-1/main:worker"
         active = {"agent_id": aid, "state": "alive", "retired": False}
         mp.load_roster = lambda: [active]
+        mp.window_exists = lambda _target: True
         with self.assertRaisesRegex(SystemExit, "agent_already_alive"):
             mp.revive(type("Args", (), {"agent_id": aid})())
 
@@ -85,6 +86,28 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         mp.http_json = lambda *_args, **_kwargs: {"tasks": {"task-1": {"state": "done", "assignee": aid}}, "deletedTasks": {}}
         with self.assertRaisesRegex(SystemExit, "owner_task_closed"):
             mp.revive(type("Args", (), {"agent_id": aid})())
+
+    def test_revive_rehydrates_stale_alive_record_without_tmux_window(self):
+        mp = load("revive_mp_stale_alive", "mp")
+        aid = "node-1/main:Boss"
+        record = {
+            "agent_id": aid,
+            "state": "alive",
+            "retired": False,
+            "backend": "codex",
+            "cwd": "/tmp/boss",
+            "is_master": True,
+            "model": "gpt-5.6-sol",
+        }
+        sent = []
+        mp.load_roster = lambda: [record]
+        mp.window_exists = lambda _target: False
+        mp.main = lambda argv: sent.append(argv)
+        mp.revive(type("Args", (), {"agent_id": aid})())
+        self.assertEqual(sent, [[
+            "spawn", aid, "--backend", "codex", "--cwd", "/tmp/boss",
+            "--master", "--model", "gpt-5.6-sol",
+        ]])
 
     def test_git_failure_detail_redacts_remote_and_secret_shapes(self):
         publisher = load("publisher_failure_detail", "project_publisher.py")
