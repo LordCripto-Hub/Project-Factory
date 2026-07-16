@@ -136,7 +136,11 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
 
     def test_git_failure_detail_redacts_remote_and_secret_shapes(self):
         publisher = load("publisher_failure_detail", "project_publisher.py")
-        detail = publisher.safe_failure_detail("fatal: https://user:password=secret@github.com/repo.git token=abc")
+        detail = publisher.safe_failure_detail(
+            "fatal: https://user:password=secret"
+            + "@"
+            + "github.com/repo.git token=abc"
+        )
         self.assertNotIn("github.com", detail)
         self.assertNotIn("secret", detail)
         self.assertIn("<remote>", detail)

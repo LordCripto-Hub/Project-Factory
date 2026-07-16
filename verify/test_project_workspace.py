@@ -82,7 +82,14 @@ class ProjectWorkspaceContract(unittest.TestCase):
             invalid.append({**valid, "workspace": "relative/project"})
             invalid.append({**valid, "workspace": str(root.parent / "outside")})
             invalid.append({**valid, "tmuxSession": "repo;rm"})
-            invalid.append({**valid, "repository": "ssh://git@example.invalid/repo.git"})
+            invalid.append(
+                {
+                    **valid,
+                    "repository": (
+                        "ssh://git" + "@" + "example.invalid/repo.git"
+                    ),
+                }
+            )
             invalid.append({**valid, "branch": "main:force"})
             for item in invalid:
                 with self.subTest(item=item):

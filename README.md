@@ -59,6 +59,28 @@ and the launcher never imports another Windows login automatically. Refresh the
 saved profile explicitly, then run the shortcut again; a successful validation
 runs `mp providers-resume` and restores Boss and Nightwatch.
 
+## Exact agent session recovery
+
+Managed Codex and Claude agents persist their provider session identity.
+`mp kill` records a deliberate stop before terminating tmux, so the
+supervisor cannot immediately undo an operator decision. `mp revive` performs
+an exact session resume only when the recorded backend, provider profile,
+working directory, TaskSpec and role receipts, and provider transcript all
+match.
+
+`mp reconcile` checks missing windows every 15 seconds. It allows three
+recovery attempts separated by a 30-second cooldown, then records a typed
+blocked state. A stale process that never established a session may receive up
+to three labeled bootstrap retries. An exact-resume failure has no silent fresh
+fallback.
+
+A model change inside the same backend and provider profile uses exact session
+resume. A backend or profile change requires the private provider-switch
+transaction and an explicit fresh handoff; it starts a new provider session
+without claiming conversation continuity. Task ownership, ProjectProfile,
+TaskSpec, role, Git workspace, and evidence remain outside the provider process
+and survive either path.
+
 ## Durable Docker state
 
 MyPeople uses a pinned local image plus eight named volumes:

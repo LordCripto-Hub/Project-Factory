@@ -98,7 +98,11 @@ Nightwatch:
 docker exec mypeople /home/mp/mypeople/bin/mp switch nightwatch:Nightwatch --backend codex --model gpt-5.6-luna
 ```
 
-`mp switch` saves the requested configuration before closing and reviving the tmux window. Future supervisor revival preserves the selected backend and model.
+`mp switch` saves the requested model before closing the tmux window. When
+backend and provider profile are unchanged, it performs an exact session resume
+with the new model and verifies that the provider session ID did not change.
+Direct backend changes are rejected with `fresh_handoff_required`; use the
+provider-switch transaction described below.
 
 ## Switching provider accounts
 
@@ -134,7 +138,16 @@ Inspect non-secret status without making a paid provider request:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Get-MyPeopleProviderStatus.ps1
 ```
 
-A switch is transactional: it records bounded handoffs, stops only the selected active roles, installs and validates the target profile, writes bindings atomically, revives Boss before Nightwatch and workers, verifies the roster, and commits. A failed phase restores the previous binding and revives the prior roster. Startup rehydrates the configured global profile before services launch.
+A switch is transactional: it records one private, bounded handoff per selected
+agent, stops only the selected active roles, installs and validates the target
+profile, writes bindings atomically, starts Boss before Nightwatch and workers,
+verifies the roster, and commits. The forward path requires an explicit fresh
+handoff and honestly records a new provider session. It never describes a
+backend or provider-profile change as an exact resume. A failed phase restores
+the previous binding and roster, then uses exact session resume against the old
+profile storage. The transaction lock, `stopped` phase, private handoff path,
+agent identity, cwd, task, and role receipts must all match. Startup rehydrates
+the configured global profile before services launch.
 
 Profile switching currently uses PowerShell. HUD controls for global and per-agent account selection are a future interface layer over this same transaction contract.
 
@@ -297,7 +310,9 @@ activate a provider profile, open OAuth, validate quota, run `mypeople up`, or
 require Boss and Nightwatch to be alive. Logged-out, exhausted, and deliberately
 stopped providers remain unchanged for a later provider-management cycle.
 
-The transient queue task registry and connected-client state remain process memory. `mp revive` still opens a new Codex conversation until exact session resume is implemented; explicit TaskSpecs and handoffs remain authoritative.
+The connected-client registry remains process memory. Provider conversations
+are durable provider state, while Priorities, ProjectProfile, TaskSpec, Git
+workspace, evidence, and bounded handoffs remain authoritative project state.
 
 ## Persistent project workspace and publication
 
@@ -385,8 +400,32 @@ the persisted roster configuration. Revive is eligible only for a dead or
 retired roster entry. It refuses an already-alive agent or an existing live
 window, and it refuses an owner whose task is done, cancelled, deleted, has a
 fresh-owner replacement pending, or has been reassigned. A valid owner revive
-reuses the saved backend, model, Boss, working directory, and owner-task
-TaskSpec; it does not create a second active owner.
+requires the saved provider session ID and transcript plus matching backend,
+provider profile, real working directory, TaskSpec SHA-256, and role contract
+SHA-256. It performs exact session resume with the saved Boss, model, working
+directory, and owner task; it does not create a second active owner.
+
+Operator commands:
+
+```powershell
+docker exec mypeople /home/mp/mypeople/bin/mp kill main:Boss --reason operator-request
+docker exec mypeople /home/mp/mypeople/bin/mp revive main:Boss
+docker exec mypeople /home/mp/mypeople/bin/mp reconcile
+docker exec mypeople /home/mp/mypeople/bin/mp switch main:Boss --backend codex --model gpt-5.6-luna
+```
+
+`mp kill` persists the deliberate stop before process mutation. Deliberately
+stopped agents remain stopped until explicit revive. For accidental window
+loss, the supervisor calls `mp reconcile` every 15 seconds. Recovery uses a
+30-second cooldown and stops after three recovery attempts with a typed
+`blocked` state. Only a stale initial process that never captured any session
+may receive three labeled bootstrap retries. There is no silent fresh fallback
+after an exact-resume failure; inspect the typed error and provider/profile
+state instead.
+
+A same-backend, same-profile model switch uses exact session resume. A backend
+or profile change is a new conversation and must use the provider transaction's
+explicit fresh handoff. `mp reconcile` never calls that fresh path.
 
 The publisher records a short sanitized Git failure detail in the approval
 ledger. URLs and secret-shaped values are redacted; credential contents are
@@ -395,7 +434,8 @@ never recorded.
 ## Known limitations
 
 - The transient queue is lost when its process restarts.
-- Codex conversations are not resumed automatically.
+- Legacy roster records without a captured provider session ID cannot use exact
+  resume; replace them only through an explicit operator-controlled handoff.
 - ProjectProfile and TaskSpec are available, but external memory remains disabled until the Phase B security and deployment gate.
 - Standard ports are bound to `127.0.0.1`; port 7681 remains the explicitly writable local terminal.
 - The complete verifier creates temporary cards only inside its disposable, portless container and never targets the live board.
@@ -521,8 +561,8 @@ receives the text Windows types into the focused control.
 
 ## Recommended next stage
 
-1. Exact Codex/Claude session resume with transcript validation and no silent fresh-session fallback.
-2. Deliberate Boss stop, reconcile, revive, model, and provider-profile controls in Priorities.
+1. Add deliberate Boss stop, reconcile, revive, model, and provider-profile controls to Priorities.
+2. Add adaptive, cost-bounded worker model selection without changing task ownership.
 3. Bind local services safely and protect the writable terminal.
 4. Evaluate a JSON-to-SQLite board migration with a tested JSON rollback path.
 5. Activate read-only Cloudflare recall for one real ProjectProfile through a separate security-gated cycle.
