@@ -2,7 +2,8 @@ param(
     [string]$Image = $(if ($env:MYPEOPLE_VERIFY_IMAGE) { $env:MYPEOPLE_VERIFY_IMAGE } else { 'mypeople-node:integration-a54d9e3' }),
     [ValidateRange(1, 86400)][int]$TimeoutSeconds = 1800,
     [string]$EvidenceRoot = (Join-Path ([IO.Path]::GetTempPath()) 'mypeople-verify'),
-    [string]$SmokeCommand = ''
+    [string]$SmokeCommand = '',
+    [switch]$UsePackagedSource
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,6 +53,7 @@ try {
     $env:MP_VERIFY_SOURCE = $script:Root
     $env:MP_VERIFY_EVIDENCE_DIR = $script:RunDirectory
     $env:MP_VERIFY_MODE = 'full'
+    $env:MP_VERIFY_SOURCE_MODE = if ($UsePackagedSource) { 'packaged' } else { 'host' }
     $env:MP_VERIFY_SMOKE_COMMAND = ''
     if ($PSBoundParameters.ContainsKey('SmokeCommand')) {
         if ([string]::IsNullOrWhiteSpace($SmokeCommand)) { throw 'SmokeCommand must not be empty when supplied.' }
@@ -112,6 +114,7 @@ try {
     Remove-Item Env:MP_VERIFY_SOURCE -ErrorAction SilentlyContinue
     Remove-Item Env:MP_VERIFY_EVIDENCE_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:MP_VERIFY_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:MP_VERIFY_SOURCE_MODE -ErrorAction SilentlyContinue
     Remove-Item Env:MP_VERIFY_SMOKE_COMMAND -ErrorAction SilentlyContinue
 }
 

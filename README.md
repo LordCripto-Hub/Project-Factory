@@ -84,6 +84,42 @@ Never run `docker compose down -v` or delete MyPeople volumes as a startup or re
 
 Cloudflare memory remains disabled during this migration. Its first real profile is a separate, bounded, read-only activation cycle after backup, restore, launcher recovery, and rollback are verified.
 
+### Upgrade an existing volume-backed deployment
+
+Build a reviewed image from a clean repository, then run the permanent upgrade
+transaction:
+
+```powershell
+$sha = (git rev-parse --short=7 HEAD).Trim()
+$image = "mypeople-node:integration-$sha"
+$base = docker inspect mypeople --format '{{.Config.Image}}'
+docker build -f docker/Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t $image .
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Upgrade-MyPeopleDockerImage.ps1 -CandidateImage $image
+```
+
+The command runs the complete isolated verifier before live mutation, creates a
+protected portable backup under
+`%LOCALAPPDATA%\MyPeople\backups\docker-upgrade\<timestamp>`, recreates the
+service over the same eight volumes, and restores a transaction-owned rollback
+tag on failure. The verifier executes the application source packaged inside
+the candidate image, not the host checkout. Candidate and rollback image IDs
+are each pinned to unique transaction tags before mutation. The command does
+not delete volumes or preserve Compose containers by renaming them.
+
+Automatic rollback also rechecks the exact mount contract and the pre-upgrade
+board and stable-roster hashes. If application code changed durable data before
+failing, the transaction records `recovery-required` instead of claiming a
+successful rollback; use the protected local archive for manual recovery.
+
+`portable-state.tar.gz` is sensitive local restore material even after obvious
+credential filenames are excluded. Never publish, attach, commit, or upload
+that archive. Only the redacted configuration and transaction metadata are
+shareable diagnostic evidence.
+
+Provider sessions are independent of code upgrades. An exhausted, logged-out,
+or intentionally stopped provider remains in that state; the upgrade does not
+open OAuth, validate provider quotas, or revive agents.
+
 ## Persistent Project Factory workspace
 
 The runtime rehydrates one shell-only tmux session without changing Git content:

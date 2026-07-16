@@ -21,6 +21,11 @@ compose = (ROOT / "docker" / "compose.volume-backed.yml").read_text(encoding="ut
 migration = (ROOT / "windows" / "Migrate-MyPeopleDockerState.ps1").read_text(
     encoding="utf-8"
 )
+upgrade_path = ROOT / "windows" / "Upgrade-MyPeopleDockerImage.ps1"
+assert upgrade_path.exists()
+upgrade = upgrade_path.read_text(encoding="utf-8")
+readme = (ROOT / "README.md").read_text(encoding="utf-8")
+manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(encoding="utf-8")
 
 assert contract == EXPECTED
 assert "container_name: mypeople" in compose
@@ -40,6 +45,14 @@ assert "mode=0700" in compose
 assert "MYPEOPLE_MEMORY_TOKEN" not in compose
 assert "'bin', 'verify', 'memory-gateway', 'plugins', 'docs', 'docker', 'windows'" in migration
 assert "compose.tailscale.yml" in migration
+assert "--force-recreate" in upgrade
+assert "Invoke-IsolatedVerify.ps1" in upgrade
+assert "providerActivationAttempted = $false" in upgrade
+assert "docker rename" not in upgrade
+assert "MyPeople.ProviderProfiles.psm1" not in upgrade
+for public_doc in (readme, manual):
+    assert "Upgrade-MyPeopleDockerImage.ps1" in public_doc
+    assert "provider sessions" in public_doc.lower()
 for volume, target in EXPECTED.items():
     assert f"{volume}:{target}" in compose
     assert f"name: {volume}" in compose

@@ -14,7 +14,7 @@ $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $stateRoot = Join-Path $env:LOCALAPPDATA 'MyPeople'
 $transactionRoot = Join-Path $stateRoot "backups\docker-migration\$stamp"
 $transactionPath = Join-Path $transactionRoot 'transaction.json'
-$lockPath = Join-Path $stateRoot 'docker-migration.lock'
+$operationLockPath = Join-Path $stateRoot 'docker-operation.lock'
 $resolvedResumeManifest = $null
 $resumeState = $null
 if ($ResumeManifest) {
@@ -60,7 +60,7 @@ $script:state = [ordered]@{
     resumedFrom = $resolvedResumeManifest
     rollbackAttempted = $false
 }
-$lockCreated = $false
+$operationLock = $null
 $mutationStarted = $false
 $deploymentWritten = $false
 
@@ -138,9 +138,6 @@ function Assert-PopulatedVolumeState {
 }
 
 function Assert-Preflight {
-    if (Test-Path -LiteralPath $lockPath) {
-        throw "Migration lock already exists: $lockPath"
-    }
     if (-not (Test-ContainerExists $Container)) {
         throw "Expected container not found: $Container"
     }
@@ -181,13 +178,12 @@ function Remove-StaleRuntimePidFiles {
 }
 
 try {
+    $operationLock = Enter-MyPeopleDockerOperationLock -Path $operationLockPath -Owner "migration:$stamp"
     Assert-Preflight
     New-Item -ItemType Directory -Path $transactionRoot -Force | Out-Null
     $principal = $env:USERNAME + ':(OI)(CI)F'
     & icacls $transactionRoot /inheritance:r /grant:r $principal | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Unable to protect the migration evidence directory' }
-    Set-Content -LiteralPath $lockPath -Value $stamp -Encoding ASCII
-    $lockCreated = $true
     Set-Stage 'planned'
 
     if (-not $Execute) {
@@ -451,7 +447,7 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
     }
     throw $failureRecord
 } finally {
-    if ($lockCreated -and (Test-Path -LiteralPath $lockPath)) {
-        Remove-Item -LiteralPath $lockPath -Force
+    if ($operationLock) {
+        Exit-MyPeopleDockerOperationLock -Path $operationLockPath -Lock $operationLock
     }
 }

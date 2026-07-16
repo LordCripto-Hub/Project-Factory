@@ -229,6 +229,58 @@ Never run `docker compose down -v` or delete MyPeople volumes as a startup or re
 
 Cloudflare memory remains disabled until the Docker migration, restore drill, desktop-launcher recovery, and rollback rehearsal all pass.
 
+### Safe image upgrades after migration
+
+Use the permanent transaction only from a clean, reviewed repository. Build the
+candidate from the currently pinned live image:
+
+```powershell
+$sha = (git rev-parse --short=7 HEAD).Trim()
+$image = "mypeople-node:integration-$sha"
+$base = docker inspect mypeople --format '{{.Config.Image}}'
+docker build -f docker/Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t $image .
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Upgrade-MyPeopleDockerImage.ps1 -CandidateImage $image
+```
+
+Before changing the live deployment, `Upgrade-MyPeopleDockerImage.ps1` runs the
+complete isolated verifier against the application source packaged inside that
+exact image. It pins the verified candidate ID and the current rollback ID to
+unique transaction-owned tags. It then stops MyPeople briefly, creates a
+current-user-protected portable backup, compares the archive hash before and
+after the Docker copy, restarts the old deployment, and only then recreates the
+service with the pinned candidate over the same eight named volumes.
+
+The transaction verifies Priorities, HUD, the local terminal, Docker init,
+supervisor uniqueness, every exact writable volume name-to-destination mapping,
+the read-only seed bind, the
+`repo-project-factory` tmux session, and unchanged board and stable-roster
+hashes. On failure it restores the previous Compose content with the retained
+transaction-owned rollback tag. It never runs `docker compose down -v`, removes
+a volume, or uses container renaming as rollback.
+
+Rollback rechecks the exact mounts and pre-upgrade board/stable-roster hashes.
+If the failed candidate changed persistent data, `transaction.json` records
+`rollbackStatus: recovery-required`; image rollback alone cannot undo that data
+mutation, so recover from the protected local archive.
+
+Evidence is stored under:
+
+```text
+%LOCALAPPDATA%\MyPeople\backups\docker-upgrade\<timestamp>
+```
+
+Retain `transaction.json`, `portable-state.tar.gz`, the candidate tag, the
+rollback tag, and the upgrade record until the new deployment has been used
+successfully. The archive is **sensitive local restore material**, not ordinary
+evidence. Never publish, commit, attach, or upload it, even though obvious auth,
+credential, token, key, environment, package-registry, PEM, and P12 filenames
+are excluded. Share only redacted configuration and transaction metadata.
+
+Provider sessions are independent of code upgrades. The transaction does not
+activate a provider profile, open OAuth, validate quota, run `mypeople up`, or
+require Boss and Nightwatch to be alive. Logged-out, exhausted, and deliberately
+stopped providers remain unchanged for a later provider-management cycle.
+
 The transient queue task registry and connected-client state remain process memory. `mp revive` still opens a new Codex conversation until exact session resume is implemented; explicit TaskSpecs and handoffs remain authoritative.
 
 ## Persistent project workspace and publication

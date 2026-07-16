@@ -6,7 +6,14 @@ if [[ ${MP_VERIFY_ISOLATED:-} != 1 ]]; then
   exit 125
 fi
 
-SOURCE=/workspace
+case "${MP_VERIFY_SOURCE_MODE:-}" in
+  host) SOURCE=/workspace ;;
+  packaged) SOURCE=/home/mp/mypeople ;;
+  *)
+    echo "Unknown verifier source mode; use a host launcher." >&2
+    exit 125
+    ;;
+esac
 ROOT=/tmp/mypeople
 VERIFY_HOME=/tmp/verify-home
 CONFIG=$VERIFY_HOME/.config/mypeople/queue.env

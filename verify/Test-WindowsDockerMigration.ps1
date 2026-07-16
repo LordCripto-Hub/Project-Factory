@@ -67,6 +67,25 @@ try {
     Write-MyPeopleTransaction -Path $transactionPath -State ([ordered]@{ stage='test'; count=7 })
     $transaction = Get-Content -Raw -LiteralPath $transactionPath | ConvertFrom-Json
     if ($transaction.stage -ne 'test' -or $transaction.count -ne 7) { throw 'Transaction did not round-trip' }
+
+    $operationLockPath = Join-Path $temporaryRoot 'docker-operation.lock'
+    $operationLock = Enter-MyPeopleDockerOperationLock -Path $operationLockPath -Owner 'first-test'
+    if (-not (Test-Path -LiteralPath $operationLockPath)) { throw 'Operation lock file was not created' }
+    try {
+        $secondLockRejected = $false
+        try {
+            $unexpectedLock = Enter-MyPeopleDockerOperationLock -Path $operationLockPath -Owner 'second-test'
+            Exit-MyPeopleDockerOperationLock -Path $operationLockPath -Lock $unexpectedLock
+        } catch {
+            $secondLockRejected = $true
+        }
+        if (-not $secondLockRejected) { throw 'Concurrent Docker operation lock was accepted' }
+    } finally {
+        Exit-MyPeopleDockerOperationLock -Path $operationLockPath -Lock $operationLock
+    }
+    if (Test-Path -LiteralPath $operationLockPath) { throw 'Operation lock file survived release' }
+    $reacquiredLock = Enter-MyPeopleDockerOperationLock -Path $operationLockPath -Owner 'reacquired-test'
+    Exit-MyPeopleDockerOperationLock -Path $operationLockPath -Lock $reacquiredLock
 } finally {
     Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
 }
@@ -104,7 +123,10 @@ foreach ($required in @(
     'state-volumes.json',
     'portable-state.tar.gz',
     'Remove-StaleRuntimePidFiles',
-    'Test-MyPeopleDockerRestore.ps1'
+    'Test-MyPeopleDockerRestore.ps1',
+    'docker-operation.lock',
+    'Enter-MyPeopleDockerOperationLock',
+    'Exit-MyPeopleDockerOperationLock'
 )) {
     if ($migration -notmatch [regex]::Escape($required)) { throw "Missing migration token: $required" }
 }

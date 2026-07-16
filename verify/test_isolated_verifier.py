@@ -132,6 +132,24 @@ class IsolatedVerifierContract(unittest.TestCase):
         self.assertIn("full)", entrypoint)
         self.assertIn("smoke)", entrypoint)
 
+    def test_verifier_can_execute_the_source_packaged_inside_the_candidate_image(self):
+        compose = self.read("verify/compose.isolated.yml")
+        entrypoint = self.read("verify/container-entrypoint.sh")
+        windows = self.read("verify/Invoke-IsolatedVerify.ps1")
+        shell = self.read("verify/verify.sh")
+        self.assertIn(
+            "MP_VERIFY_SOURCE_MODE: ${MP_VERIFY_SOURCE_MODE:?set MP_VERIFY_SOURCE_MODE}",
+            compose,
+        )
+        self.assertIn("[switch]$UsePackagedSource", windows)
+        self.assertIn("MP_VERIFY_SOURCE_MODE", windows)
+        self.assertIn("--packaged-source", shell)
+        self.assertIn('case "${MP_VERIFY_SOURCE_MODE:-}" in', entrypoint)
+        self.assertIn("SOURCE=/workspace", entrypoint)
+        self.assertIn("SOURCE=/home/mp/mypeople", entrypoint)
+        self.assertIn("host)", entrypoint)
+        self.assertIn("packaged)", entrypoint)
+
     def test_core_owner_fixtures_use_a_synthetic_memory_disabled_project(self):
         text = self.read("verify/core_verify.py")
         self.assertIn('SANDBOX_PROJECT_SLUG = "verify-project"', text)
