@@ -5,6 +5,14 @@ from mpcommon import *
 
 HOST=ENV.get("HOST_ID",os.uname().nodename.split('.')[0]); INTERVAL=float(ENV.get("HEARTBEAT_INTERVAL","3"))
 
+def reconcile_prompt_idle(aid, target, status):
+    """A provider's visible composer prompt is the event that work is complete."""
+    if status.get("status") != "working" or time.time()-float(status.get("activity_updated_at",0)) < 2:
+        return
+    pane=run_tmux(["capture-pane","-p","-S","-30","-t",target],capture=True,check=False)
+    if pane.returncode == 0 and any(marker in (pane.stdout or "") for marker in ("How can I help", "Try", "OpenAI Codex", "Claude Code")):
+        write_status(aid,"idle",activity_event="composer_prompt_ready")
+
 def tail_ip():
     for cmd in (["tailscale","ip","-4"],["sudo","tailscale","--socket",os.path.join(ROOT,"run","tailscale-state","tailscaled.sock"),"ip","-4"]):
         try:
@@ -36,6 +44,9 @@ def live_roster():
                     row["status"]="idle"
                 elif status.get("status"):
                     row["status"]=status["status"]
+                reconcile_prompt_idle(aid,f"mc-{s}:{t}",status)
+                status=load_json(status_path(aid),{})
+                row["status"]=status.get("status","idle")
                 if status.get("summary"):
                     row["summary"]=status["summary"]
         except Exception:continue
