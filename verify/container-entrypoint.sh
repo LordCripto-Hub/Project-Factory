@@ -199,10 +199,23 @@ if (( ! ready )); then
   exit "$RESULT"
 fi
 
-if [[ -n ${MP_VERIFY_SUITE_COMMAND:-} ]]; then
-  env -i "${CLEAN_ENV[@]}" bash -lc "$MP_VERIFY_SUITE_COMMAND"
-else
-  env -i "${CLEAN_ENV[@]}" bash "$ROOT/verify/run-suite.sh"
-fi
+case "${MP_VERIFY_MODE:-}" in
+  full)
+    env -i "${CLEAN_ENV[@]}" bash "$ROOT/verify/run-suite.sh"
+    ;;
+  smoke)
+    if [[ -z ${MP_VERIFY_SMOKE_COMMAND:-} ]]; then
+      echo "Smoke verification mode requires an explicit command from the host launcher." >&2
+      RESULT=125
+      exit "$RESULT"
+    fi
+    env -i "${CLEAN_ENV[@]}" bash -lc "$MP_VERIFY_SMOKE_COMMAND"
+    ;;
+  *)
+    echo "Unknown isolated verifier mode; use a host launcher." >&2
+    RESULT=125
+    exit "$RESULT"
+    ;;
+esac
 RESULT=$?
 exit "$RESULT"

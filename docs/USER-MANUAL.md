@@ -329,8 +329,8 @@ never recorded.
 - The transient queue is lost when its process restarts.
 - Codex conversations are not resumed automatically.
 - ProjectProfile and TaskSpec are available, but external memory remains disabled until the Phase B security and deployment gate.
-- Ports are currently published on `0.0.0.0`; port 7681 allows terminal writes.
-- The complete verifier creates temporary cards; run it without active work or in an isolated environment.
+- Standard ports are bound to `127.0.0.1`; port 7681 remains the explicitly writable local terminal.
+- The complete verifier creates temporary cards only inside its disposable, portless container and never targets the live board.
 - The board Git exporter may quarantine small snapshots during heavy test churn; review them before treating the exporter as backup.
 - The board Git exporter defaults to `todos/board-backup/` inside the durable
   `mypeople-todos` volume. An explicit `EXPORT_REPO` may override it for an

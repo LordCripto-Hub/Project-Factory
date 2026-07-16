@@ -116,6 +116,22 @@ class IsolatedVerifierContract(unittest.TestCase):
         ):
             self.assertIn(excluded, text)
 
+    def test_smoke_override_requires_an_explicit_host_launcher_mode(self):
+        compose = self.read("verify/compose.isolated.yml")
+        entrypoint = self.read("verify/container-entrypoint.sh")
+        windows = self.read("verify/Invoke-IsolatedVerify.ps1")
+        shell = self.read("verify/verify.sh")
+        for text in (compose, entrypoint, windows, shell):
+            self.assertNotIn("MP_VERIFY_SUITE_COMMAND", text)
+        self.assertIn("MP_VERIFY_MODE: ${MP_VERIFY_MODE:?set MP_VERIFY_MODE}", compose)
+        self.assertIn("MP_VERIFY_SMOKE_COMMAND: ${MP_VERIFY_SMOKE_COMMAND:-}", compose)
+        self.assertIn("[string]$SmokeCommand", windows)
+        self.assertIn("MP_VERIFY_MODE = 'full'", windows)
+        self.assertIn("--smoke-command", shell)
+        self.assertIn('case "${MP_VERIFY_MODE:-}" in', entrypoint)
+        self.assertIn("full)", entrypoint)
+        self.assertIn("smoke)", entrypoint)
+
     def test_core_owner_fixtures_use_a_synthetic_memory_disabled_project(self):
         text = self.read("verify/core_verify.py")
         self.assertIn('SANDBOX_PROJECT_SLUG = "verify-project"', text)

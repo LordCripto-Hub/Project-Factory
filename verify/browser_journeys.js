@@ -29,6 +29,32 @@ async function launch() {
   });
   const page = await context.newPage();
   const errors = [];
+  const boardPollNavigation = {
+    deadline: 0,
+    deferred: [],
+    begin() { this.deadline = Date.now() + 5000; },
+    active() { return Date.now() <= this.deadline; },
+    defer(message) { this.deferred.push(String(message || '')); },
+    async verify(targetPage) {
+      if (!this.deferred.length) return;
+      const result = await targetPage.evaluate(async ({ baseUrl }) => {
+        const response = await fetch(baseUrl + '/todo/board', {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        const payload = response.ok ? await response.json() : {};
+        return { ok: response.ok, taskCount: Object.keys(payload.tasks || {}).length };
+      }, { baseUrl });
+      if (!result.ok || result.taskCount < 1) {
+        throw new Error(`deferred board poll cancellation was not followed by a healthy board: ${this.deferred.join(' | ')}`);
+      }
+      this.deferred = [];
+      this.deadline = 0;
+    },
+  };
+  page.on('framenavigated', frame => {
+    if (frame === page.mainFrame()) boardPollNavigation.begin();
+  });
   page.on('console', m => {
     const message = m.text();
     if (m.type() === 'error' && !shouldIgnoreConsoleError(message, browserName)) {
@@ -36,7 +62,15 @@ async function launch() {
     }
   });
   page.on('pageerror', e => {
-    if (!/Load failed/i.test(e.message) && !/beforeunload.*confirmation dialog/i.test(e.message)) errors.push(`pageerror: ${e.message}`);
+    // WebKit can report a cancelled loopback board poll as an access-control
+    // page error while a navigation succeeds. Functional assertions still
+    // verify the destination and board state after every navigation.
+    if (shouldIgnoreConsoleError(e.message, browserName, boardPollNavigation.active())) {
+      boardPollNavigation.defer(e.message);
+      return;
+    }
+    if (/Load failed/i.test(e.message) || /beforeunload.*confirmation dialog/i.test(e.message)) return;
+    errors.push(`pageerror: ${e.message} @ ${page.url()}`);
   });
   page.on('requestfailed', r => {
     const u = r.url();
@@ -48,7 +82,7 @@ async function launch() {
       errors.push(`requestfailed: ${u} ${err}`);
     }
   });
-  return { browser, context, page, errors };
+  return { browser, context, page, errors, boardPollNavigation };
 }
 
 async function saveShot(page, name) {
@@ -100,18 +134,19 @@ async function count(page, sel) {
 }
 
 async function liveCore(page) {
+  const liveMarker = `browser-${browserName}-${Date.now()}`;
   await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('h1');
   await expect((await text(page, 'h1')) === 'Priorities', 'board title mismatch');
-  await page.fill('#taskInput', 'verify browser live core');
+  await page.fill('#taskInput', `verify browser live core ${liveMarker}`);
   await page.keyboard.press('Enter');
   await page.waitForSelector('li.task');
   const first = page.locator('li.task').first();
   await first.locator('.task-text').click();
   await page.waitForSelector('body.modal-open');
-  await page.fill('#commentInput', 'browser comment');
+  await page.fill('#commentInput', `browser comment ${liveMarker}`);
   await page.click('#postComment');
-  await page.getByText('browser comment', { exact: false }).waitFor();
+  await page.getByText(`browser comment ${liveMarker}`, { exact: true }).waitFor();
   await closeCard(page);
   await page.click('a.navlink[href="/dashboard"]');
   await page.waitForURL(/\/dashboard$/);
@@ -128,7 +163,7 @@ async function liveCore(page) {
   await saveShot(page, 'live-core');
 }
 
-async function sandboxSuite(page) {
+async function sandboxSuite(page, boardPollNavigation) {
   const s = manifest.sandbox || {};
   const taskIds = s.taskIds || [];
   if (taskIds.length < 10) throw new Error('sandbox manifest missing task ids');
@@ -232,7 +267,7 @@ async function sandboxSuite(page) {
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO94W9kAAAAASUVORK5CYII=', 'base64'),
   });
   await page.waitForFunction(n => document.querySelectorAll('.evidence-card').length > n, beforeEvidence);
-  await expect((await text(page, '#evidenceStatus')).includes('attached'), 'evidence upload status missing');
+  await page.waitForFunction(() => document.querySelector('#evidenceStatus')?.textContent.includes('Uploaded'));
   await expect(await count(page, '.evidence-meta') >= 1, 'evidence metadata missing');
   await closeCard(page);
 
@@ -248,6 +283,14 @@ async function sandboxSuite(page) {
   await page.waitForSelector('#agentsTable');
   await page.click('a.nav[href="/"]');
   await page.waitForURL(/\/$/);
+  await expect((await text(page, 'h1')) === 'Priorities', 'direct HUD->board failed');
+  const proxiedBoard = await page.evaluate(async () => {
+    const response = await fetch('/todo/board', { credentials: 'same-origin', cache: 'no-store' });
+    const payload = response.ok ? await response.json() : {};
+    return { ok: response.ok, taskCount: Object.keys(payload.tasks || {}).length };
+  });
+  await expect(proxiedBoard.ok && proxiedBoard.taskCount > 0, 'direct HUD board proxy failed');
+  await page.waitForTimeout(250);
 
   // Recurring flow.
   const recurringFlow = taskIds.find(id => id !== s.deleteId && id !== s.ownerTask && id !== s.safeMdId && id !== s.scrollId);
@@ -291,15 +334,16 @@ async function sandboxSuite(page) {
 }
 
 (async () => {
-  const { browser, context, page, errors } = await launch();
+  const { browser, context, page, errors, boardPollNavigation } = await launch();
   try {
     if (scenario === 'live_core') {
       await liveCore(page);
     } else if (scenario === 'sandbox_suite') {
-      await sandboxSuite(page);
+      await sandboxSuite(page, boardPollNavigation);
     } else {
       throw new Error(`unknown scenario: ${scenario}`);
     }
+    await boardPollNavigation.verify(page);
     if (errors.length) throw new Error(errors.join('\n'));
   } finally {
     await context.close().catch(() => {});

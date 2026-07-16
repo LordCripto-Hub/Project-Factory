@@ -7,6 +7,15 @@ COMPOSE="$SCRIPT_DIR/compose.isolated.yml"
 IMAGE=${MYPEOPLE_VERIFY_IMAGE:-mypeople-node:integration-a54d9e3}
 TIMEOUT_SECONDS=${MP_VERIFY_TIMEOUT_SECONDS:-1800}
 EVIDENCE_BASE=${MP_VERIFY_EVIDENCE_ROOT:-${TMPDIR:-/tmp}/mypeople-verify}
+SMOKE_COMMAND=""
+if (($#)); then
+  if [[ $# == 2 && $1 == --smoke-command && -n $2 ]]; then
+    SMOKE_COMMAND=$2
+  else
+    printf 'Usage: %s [--smoke-command COMMAND]\n' "$0" >&2
+    exit 125
+  fi
+fi
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
 PROJECT="mypeople-verify-${RUN_ID,,}"
 RUN_DIR="$EVIDENCE_BASE/$RUN_ID"
@@ -46,6 +55,10 @@ else
   export MYPEOPLE_VERIFY_IMAGE="$IMAGE"
   export MP_VERIFY_SOURCE="$ROOT"
   export MP_VERIFY_EVIDENCE_DIR="$RUN_DIR"
+  export MP_VERIFY_MODE=full MP_VERIFY_SMOKE_COMMAND=""
+  if [[ -n $SMOKE_COMMAND ]]; then
+    export MP_VERIFY_MODE=smoke MP_VERIFY_SMOKE_COMMAND="$SMOKE_COMMAND"
+  fi
 
   if docker compose --project-name "$PROJECT" -f "$COMPOSE" config --quiet >>"$OUTPUT" 2>&1; then
     timeout --foreground "${TIMEOUT_SECONDS}s" \

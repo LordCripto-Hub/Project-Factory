@@ -1,7 +1,8 @@
 param(
     [string]$Image = $(if ($env:MYPEOPLE_VERIFY_IMAGE) { $env:MYPEOPLE_VERIFY_IMAGE } else { 'mypeople-node:integration-a54d9e3' }),
     [ValidateRange(1, 86400)][int]$TimeoutSeconds = 1800,
-    [string]$EvidenceRoot = (Join-Path ([IO.Path]::GetTempPath()) 'mypeople-verify')
+    [string]$EvidenceRoot = (Join-Path ([IO.Path]::GetTempPath()) 'mypeople-verify'),
+    [string]$SmokeCommand = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +51,13 @@ try {
     $env:MYPEOPLE_VERIFY_IMAGE = $Image
     $env:MP_VERIFY_SOURCE = $script:Root
     $env:MP_VERIFY_EVIDENCE_DIR = $script:RunDirectory
+    $env:MP_VERIFY_MODE = 'full'
+    $env:MP_VERIFY_SMOKE_COMMAND = ''
+    if ($PSBoundParameters.ContainsKey('SmokeCommand')) {
+        if ([string]::IsNullOrWhiteSpace($SmokeCommand)) { throw 'SmokeCommand must not be empty when supplied.' }
+        $env:MP_VERIFY_MODE = 'smoke'
+        $env:MP_VERIFY_SMOKE_COMMAND = $SmokeCommand
+    }
 
     $configCode = Invoke-DockerCapture @(
         'compose', '--project-name', $script:Project, '-f', $script:Compose, 'config', '--quiet'
@@ -103,6 +111,8 @@ try {
     Remove-Item Env:MYPEOPLE_VERIFY_IMAGE -ErrorAction SilentlyContinue
     Remove-Item Env:MP_VERIFY_SOURCE -ErrorAction SilentlyContinue
     Remove-Item Env:MP_VERIFY_EVIDENCE_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:MP_VERIFY_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:MP_VERIFY_SMOKE_COMMAND -ErrorAction SilentlyContinue
 }
 
 if ($script:Result -eq 0) {
