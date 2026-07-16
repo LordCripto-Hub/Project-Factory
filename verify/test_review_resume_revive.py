@@ -32,12 +32,12 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
             def api(path, method="GET", body=None, **_kwargs):
                 calls.append((path, method, body))
                 if path == "/todo/board":
-                    return {"tasks": {"task-1": {"projectSlug": "project-factory", "state": "review", "proofs": [{"kind": "text"}]}}}
+                    return {"tasks": {"task-1": {"projectSlug": "project-factory", "state": "review", "updated": 123.0, "proofs": [{"kind": "text"}]}}}
                 return {"ok": True}
             with patch.dict(os.environ, {"PROJECT_PROFILES_DIR": str(profiles), "PUBLISH_APPROVALS_DIR": str(root / "approvals"), "AGENT_ID": "node-1/main:Boss", "QUEUE_SECRET": "test"}, clear=False), patch.object(publisher, "http_json", side_effect=api), patch.object(publisher, "load_roster", return_value=[{"agent_id": "node-1/main:Boss", "is_master": True, "state": "alive", "retired": False}]):
                 record = publisher.approve_runtime("task-1", "project-factory", "a" * 40, "main", 900)
             self.assertEqual(record["status"], "pending")
-            self.assertIn(("/todo/status", "POST", {"task_id": "task-1", "state": "working", "verified": False, "by": "node-1/main:Boss"}), calls)
+            self.assertIn(("/todo/status", "POST", {"task_id": "task-1", "state": "working", "verified": False, "by": "node-1/main:Boss", "expected_updated": 123.0}), calls)
 
     def test_failed_review_resume_removes_pending_approval(self):
         publisher = load("review_resume_rollback", "project_publisher.py")
@@ -51,7 +51,7 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
             }), encoding="utf-8")
             def api(path, method="GET", **_kwargs):
                 if path == "/todo/board":
-                    return {"tasks": {"task-1": {"projectSlug": "project-factory", "state": "review", "proofs": [{"kind": "text"}]}}}
+                    return {"tasks": {"task-1": {"projectSlug": "project-factory", "state": "review", "updated": 123.0, "proofs": [{"kind": "text"}]}}}
                 raise RuntimeError("status persistence unavailable")
             with patch.dict(os.environ, {"PROJECT_PROFILES_DIR": str(profiles), "PUBLISH_APPROVALS_DIR": str(root / "approvals"), "AGENT_ID": "node-1/main:Boss", "QUEUE_SECRET": "test"}, clear=False), patch.object(publisher, "http_json", side_effect=api), patch.object(publisher, "load_roster", return_value=[{"agent_id": "node-1/main:Boss", "is_master": True, "state": "alive", "retired": False}]):
                 with self.assertRaisesRegex(publisher.PublisherError, "approval_resume_failed"):
