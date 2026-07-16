@@ -53,16 +53,6 @@ function Set-UpgradeStage {
     Write-MyPeopleTransaction -Path $transactionPath -State $script:state
 }
 
-function Docker {
-    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
-    Invoke-MyPeopleDocker -Arguments $Arguments
-}
-
-function Docker-Capture {
-    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
-    Invoke-MyPeopleDocker -Arguments $Arguments -Capture
-}
-
 function Invoke-PinnedCompose {
     Invoke-MyPeopleDocker -Arguments @(
         'compose', '--project-name', 'mypeople', '--env-file', $environmentPath,
@@ -89,8 +79,12 @@ function Wait-MyPeopleControlPlane {
 }
 
 function Get-LiveState {
-    $board = ((Docker-Capture exec mypeople sha256sum /home/mp/mypeople/todos/board.v2.json).Trim() -split '\s+')[0]
-    $rosterJson = Docker-Capture exec mypeople cat /home/mp/mypeople/run/roster.json
+    $board = ((Invoke-MyPeopleDocker -Arguments @(
+        'exec', 'mypeople', 'sha256sum', '/home/mp/mypeople/todos/board.v2.json'
+    ) -Capture).Trim() -split '\s+')[0]
+    $rosterJson = Invoke-MyPeopleDocker -Arguments @(
+        'exec', 'mypeople', 'cat', '/home/mp/mypeople/run/roster.json'
+    ) -Capture
     [ordered]@{
         boardSha256 = $board
         stableRosterSha256 = Get-MyPeopleStableRosterHash -Json $rosterJson
@@ -98,7 +92,9 @@ function Get-LiveState {
 }
 
 function Assert-LiveMountContract {
-    $mounts = Docker-Capture inspect mypeople --format '{{json .Mounts}}' | ConvertFrom-Json
+    $mounts = Invoke-MyPeopleDocker -Arguments @(
+        'inspect', 'mypeople', '--format', '{{json .Mounts}}'
+    ) -Capture | ConvertFrom-Json
     $volumeMounts = @($mounts | Where-Object Type -eq 'volume')
     if ($volumeMounts.Count -ne $contract.Count) {
         throw "Expected exactly $($contract.Count) live volume mounts; found $($volumeMounts.Count)."
@@ -122,13 +118,21 @@ function Assert-LiveMountContract {
 
 function Assert-LiveRuntimeContract {
     Wait-MyPeopleControlPlane
-    $actualImage = (Docker-Capture inspect mypeople --format '{{.Config.Image}}').Trim()
+    $actualImage = (Invoke-MyPeopleDocker -Arguments @(
+        'inspect', 'mypeople', '--format', '{{.Config.Image}}'
+    ) -Capture).Trim()
     if ($actualImage -ne $script:state.deploymentImage) { throw "Unexpected live image: $actualImage" }
-    $actualImageId = (Docker-Capture inspect mypeople --format '{{.Image}}').Trim()
+    $actualImageId = (Invoke-MyPeopleDocker -Arguments @(
+        'inspect', 'mypeople', '--format', '{{.Image}}'
+    ) -Capture).Trim()
     if ($actualImageId -ne $script:state.candidateImageId) { throw 'The live container does not use the verified candidate image ID.' }
-    $pidOne = (Docker-Capture exec mypeople ps -o comm= -p 1).Trim()
+    $pidOne = (Invoke-MyPeopleDocker -Arguments @(
+        'exec', 'mypeople', 'ps', '-o', 'comm=', '-p', '1'
+    ) -Capture).Trim()
     if ($pidOne -eq 'sleep') { throw 'PID 1 regressed to sleep.' }
-    $processes = Docker-Capture exec mypeople ps -eo args=
+    $processes = Invoke-MyPeopleDocker -Arguments @(
+        'exec', 'mypeople', 'ps', '-eo', 'args='
+    ) -Capture
     if (([regex]::Matches($processes, '(?m)^/bin/bash /home/mp/mypeople/bin/runtime-supervisor\.sh$')).Count -ne 1) {
         throw 'Expected exactly one runtime supervisor.'
     }
@@ -136,11 +140,13 @@ function Assert-LiveRuntimeContract {
         throw 'Expected exactly one Boss supervisor.'
     }
     Assert-LiveMountContract
-    Docker exec mypeople tmux has-session -t repo-project-factory
+    Invoke-MyPeopleDocker -Arguments @(
+        'exec', 'mypeople', 'tmux', 'has-session', '-t', 'repo-project-factory'
+    )
 }
 
 function Write-PortableBackup {
-    Docker stop --timeout 30 mypeople
+    Invoke-MyPeopleDocker -Arguments @('stop', '--timeout', '30', 'mypeople')
     $script:liveStopped = $true
 
     $create = @('create', '--name', $helper, '--user', 'root')
@@ -150,7 +156,7 @@ function Write-PortableBackup {
     $create += @($script:state.rollbackPinnedImage, 'sleep', 'infinity')
     Invoke-MyPeopleDocker -Arguments $create
     $script:helperCreated = $true
-    Docker start $helper
+    Invoke-MyPeopleDocker -Arguments @('start', $helper)
 
     $archiveCommand = @'
 set -eu
@@ -171,14 +177,18 @@ find /tmp/portable/home/mp/workspaces -path '*/.git/config' -type f -exec sed -i
 tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
 tar -tzf /tmp/portable-state.tar.gz >/dev/null
 '@
-    Docker exec $helper sh -lc $archiveCommand
-    Docker cp "${helper}:/tmp/portable-state.tar.gz" $archivePath
+    Invoke-MyPeopleDocker -Arguments @('exec', $helper, 'sh', '-lc', $archiveCommand)
+    Invoke-MyPeopleDocker -Arguments @('cp', "${helper}:/tmp/portable-state.tar.gz", $archivePath)
 
-    $redacted = Docker-Capture exec $helper sh -lc 'cat /src/mypeople-config/queue.env 2>/dev/null || true'
+    $redacted = Invoke-MyPeopleDocker -Arguments @(
+        'exec', $helper, 'sh', '-lc', 'cat /src/mypeople-config/queue.env 2>/dev/null || true'
+    ) -Capture
     ConvertTo-MyPeopleRedactedConfig $redacted |
         Set-Content -LiteralPath (Join-Path $transactionRoot 'queue.env.redacted') -Encoding UTF8
 
-    $containerHash = ((Docker-Capture exec $helper sha256sum /tmp/portable-state.tar.gz).Trim() -split '\s+')[0]
+    $containerHash = ((Invoke-MyPeopleDocker -Arguments @(
+        'exec', $helper, 'sha256sum', '/tmp/portable-state.tar.gz'
+    ) -Capture).Trim() -split '\s+')[0]
     $hostHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
     if ($containerHash -ne $hostHash) { throw 'Portable archive hash changed during Docker copy.' }
     if ((Get-Item -LiteralPath $archivePath).Length -lt 1024) { throw 'Portable archive is unexpectedly small.' }
@@ -190,9 +200,9 @@ tar -tzf /tmp/portable-state.tar.gz >/dev/null
     )
     Write-MyPeopleTransaction -Path $transactionPath -State $script:state
 
-    Docker rm -f $helper
+    Invoke-MyPeopleDocker -Arguments @('rm', '-f', $helper)
     $script:helperCreated = $false
-    Docker start mypeople
+    Invoke-MyPeopleDocker -Arguments @('start', 'mypeople')
     $script:liveStopped = $false
     Wait-MyPeopleControlPlane
 }
@@ -206,22 +216,34 @@ function Assert-Preflight {
     if ($LASTEXITCODE -ne 0) { throw 'Docker Compose v2 is required.' }
     & docker image inspect $CandidateImage *> $null
     if ($LASTEXITCODE -ne 0) { throw "Candidate image not found: $CandidateImage" }
-    $script:state.candidateImageId = (Docker-Capture image inspect $CandidateImage --format '{{.Id}}').Trim()
+    $script:state.candidateImageId = (Invoke-MyPeopleDocker -Arguments @(
+        'image', 'inspect', $CandidateImage, '--format', '{{.Id}}'
+    ) -Capture).Trim()
     if (& git -C $root status --porcelain) { throw 'Source repository must be clean before an image upgrade.' }
     $script:state.sourceCommit = (& git -C $root rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $script:state.sourceCommit) { throw 'Unable to resolve the source commit.' }
-    $running = (Docker-Capture inspect mypeople --format '{{.State.Running}}').Trim()
+    $running = (Invoke-MyPeopleDocker -Arguments @(
+        'inspect', 'mypeople', '--format', '{{.State.Running}}'
+    ) -Capture).Trim()
     if ($running -ne 'true') { throw 'The live MyPeople container must be running.' }
-    $script:state.oldImage = (Docker-Capture inspect mypeople --format '{{.Config.Image}}').Trim()
+    $script:state.oldImage = (Invoke-MyPeopleDocker -Arguments @(
+        'inspect', 'mypeople', '--format', '{{.Config.Image}}'
+    ) -Capture).Trim()
     $script:state.rollbackImage = $script:state.oldImage
-    $script:state.rollbackImageId = (Docker-Capture inspect mypeople --format '{{.Image}}').Trim()
+    $script:state.rollbackImageId = (Invoke-MyPeopleDocker -Arguments @(
+        'inspect', 'mypeople', '--format', '{{.Image}}'
+    ) -Capture).Trim()
     if ($script:state.rollbackImageId -eq $script:state.candidateImageId) { throw 'Candidate image is already live.' }
-    Docker tag $script:state.candidateImageId $script:state.deploymentImage
-    Docker tag $script:state.rollbackImageId $script:state.rollbackPinnedImage
-    if ((Docker-Capture image inspect $script:state.deploymentImage --format '{{.Id}}').Trim() -ne $script:state.candidateImageId) {
+    Invoke-MyPeopleDocker -Arguments @('tag', $script:state.candidateImageId, $script:state.deploymentImage)
+    Invoke-MyPeopleDocker -Arguments @('tag', $script:state.rollbackImageId, $script:state.rollbackPinnedImage)
+    if ((Invoke-MyPeopleDocker -Arguments @(
+        'image', 'inspect', $script:state.deploymentImage, '--format', '{{.Id}}'
+    ) -Capture).Trim() -ne $script:state.candidateImageId) {
         throw 'Unable to pin the candidate image ID.'
     }
-    if ((Docker-Capture image inspect $script:state.rollbackPinnedImage --format '{{.Id}}').Trim() -ne $script:state.rollbackImageId) {
+    if ((Invoke-MyPeopleDocker -Arguments @(
+        'image', 'inspect', $script:state.rollbackPinnedImage, '--format', '{{.Id}}'
+    ) -Capture).Trim() -ne $script:state.rollbackImageId) {
         throw 'Unable to pin the rollback image ID.'
     }
     $driveName = [IO.Path]::GetPathRoot($stateRoot).Substring(0, 1)
@@ -244,7 +266,9 @@ try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $isolatedVerifier `
         -Image $script:state.deploymentImage -TimeoutSeconds $VerifyTimeoutSeconds -UsePackagedSource
     if ($LASTEXITCODE -ne 0) { throw 'Candidate image failed isolated verification.' }
-    $verifiedImageId = (Docker-Capture image inspect $script:state.deploymentImage --format '{{.Id}}').Trim()
+    $verifiedImageId = (Invoke-MyPeopleDocker -Arguments @(
+        'image', 'inspect', $script:state.deploymentImage, '--format', '{{.Id}}'
+    ) -Capture).Trim()
     if ($verifiedImageId -ne $script:state.candidateImageId) { throw 'Candidate image changed during isolated verification.' }
     Set-UpgradeStage 'candidate-verified'
 
@@ -272,7 +296,9 @@ try {
     [IO.File]::WriteAllText($environmentPath, $candidateEnvironment, [Text.UTF8Encoding]::new($false))
 
     Set-UpgradeStage 'deploy'
-    $pinnedCandidateId = (Docker-Capture image inspect $script:state.deploymentImage --format '{{.Id}}').Trim()
+    $pinnedCandidateId = (Invoke-MyPeopleDocker -Arguments @(
+        'image', 'inspect', $script:state.deploymentImage, '--format', '{{.Id}}'
+    ) -Capture).Trim()
     if ($pinnedCandidateId -ne $script:state.candidateImageId) { throw 'Pinned candidate image changed before deployment.' }
     $deploymentMutationStarted = $true
     Invoke-PinnedCompose
@@ -302,9 +328,13 @@ try {
                 [IO.File]::WriteAllText($composePath, $oldCompose, [Text.UTF8Encoding]::new($false))
                 Invoke-PinnedCompose
                 Wait-MyPeopleControlPlane
-                $restored = (Docker-Capture inspect mypeople --format '{{.Config.Image}}').Trim()
+                $restored = (Invoke-MyPeopleDocker -Arguments @(
+                    'inspect', 'mypeople', '--format', '{{.Config.Image}}'
+                ) -Capture).Trim()
                 if ($restored -ne $script:state.rollbackPinnedImage) { throw "Rollback selected the wrong image: $restored" }
-                $restoredId = (Docker-Capture inspect mypeople --format '{{.Image}}').Trim()
+                $restoredId = (Invoke-MyPeopleDocker -Arguments @(
+                    'inspect', 'mypeople', '--format', '{{.Image}}'
+                ) -Capture).Trim()
                 if ($restoredId -ne $script:state.rollbackImageId) { throw 'Rollback selected the wrong image ID.' }
                 Assert-LiveMountContract
                 $rollbackState = Get-LiveState

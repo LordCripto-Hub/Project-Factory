@@ -26,14 +26,15 @@ foreach ($required in @(
     "-name '*.p12'",
     'Get-FileHash -Algorithm SHA256',
     'candidateImageId',
-    "inspect mypeople --format '{{.Image}}'",
+    "'inspect', 'mypeople', '--format', '{{.Image}}'",
     'deploymentImage',
     'rollbackPinnedImage',
-    'Docker tag $script:state.candidateImageId $script:state.deploymentImage',
-    'Docker tag $script:state.rollbackImageId $script:state.rollbackPinnedImage',
+    '''tag'', $script:state.candidateImageId, $script:state.deploymentImage',
+    '''tag'', $script:state.rollbackImageId, $script:state.rollbackPinnedImage',
     '.env.previous.redacted',
     '--force-recreate',
     "'up', '--detach', '--force-recreate'",
+    'Invoke-MyPeopleDocker -Arguments @(',
     'Get-MyPeopleStableRosterHash -Json',
     'mypeople-workspaces',
     '/home/mp/mypeople.seed.md',
@@ -69,6 +70,8 @@ foreach ($forbidden in @(
     'nightwatch:Nightwatch [alive]',
     'mypeople up --detach',
     'up -d --force-recreate',
+    'function Docker {',
+    'function Docker-Capture {',
     'Copy-Item -LiteralPath $environmentPath'
 )) {
     if ($upgrade -match [regex]::Escape($forbidden)) {
