@@ -73,6 +73,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.records = []
         self.statuses = []
         self.events = []
+        self.exported = {}
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -101,6 +102,10 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.events.append(("tmux", list(argv)))
         return Result()
 
+    def capture_environment(self, values):
+        self.exported.update(values)
+        return "true"
+
     def run_spawn(self, discover):
         discovery_error = discover if isinstance(discover, BaseException) else None
         discovery_value = discover if isinstance(discover, dict) else None
@@ -121,7 +126,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
              mock.patch.object(self.mp, "wait_for_composer", return_value=True), \
              mock.patch.object(self.mp, "tmux_send_message"), \
              mock.patch.object(self.mp, "ensure_codex_doctrine"), \
-             mock.patch.object(self.mp, "shell_export", return_value="true"), \
+             mock.patch.object(self.mp, "shell_export", side_effect=self.capture_environment), \
              mock.patch.object(self.mp, "capture_lock", side_effect=self.fake_lock, create=True), \
              mock.patch.object(self.mp, "snapshot_codex_sessions", return_value={"old"}, create=True), \
              mock.patch.object(
@@ -150,6 +155,10 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.assertEqual(record.get("session_cwd"), os.path.realpath(self.cwd))
         self.assertEqual(record.get("resume_state"), "available")
         self.assertEqual(record.get("last_recovery_error"), "")
+        self.assertEqual(
+            self.exported.get("MYPEOPLE_PROVIDER_PROFILE"),
+            "codex-primary",
+        )
         lock_enter = self.events.index(("lock-enter",))
         first_tmux = next(
             index for index, event in enumerate(self.events) if event[0] == "tmux"

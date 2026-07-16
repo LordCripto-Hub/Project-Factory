@@ -542,6 +542,8 @@ def spawn(ns):
         launch_env["MYPEOPLE_TASKSPEC_PATH"] = taskspec_path
     if provider_home:
         launch_env["CODEX_HOME"] = provider_home
+    if profile_id:
+        launch_env["MYPEOPLE_PROVIDER_PROFILE"] = profile_id
     if os.environ.get("VERIFY_RESERVED_OWNER_ID"):
         launch_env["VERIFY_RESERVED_OWNER_ID"]=os.environ["VERIFY_RESERVED_OWNER_ID"]
     command=shell_export(launch_env)+"; exec "+shlex.join(args)
