@@ -554,6 +554,38 @@ def resolve_owner_runtime(ns, receipt_record=None):
     }
     return taskspec_path, taskspec_context, worker_contract
 
+def startup_message_for(ns, tab, initial_message=""):
+    if str(initial_message or "").strip():
+        return str(initial_message)
+    if ns.master:
+        return (
+            "Read your Boss doctrine now. Internalize the queue quickstart, "
+            "operate autonomously, and reply with a concise readiness summary "
+            "containing plan, queue, mp, and verify."
+        )
+    if tab == "Nightwatch":
+        doctrine = "AGENTS.md" if ns.backend == "codex" else "CLAUDE.md"
+        return (
+            f"Read {doctrine} and internalize the Nightwatch "
+            "approve/edit/reject protocol. Reply with a concise nightwatch, "
+            "CEO-equivalent, approve, WhatsApp, never-done readiness summary."
+        )
+    if ns.owner_task:
+        return (
+            "Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH. The MyPeople worker "
+            "contract is already mounted; also follow the repository's own "
+            f"instructions. Work only on owner task {ns.owner_task}, run the "
+            "required verification, then report with mp complete and at least "
+            "one --proof. Do not close the task yourself."
+        )
+    if ns.backend == "codex":
+        return (
+            "Initialize this temporary MyPeople worker session, read local "
+            "project instructions when present, and reply with a concise "
+            "readiness summary."
+        )
+    return ""
+
 def spawn(
     ns,
     resume_session="",
@@ -613,6 +645,7 @@ def spawn(
         model,
         ns.backend,
     )
+    startup_message = startup_message_for(ns, tab, initial_message)
     if ns.backend == "codex" and ns.master:
         ensure_codex_doctrine(cwd)
     elif ns.backend == "codex" and tab == "Nightwatch":
@@ -726,6 +759,10 @@ def spawn(
             run_tmux(["rename-window","-t",target,tab]); created=True
         if created and capture_enabled:
             try:
+                if not wait_for_composer(target):
+                    raise SessionError("session_process_not_ready")
+                if not tmux_send_message(target, startup_message):
+                    raise SessionError("session_process_not_ready")
                 discovered = discover_codex_session(
                     capture_home,
                     cwd,
@@ -787,19 +824,11 @@ def spawn(
     queue_register(rec); recorder(session,tab)
     if created and resume_session:
         pass
-    elif created and initial_message:
+    elif created and capture_enabled:
+        pass
+    elif created and startup_message:
         wait_for_composer(target)
-        tmux_send_message(target, initial_message)
-    elif created and ns.master:
-        wait_for_composer(target)
-        tmux_send_message(target,"Read your Boss doctrine now. Internalize the queue quickstart, operate autonomously, and reply with a concise readiness summary containing plan, queue, mp, and verify.")
-    elif created and tab=="Nightwatch":
-        wait_for_composer(target)
-        doctrine_name = "AGENTS.md" if ns.backend == "codex" else "CLAUDE.md"
-        tmux_send_message(target,f"Read {doctrine_name} and internalize the Nightwatch approve/edit/reject protocol. Reply with a concise nightwatch, CEO-equivalent, approve, WhatsApp, never-done readiness summary.")
-    elif created and ns.owner_task:
-        wait_for_composer(target)
-        tmux_send_message(target,f"Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH. The MyPeople worker contract is already mounted; also follow the repository's own instructions. Work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
+        tmux_send_message(target, startup_message)
     print(aid)
 
 def notify_agent(agent_id, message):
