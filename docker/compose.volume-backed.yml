@@ -14,6 +14,7 @@ services:
       - "127.0.0.1:9933:9933"
       - "127.0.0.1:7681:7681"
       - "127.0.0.1:7682:7682"
+      - "127.0.0.1:7699:7699"
     volumes:
       - type: bind
         source: ${MYPEOPLE_SEED_PATH:?set MYPEOPLE_SEED_PATH}

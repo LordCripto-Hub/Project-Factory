@@ -13,7 +13,7 @@ class LocalDefaultNetworkContract(unittest.TestCase):
         compose = (ROOT / "docker" / "compose.volume-backed.yml").read_text(
             encoding="utf-8"
         )
-        for port in ("9900", "9933", "7681", "7682"):
+        for port in ("9900", "9933", "7681", "7682", "7699"):
             self.assertIn(f'"127.0.0.1:{port}:{port}"', compose)
         self.assertNotIn("/dev/net/tun", compose)
         self.assertNotIn("NET_ADMIN", compose)
