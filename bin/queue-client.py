@@ -23,6 +23,21 @@ def live_roster():
             row={**row,"host":h,"session":row.get("session") or s,"tab":row.get("tab") or t}
             if window_exists(f"mc-{s}:{t}") and not row.get("retired"):
                 row["state"]="alive";live.append(row)
+                # Spawn records start at ``starting`` but no provider callback
+                # is guaranteed to rewrite that file.  A successful heartbeat
+                # is the authoritative proof that the window is live, so
+                # close the one-way startup phase instead of exposing stale
+                # status forever in the HUD.
+                status=load_json(status_path(aid),{})
+                if status.get("status")=="starting":
+                    write_status(aid,"ready",status.get("summary",""),
+                                 boss_id=status.get("boss_id",row.get("boss_id","")),
+                                 backend=status.get("backend",row.get("backend","")))
+                    row["status"]="ready"
+                elif status.get("status"):
+                    row["status"]=status["status"]
+                if status.get("summary"):
+                    row["summary"]=status["summary"]
         except Exception:continue
     atomic_json(agents_path(),live);return live
 

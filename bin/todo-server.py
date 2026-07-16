@@ -429,7 +429,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if action=="reopen":
                 if not t.get("ownerNeedsReplacement") or aid==prev:return self.json({"ok":False,"error":"fresh_owner_required"},409)
             if action=="replace" and prev and prev!=aid and not t.get("test"):ping_boss(f"[todo] replace {tid}: kill prior owner {prev}")
-            t["assignee"]=aid;t["ownerNeedsReplacement"]=False;t["ownerHistory"].append(owner_event(action,aid,prev if prev!=aid else "",BOSS_FULL));t["updated"]=time.time();save_board(b);return self.json({"ok":True,"assignee":aid,"previous":prev})
+            t["assignee"]=aid;t["ownerNeedsReplacement"]=False
+            # CEO approval is represented by review.  Assigning the fresh
+            # Boss/worker owner is the next lifecycle edge and must be
+            # visible immediately in both API responses and the polling UI.
+            if t.get("state") in ("needs_brainstorm","review"):
+                t["state"]="working";t["verified"]=False
+            t["ownerHistory"].append(owner_event(action,aid,prev if prev!=aid else "",BOSS_FULL));t["updated"]=time.time()
+            if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
+            return self.json({"ok":True,"assignee":aid,"previous":prev,"state":t["state"]})
     def inbound(self,kind,d):
         if kind!="machine":return self.json({"ok":False,"error":"unauthorized"},401)
         sender=str(d.get("from",""));text=str(d.get("text",""));event=f"[nightwatch] inbound {sender}: {text}";m=re.fullmatch(r"\s*Nightwatch,\s*create\s+(.+?)\s*",text,re.I)
