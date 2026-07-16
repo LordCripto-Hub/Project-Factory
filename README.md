@@ -32,6 +32,17 @@ Default interfaces:
 - Writable terminal: <http://localhost:7681/>
 - Read-only terminal: <http://localhost:7682/>
 
+The standard Compose deployment binds these ports to **127.0.0.1**, does not
+request **NET_ADMIN** or **/dev/net/tun**, and never starts Tailscale. To
+dictate text, focus a MyPeople text box or writable terminal and press
+**Win + H**; Windows owns microphone permission and transcription.
+
+Remote networking is optional. An operator may explicitly add
+docker/compose.tailscale.yml to the Compose command to enable the bundled
+Tailscale runtime, or configure UPSTREAM_QUEUE_URL, UPSTREAM_QUEUE_SECRET, and
+TTYD_PUBLIC_URL for another LAN, VPN, or authenticated proxy. The one-click
+launcher never enables the remote override automatically.
+
 Windows operators can install the desktop shortcut with:
 
 ```powershell
@@ -52,6 +63,11 @@ MyPeople uses a pinned local image plus eight named volumes:
 - `mypeople-recordings` for terminal recordings.
 - `mypeople-workspaces` for managed Git working trees, local commits, and branches.
 
+The control queue journal also lives in `mypeople-run`. Queued commands survive
+a queue-server restart. Commands with an unknown post-delivery outcome are
+quarantined as `uncertain` and require explicit `mp queue-retry`; MyPeople does
+not automatically duplicate side effects.
+
 The migration is dry-run-first:
 
 ```powershell
@@ -67,6 +83,42 @@ The live transaction retains the old container as `mypeople-pre-volumes-<timesta
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Cleanup of preserved containers, images, backups, or restore-test volumes is a separate human-approved operation.
 
 Cloudflare memory remains disabled during this migration. Its first real profile is a separate, bounded, read-only activation cycle after backup, restore, launcher recovery, and rollback are verified.
+
+### Upgrade an existing volume-backed deployment
+
+Build a reviewed image from a clean repository, then run the permanent upgrade
+transaction:
+
+```powershell
+$sha = (git rev-parse --short=7 HEAD).Trim()
+$image = "mypeople-node:integration-$sha"
+$base = docker inspect mypeople --format '{{.Config.Image}}'
+docker build -f docker/Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t $image .
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Upgrade-MyPeopleDockerImage.ps1 -CandidateImage $image
+```
+
+The command runs the complete isolated verifier before live mutation, creates a
+protected portable backup under
+`%LOCALAPPDATA%\MyPeople\backups\docker-upgrade\<timestamp>`, recreates the
+service over the same eight volumes, and restores a transaction-owned rollback
+tag on failure. The verifier executes the application source packaged inside
+the candidate image, not the host checkout. Candidate and rollback image IDs
+are each pinned to unique transaction tags before mutation. The command does
+not delete volumes or preserve Compose containers by renaming them.
+
+Automatic rollback also rechecks the exact mount contract and the pre-upgrade
+board and stable-roster hashes. If application code changed durable data before
+failing, the transaction records `recovery-required` instead of claiming a
+successful rollback; use the protected local archive for manual recovery.
+
+`portable-state.tar.gz` is sensitive local restore material even after obvious
+credential filenames are excluded. Never publish, attach, commit, or upload
+that archive. Only the redacted configuration and transaction metadata are
+shareable diagnostic evidence.
+
+Provider sessions are independent of code upgrades. An exhausted, logged-out,
+or intentionally stopped provider remains in that state; the upgrade does not
+open OAuth, validate provider quotas, or revive agents.
 
 ## Persistent Project Factory workspace
 
@@ -86,22 +138,48 @@ After a matching priority reaches review with evidence, Boss binds one
 short-lived approval to the full commit:
 
 ```bash
-mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main
+mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main --mode draft_pr --head task/<task-id>-project-factory --title "Short PR title"
 mp publish <approval-id> --check
-mp publish <approval-id>
 ```
 
-`project-publisher` is the only product component that invokes `git push`.
+The Windows `Publish-MyPeopleProject.ps1` bridge consumes the approval. Docker
+pushes only the approved SHA to the approved `task/...` head, then the host
+GitHub CLI login creates or reconciles the matching draft pull request and
+records its number and URL. `project-publisher` is the only product component
+that invokes `git push`.
 It rejects dirty worktrees, changed commits, remote or branch mismatches,
 expired approvals, and reuse. Git authentication remains an external credential
 helper or secret reference; credentials are never copied into the workspace,
 approval ledger, image, or repository.
 
+The legacy `direct_main` mode remains available only for explicitly approved
+compatibility workflows. `draft_pr` is the recommended public collaboration
+contract.
+
 ## Documentation
 
 - [User manual](docs/USER-MANUAL.md)
 - [Minimal architecture](docs/MINIMAL-ARCHITECTURE.md)
-- [Voice Dock](docs/VOICE-DOCK.md)
+
+## Safe full verification
+
+The full suite runs only in a disposable, credential-free container. It never
+targets the live `mypeople` container or its board volumes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image <reviewed-local-image>
+```
+
+```bash
+MYPEOPLE_VERIFY_IMAGE=<reviewed-local-image> bash verify/verify.sh
+```
+
+The launchers publish no host ports, apply a bounded timeout, always remove
+their unique Compose project, delete evidence after success, and print the
+retained evidence path after failure. Exit codes are `0` for success, `1` for
+a suite failure, `124` for timeout, and `125` for orchestration failure.
+Provider and Tailnet-dependent runtime fixtures are synthetic; this suite does
+not validate live provider authentication or remote Tailnet reachability.
 
 ## Memory boundary
 

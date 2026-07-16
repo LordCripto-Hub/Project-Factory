@@ -14,12 +14,14 @@ Workers may edit, test, and commit in the managed project workspace, but they
 must never push. After a project card reaches review with evidence, verify the
 clean workspace and exact full commit, then create one short-lived approval:
 
-`mp approve-publish <task-id> --project project-factory --commit <40-char-sha> --branch main`
+`mp approve-publish <task-id> --project project-factory --commit <40-char-sha> --branch main --mode draft_pr --head task/<task-id>-project-factory --title "Short PR title"`
 
 Validate it without network mutation with `mp publish <approval-id> --check`.
-Only then consume it once with `mp publish <approval-id>`. Never bypass the
-publisher, force-push, publish another commit, or place Git credentials in the
-workspace, approval ledger, task comments, or repository.
+Only the Windows publication bridge may consume it, push the exact SHA to the
+approved `task/...` head, and create/reconcile the matching draft PR through the
+host GitHub CLI login. Never bypass the publisher, force-push, publish another
+commit, or place Git credentials in the workspace, approval ledger, task
+comments, or repository.
 
 When the verification-only environment variable `VERIFY_RESERVED_OWNER_ID` is present, use that exact full ID for the fixture owner; this preserves deterministic cleanup without changing the work protocol.
 

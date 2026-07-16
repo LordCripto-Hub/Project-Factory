@@ -7,7 +7,10 @@ export PATH="$HOME/.local/bin:$ROOT/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 . "$HOME/.config/mypeople/queue.env"
-mkdir -p "$ROOT/run" "$ROOT/run/tailscale-state"
+mkdir -p "$ROOT/run"
+if [[ "${MYPEOPLE_TAILSCALE_ENABLED:-0}" == "1" ]]; then
+  mkdir -p "$ROOT/run/tailscale-state"
+fi
 sudo -n install -d -o mp -g mp -m 0750 /home/mp/workspaces
 printf '%s\n' "$$" >"$ROOT/run/runtime-supervisor.pid"
 
@@ -71,14 +74,16 @@ while (( ! stopping )); do
   spawn ttyd-write ttyd -i 0.0.0.0 -W -a -p "$TTYD_PORT" -t disableLeaveAlert=true "$ROOT/bin/attach-helper.sh"
   spawn ttyd-read ttyd -i 0.0.0.0 -a -p "$TTYD_RO_PORT" -t disableLeaveAlert=true "$ROOT/bin/attach-ro-helper.sh"
   spawn boss-supervisor bash "$ROOT/bin/boss-supervisor.sh"
-  if ! sudo -n tailscale --socket="$ROOT/run/tailscale-state/tailscaled.sock" status >/dev/null 2>&1; then
-    spawn tailscaled sudo -n /usr/sbin/tailscaled \
-      --state="$ROOT/run/tailscale-state/tailscaled.state" \
-      --socket="$ROOT/run/tailscale-state/tailscaled.sock" \
-      --tun=tailscale0
-  fi
-  if [[ -S "$ROOT/run/tailscale-state/tailscaled.sock" ]]; then
-    sudo -n ln -sf "$ROOT/run/tailscale-state/tailscaled.sock" /var/run/tailscale/tailscaled.sock || true
+  if [[ "${MYPEOPLE_TAILSCALE_ENABLED:-0}" == "1" ]]; then
+    if ! sudo -n tailscale --socket="$ROOT/run/tailscale-state/tailscaled.sock" status >/dev/null 2>&1; then
+      spawn tailscaled sudo -n /usr/sbin/tailscaled \
+        --state="$ROOT/run/tailscale-state/tailscaled.state" \
+        --socket="$ROOT/run/tailscale-state/tailscaled.sock" \
+        --tun=tailscale0
+    fi
+    if [[ -S "$ROOT/run/tailscale-state/tailscaled.sock" ]]; then
+      sudo -n ln -sf "$ROOT/run/tailscale-state/tailscaled.sock" /var/run/tailscale/tailscaled.sock || true
+    fi
   fi
   sleep 2 &
   pid=$!

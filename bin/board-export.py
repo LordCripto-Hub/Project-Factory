@@ -7,7 +7,7 @@ from mpcommon import ENV, ROOT, load_json
 def default_repo(root=ROOT,port=None,host=None):
     port=str(port or ENV.get("TODO_PORT","9933"));host=host or ENV.get("HOST_ID","node")
     discriminator=f"{port}-{hashlib.sha1(os.path.realpath(root).encode()).hexdigest()[:8]}"
-    return os.path.expanduser(f"~/.mypeople/board-backup/{host}-{discriminator}")
+    return os.path.join(os.path.realpath(root),"todos","board-backup",f"{host}-{discriminator}")
 def run(repo,*args,check=True,capture=False):
     return subprocess.run(["git","-C",repo,*args],check=check,text=True,capture_output=capture)
 def count(board):return len(board.get("tasks",{})) if isinstance(board,dict) else 0

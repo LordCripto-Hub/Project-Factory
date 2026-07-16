@@ -14,7 +14,7 @@ $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $stateRoot = Join-Path $env:LOCALAPPDATA 'MyPeople'
 $transactionRoot = Join-Path $stateRoot "backups\docker-migration\$stamp"
 $transactionPath = Join-Path $transactionRoot 'transaction.json'
-$lockPath = Join-Path $stateRoot 'docker-migration.lock'
+$operationLockPath = Join-Path $stateRoot 'docker-operation.lock'
 $resolvedResumeManifest = $null
 $resumeState = $null
 if ($ResumeManifest) {
@@ -60,7 +60,7 @@ $script:state = [ordered]@{
     resumedFrom = $resolvedResumeManifest
     rollbackAttempted = $false
 }
-$lockCreated = $false
+$operationLock = $null
 $mutationStarted = $false
 $deploymentWritten = $false
 
@@ -138,9 +138,6 @@ function Assert-PopulatedVolumeState {
 }
 
 function Assert-Preflight {
-    if (Test-Path -LiteralPath $lockPath) {
-        throw "Migration lock already exists: $lockPath"
-    }
     if (-not (Test-ContainerExists $Container)) {
         throw "Expected container not found: $Container"
     }
@@ -181,13 +178,12 @@ function Remove-StaleRuntimePidFiles {
 }
 
 try {
+    $operationLock = Enter-MyPeopleDockerOperationLock -Path $operationLockPath -Owner "migration:$stamp"
     Assert-Preflight
     New-Item -ItemType Directory -Path $transactionRoot -Force | Out-Null
     $principal = $env:USERNAME + ':(OI)(CI)F'
     & icacls $transactionRoot /inheritance:r /grant:r $principal | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Unable to protect the migration evidence directory' }
-    Set-Content -LiteralPath $lockPath -Value $stamp -Encoding ASCII
-    $lockCreated = $true
     Set-Stage 'planned'
 
     if (-not $Execute) {
@@ -268,7 +264,7 @@ try {
     Docker create --name $candidateContainer --user root $snapshotImage sleep infinity
     try {
         Docker start $candidateContainer
-        foreach ($path in @('bin', 'verify', 'memory-gateway', 'plugins', 'docs', 'docker')) {
+        foreach ($path in @('bin', 'verify', 'memory-gateway', 'plugins', 'docs', 'docker', 'windows')) {
             $source = Join-Path $root $path
             if (-not (Test-Path -LiteralPath $source)) { throw "Candidate source path missing: $source" }
             Docker cp $source ('{0}:/home/mp/mypeople/' -f $candidateContainer)
@@ -374,6 +370,7 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
     $deployment = Join-Path $stateRoot 'deployment'
     New-Item -ItemType Directory -Path $deployment -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'docker\compose.volume-backed.yml') -Destination (Join-Path $deployment 'compose.volume-backed.yml') -Force
+    Copy-Item -LiteralPath (Join-Path $root 'docker\compose.tailscale.yml') -Destination (Join-Path $deployment 'compose.tailscale.yml') -Force
     Copy-Item -LiteralPath (Join-Path $root 'docker\state-volumes.json') -Destination (Join-Path $deployment 'state-volumes.json') -Force
     $composeSeedPath = $script:SeedPath -replace '\\', '/'
     $environmentPath = Join-Path $deployment '.env'
@@ -450,7 +447,7 @@ tar -C /tmp/portable -czf /tmp/portable-state.tar.gz .
     }
     throw $failureRecord
 } finally {
-    if ($lockCreated -and (Test-Path -LiteralPath $lockPath)) {
-        Remove-Item -LiteralPath $lockPath -Force
+    if ($operationLock) {
+        Exit-MyPeopleDockerOperationLock -Path $operationLockPath -Lock $operationLock
     }
 }

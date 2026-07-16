@@ -117,6 +117,30 @@ class ProjectProfileContract(unittest.TestCase):
         with self.assertRaises(project_context.ProfileError):
             project_context.validate_profile(unsafe)
 
+    def test_memory_credential_reference_accepts_only_env_or_secret_tmpfs_file(self):
+        file_profile = profile()
+        file_profile["memory"]["credentialRef"] = (
+            "file:///run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN"
+        )
+        validated = project_context.validate_profile(file_profile)
+        self.assertEqual(
+            validated["memory"]["credentialRef"],
+            "file:///run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN",
+        )
+
+        for reference in (
+            "file:///tmp/MYPEOPLE_MEMORY_TOKEN",
+            "file:///run/mypeople-secrets/../MYPEOPLE_MEMORY_TOKEN",
+            "file:///run/mypeople-secrets/lowercase",
+            "file:///run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN/extra",
+        ):
+            unsafe = profile()
+            unsafe["memory"]["credentialRef"] = reference
+            with self.subTest(reference=reference), self.assertRaisesRegex(
+                project_context.ProfileError, "invalid_credential_reference"
+            ):
+                project_context.validate_profile(unsafe)
+
     def test_working_directory_must_be_absolute(self):
         with self.assertRaisesRegex(project_context.ProfileError, "working_directory"):
             project_context.validate_profile(profile(workingDirectory="relative/path"))

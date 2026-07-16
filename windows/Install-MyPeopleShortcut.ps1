@@ -2,7 +2,15 @@ $ErrorActionPreference = 'Stop'
 $installDirectory = Join-Path $env:LOCALAPPDATA 'MyPeople\launcher'
 New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
 
-foreach ($name in @('Start-MyPeople.ps1', 'MyPeople.ProviderProfiles.psm1')) {
+foreach ($name in @(
+    'Start-MyPeople.ps1',
+    'MyPeople.ProviderProfiles.psm1',
+    'MyPeople.Memory.psm1',
+    'Set-MyPeopleMemoryCredential.ps1',
+    'Set-MyPeopleMemoryActivation.ps1',
+    'Test-MyPeopleMemoryPilot.ps1',
+    'Publish-MyPeopleProject.ps1'
+)) {
     $source = Join-Path $PSScriptRoot $name
     if (-not (Test-Path -LiteralPath $source)) { throw "Launcher file missing: $source" }
     $destination = Join-Path $installDirectory $name
@@ -18,7 +26,7 @@ $deploymentDirectory = Join-Path $env:LOCALAPPDATA 'MyPeople\deployment'
 $environmentPath = Join-Path $deploymentDirectory '.env'
 if (Test-Path -LiteralPath $environmentPath) {
     $projectRoot = Split-Path $PSScriptRoot -Parent
-    foreach ($name in @('compose.volume-backed.yml', 'state-volumes.json')) {
+    foreach ($name in @('compose.volume-backed.yml', 'compose.tailscale.yml', 'state-volumes.json')) {
         $source = Join-Path $projectRoot "docker\$name"
         if (-not (Test-Path -LiteralPath $source)) {
             throw "Deployment file missing: $source"

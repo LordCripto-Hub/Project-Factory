@@ -17,6 +17,6 @@ try:d=json.load(open(p))
 except:d={}
 d['skipDangerousModePermissionPrompt']=True;t=p+'.tmp';json.dump(d,open(t,'w'),indent=2);os.replace(t,p)
 PY
-ln -sf "$ROOT/bin/mp" "$HOME/.local/bin/mp"; ln -sf "$ROOT/bin/mypeople" "$HOME/.local/bin/mypeople"
+ln -sf "$ROOT/bin/mp" "$HOME/.local/bin/mp"; ln -sf "$ROOT/bin/mypeople" "$HOME/.local/bin/mypeople"; ln -sf "$ROOT/bin/memory-profile" "$HOME/.local/bin/memory-profile"
 chmod +x "$ROOT"/bin/* "$ROOT"/plugins/tmux-boss-hooks/scripts/emit-event
 tmux source-file "$HOME/.tmux.conf" 2>/dev/null || true

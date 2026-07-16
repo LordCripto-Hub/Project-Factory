@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from memory_profile import DEFAULT_SECRET_PATH, MemoryProfileError, update_memory_profile
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(prog="memory-profile")
+    result.add_argument("action", choices=("enable", "disable"))
+    result.add_argument("--project", required=True)
+    result.add_argument("--server-url")
+    result.add_argument(
+        "--profiles-dir",
+        default=os.environ.get(
+            "PROJECT_PROFILES_DIR",
+            str(Path.home() / "mypeople" / "run" / "project-profiles"),
+        ),
+    )
+    result.add_argument("--secret-path", default=str(DEFAULT_SECRET_PATH))
+    return result
+
+
+def main(argv=None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        metadata = update_memory_profile(
+            args.action,
+            project=args.project,
+            server_url=args.server_url,
+            profiles_dir=args.profiles_dir,
+            secret_path=args.secret_path,
+        )
+    except MemoryProfileError as error:
+        print(error.code, file=sys.stderr)
+        return 1
+    print(json.dumps(metadata, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

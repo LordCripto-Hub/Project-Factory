@@ -271,6 +271,134 @@ class ProjectPublisherContract(unittest.TestCase):
                     )
                 self.assertFalse(any("push" in call for call in runner.calls))
 
+    def test_draft_pr_approval_binds_safe_head_base_title_and_body(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            approval = self.create(
+                root,
+                mode="draft_pr",
+                base_branch="main",
+                head_branch="task/task-1-project-factory",
+                pr_title="Fix the publisher",
+                pr_body="Evidence is attached to task-1.",
+            )
+            self.assertEqual(approval["mode"], "draft_pr")
+            self.assertEqual(approval["baseBranch"], "main")
+            self.assertEqual(approval["headBranch"], "task/task-1-project-factory")
+            self.assertEqual(approval["prTitle"], "Fix the publisher")
+            self.assertEqual(approval["prBody"], "Evidence is attached to task-1.")
+            for invalid in ("main", "refs/heads/main", "../escape", "task//bad"):
+                with self.subTest(head=invalid), self.assertRaises(self.module.PublisherError):
+                    self.create(
+                        root,
+                        id_factory=lambda: "d" * 24,
+                        mode="draft_pr",
+                        base_branch="main",
+                        head_branch=invalid,
+                    )
+
+    def test_draft_pr_push_is_exact_and_stops_at_branch_pushed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            approval = self.create(
+                root,
+                mode="draft_pr",
+                base_branch="main",
+                head_branch="task/task-1-project-factory",
+            )
+            profiles = self.save_profile(root)
+            runner = GitRunner()
+            with self.broker_environment(root):
+                result = self.module.publish(
+                    approval["approvalId"],
+                    approvals_dir=str(root / "approvals"),
+                    profiles_dir=str(profiles),
+                    runner=runner,
+                    now=1100.0,
+                    execute=True,
+                )
+            self.assertEqual(result["status"], "branch_pushed")
+            self.assertEqual(runner.calls[-1], [
+                "git", "-C", str(root / "workspace"), "push", "--porcelain",
+                "origin", f"{COMMIT}:refs/heads/task/task-1-project-factory",
+            ])
+            calls = len(runner.calls)
+            resumed = self.module.publish(
+                approval["approvalId"],
+                approvals_dir=str(root / "approvals"),
+                profiles_dir=str(profiles),
+                runner=runner,
+                now=1101.0,
+                execute=True,
+            )
+            self.assertEqual(resumed["status"], "branch_pushed")
+            self.assertEqual(len(runner.calls), calls)
+            with self.assertRaisesRegex(self.module.PublisherError, "expired"):
+                self.module.publish(
+                    approval["approvalId"],
+                    approvals_dir=str(root / "approvals"),
+                    profiles_dir=str(profiles),
+                    runner=runner,
+                    now=2000.0,
+                    execute=True,
+                )
+
+    def test_finalize_draft_pr_is_idempotent_and_records_sanitized_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            approval = self.create(
+                root,
+                mode="draft_pr",
+                base_branch="main",
+                head_branch="task/task-1-project-factory",
+            )
+            profiles = self.save_profile(root)
+            with self.broker_environment(root):
+                self.module.publish(
+                    approval["approvalId"], approvals_dir=str(root / "approvals"),
+                    profiles_dir=str(profiles), runner=GitRunner(), now=1100.0,
+                )
+            final = self.module.finalize_draft_pr(
+                approval["approvalId"], 42,
+                "https://github.com/LordCripto-Hub/Project-Factory/pull/42",
+                approvals_dir=str(root / "approvals"), now=1102.0,
+            )
+            self.assertEqual(final["status"], "pr_created")
+            self.assertEqual(final["pullRequest"]["number"], 42)
+            again = self.module.finalize_draft_pr(
+                approval["approvalId"], 42,
+                "https://github.com/LordCripto-Hub/Project-Factory/pull/42",
+                approvals_dir=str(root / "approvals"), now=1103.0,
+            )
+            self.assertEqual(again, final)
+            receipt = (root / "approvals" / "receipts.jsonl").read_text(encoding="utf-8")
+            self.assertIn('\"status\":\"pr_created\"', receipt)
+            self.assertNotIn("password", receipt.lower())
+
+    def test_finalize_rejects_wrong_repository_or_number(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            approval = self.create(
+                root, mode="draft_pr", base_branch="main",
+                head_branch="task/task-1-project-factory",
+            )
+            profiles = self.save_profile(root)
+            with self.broker_environment(root):
+                self.module.publish(
+                    approval["approvalId"], approvals_dir=str(root / "approvals"),
+                    profiles_dir=str(profiles), runner=GitRunner(), now=1100.0,
+                )
+            for number, url in (
+                (42, "https://github.com/example/wrong/pull/42"),
+                (42, "https://github.com/LordCripto-Hub/Project-Factory/pull/43"),
+                (0, "https://github.com/LordCripto-Hub/Project-Factory/pull/0"),
+            ):
+                with self.subTest(number=number, url=url), self.assertRaises(self.module.PublisherError):
+                    self.module.finalize_draft_pr(
+                        approval["approvalId"], number, url,
+                        approvals_dir=str(root / "approvals"), now=1102.0,
+                    )
+
 
 if __name__ == "__main__":
     result = unittest.TextTestRunner(verbosity=2).run(

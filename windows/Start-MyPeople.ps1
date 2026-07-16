@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Import-Module (Join-Path $PSScriptRoot 'MyPeople.ProviderProfiles.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'MyPeople.Memory.psm1') -Force
 $stateDir = Join-Path $env:LOCALAPPDATA 'MyPeople'
 $logPath = Join-Path $stateDir 'launcher.log'
 New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
@@ -89,6 +90,9 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'docker start mypeople failed.' }
         }
     }
+
+    Write-LauncherLog 'Rehydrate bounded memory credential state'
+    Sync-MyPeopleMemoryActivation -Container 'mypeople' | Out-Null
 
     $bindings = Get-MyPeopleProviderBindings
     $activeProfile = [string]$bindings.globalProfile

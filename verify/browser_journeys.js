@@ -29,6 +29,32 @@ async function launch() {
   });
   const page = await context.newPage();
   const errors = [];
+  const boardPollNavigation = {
+    deadline: 0,
+    deferred: [],
+    begin() { this.deadline = Date.now() + 5000; },
+    active() { return Date.now() <= this.deadline; },
+    defer(message) { this.deferred.push(String(message || '')); },
+    async verify(targetPage) {
+      if (!this.deferred.length) return;
+      const result = await targetPage.evaluate(async ({ baseUrl }) => {
+        const response = await fetch(baseUrl + '/todo/board', {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        const payload = response.ok ? await response.json() : {};
+        return { ok: response.ok, taskCount: Object.keys(payload.tasks || {}).length };
+      }, { baseUrl });
+      if (!result.ok || result.taskCount < 1) {
+        throw new Error(`deferred board poll cancellation was not followed by a healthy board: ${this.deferred.join(' | ')}`);
+      }
+      this.deferred = [];
+      this.deadline = 0;
+    },
+  };
+  page.on('framenavigated', frame => {
+    if (frame === page.mainFrame()) boardPollNavigation.begin();
+  });
   page.on('console', m => {
     const message = m.text();
     if (m.type() === 'error' && !shouldIgnoreConsoleError(message, browserName)) {
@@ -36,7 +62,15 @@ async function launch() {
     }
   });
   page.on('pageerror', e => {
-    if (!/Load failed/i.test(e.message) && !/beforeunload.*confirmation dialog/i.test(e.message)) errors.push(`pageerror: ${e.message}`);
+    // WebKit can report a cancelled loopback board poll as an access-control
+    // page error while a navigation succeeds. Functional assertions still
+    // verify the destination and board state after every navigation.
+    if (shouldIgnoreConsoleError(e.message, browserName, boardPollNavigation.active())) {
+      boardPollNavigation.defer(e.message);
+      return;
+    }
+    if (/Load failed/i.test(e.message) || /beforeunload.*confirmation dialog/i.test(e.message)) return;
+    errors.push(`pageerror: ${e.message} @ ${page.url()}`);
   });
   page.on('requestfailed', r => {
     const u = r.url();
@@ -48,7 +82,7 @@ async function launch() {
       errors.push(`requestfailed: ${u} ${err}`);
     }
   });
-  return { browser, context, page, errors };
+  return { browser, context, page, errors, boardPollNavigation };
 }
 
 async function saveShot(page, name) {
@@ -100,18 +134,19 @@ async function count(page, sel) {
 }
 
 async function liveCore(page) {
+  const liveMarker = `browser-${browserName}-${Date.now()}`;
   await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('h1');
   await expect((await text(page, 'h1')) === 'Priorities', 'board title mismatch');
-  await page.fill('#taskInput', 'verify browser live core');
+  await page.fill('#taskInput', `verify browser live core ${liveMarker}`);
   await page.keyboard.press('Enter');
   await page.waitForSelector('li.task');
   const first = page.locator('li.task').first();
   await first.locator('.task-text').click();
   await page.waitForSelector('body.modal-open');
-  await page.fill('#commentInput', 'browser comment');
+  await page.fill('#commentInput', `browser comment ${liveMarker}`);
   await page.click('#postComment');
-  await page.getByText('browser comment', { exact: false }).waitFor();
+  await page.getByText(`browser comment ${liveMarker}`, { exact: true }).waitFor();
   await closeCard(page);
   await page.click('a.navlink[href="/dashboard"]');
   await page.waitForURL(/\/dashboard$/);
@@ -128,73 +163,7 @@ async function liveCore(page) {
   await saveShot(page, 'live-core');
 }
 
-async function voiceMock(page) {
-  await page.addInitScript(() => {
-    class FakeSpeechRecognition {
-      constructor() {
-        window.__voiceRecognition = this;
-        this.started = false;
-      }
-      start() {
-        this.started = true;
-        window.__voiceStarts = (window.__voiceStarts || 0) + 1;
-        if (this.onstart) this.onstart();
-      }
-      stop() {
-        this.started = false;
-        if (this.onend) this.onend();
-      }
-      emit(text) {
-        const result = [{ transcript: text }];
-        result.isFinal = true;
-        if (this.onresult) this.onresult({ resultIndex: 0, results: [result] });
-      }
-    }
-    window.SpeechRecognition = FakeSpeechRecognition;
-    window.webkitSpeechRecognition = FakeSpeechRecognition;
-  });
-
-  await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.voice-dock__trigger');
-  const beforeTasks = (await board(page)).order.length;
-  await page.fill('#taskInput', 'start');
-  await page.focus('#taskInput');
-  await page.click('.voice-dock__trigger');
-  await page.waitForSelector('.voice-dock.listening');
-  await page.evaluate(text => window.__voiceRecognition.emit(text), 'native voice test');
-  await page.waitForFunction(() => document.querySelector('#taskInput').value === 'start native voice test');
-  await expect((await board(page)).order.length === beforeTasks, 'dictation submitted the task');
-
-  await page.click('.voice-dock__trigger');
-  const startsBefore = await page.evaluate(() => window.__voiceStarts || 0);
-  await page.evaluate(() => {
-    const event = () => new KeyboardEvent('keydown', { ctrlKey: true, metaKey: true, bubbles: true });
-    document.dispatchEvent(event());
-    document.dispatchEvent(event());
-  });
-  await expect(await page.locator('.voice-dock__trigger').getAttribute('aria-pressed') === 'true', 'Ctrl+Windows did not start dictation');
-  await expect(await page.evaluate(() => window.__voiceStarts) === startsBefore + 1, 'shortcut latch toggled twice');
-  await page.evaluate(() => {
-    document.dispatchEvent(new KeyboardEvent('keyup', { ctrlKey: false, metaKey: false, bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, metaKey: true, bubbles: true }));
-  });
-  await expect(await page.locator('.voice-dock__trigger').getAttribute('aria-pressed') === 'false', 'second Ctrl+Windows chord did not stop dictation');
-
-  let pasted = null;
-  await page.route('**/voice/paste', async route => {
-    pasted = JSON.parse(route.request().postData() || '{}');
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
-  });
-  await page.evaluate(() => { document.body.dataset.terminalAgent = 'verify-host/main:eng-1'; });
-  await page.click('.voice-dock__trigger');
-  await page.evaluate(text => window.__voiceRecognition.emit(text), 'safe echo');
-  await page.waitForFunction(() => document.querySelector('.voice-dock__hint').textContent.includes('Text inserted'));
-  await expect(pasted && pasted.agent === 'verify-host/main:eng-1', 'terminal target missing');
-  await expect(pasted.text === 'safe echo' && !/[\r\n]/.test(pasted.text), 'terminal paste changed or submitted text');
-  await page.click('.voice-dock__trigger');
-  await saveShot(page, 'voice-mock');
-}
-async function sandboxSuite(page) {
+async function sandboxSuite(page, boardPollNavigation) {
   const s = manifest.sandbox || {};
   const taskIds = s.taskIds || [];
   if (taskIds.length < 10) throw new Error('sandbox manifest missing task ids');
@@ -255,7 +224,6 @@ async function sandboxSuite(page) {
   await pop.waitForURL(url => !url.toString().endsWith('about:blank') && url.toString().includes('/todo/terminal?agent='), { timeout: 5000 });
   await pop.waitForSelector('#terminalFrame');
   await pop.waitForFunction(() => document.querySelector('#terminalFrame')?.src.includes('?arg=-t&arg='));
-  await expect(await pop.locator('.voice-dock').count() === 1, 'terminal Voice Dock missing');
   await pop.close();
   await closeCard(page);
 
@@ -299,7 +267,7 @@ async function sandboxSuite(page) {
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO94W9kAAAAASUVORK5CYII=', 'base64'),
   });
   await page.waitForFunction(n => document.querySelectorAll('.evidence-card').length > n, beforeEvidence);
-  await expect((await text(page, '#evidenceStatus')).includes('attached'), 'evidence upload status missing');
+  await page.waitForFunction(() => document.querySelector('#evidenceStatus')?.textContent.includes('Uploaded'));
   await expect(await count(page, '.evidence-meta') >= 1, 'evidence metadata missing');
   await closeCard(page);
 
@@ -315,6 +283,14 @@ async function sandboxSuite(page) {
   await page.waitForSelector('#agentsTable');
   await page.click('a.nav[href="/"]');
   await page.waitForURL(/\/$/);
+  await expect((await text(page, 'h1')) === 'Priorities', 'direct HUD->board failed');
+  const proxiedBoard = await page.evaluate(async () => {
+    const response = await fetch('/todo/board', { credentials: 'same-origin', cache: 'no-store' });
+    const payload = response.ok ? await response.json() : {};
+    return { ok: response.ok, taskCount: Object.keys(payload.tasks || {}).length };
+  });
+  await expect(proxiedBoard.ok && proxiedBoard.taskCount > 0, 'direct HUD board proxy failed');
+  await page.waitForTimeout(250);
 
   // Recurring flow.
   const recurringFlow = taskIds.find(id => id !== s.deleteId && id !== s.ownerTask && id !== s.safeMdId && id !== s.scrollId);
@@ -358,17 +334,16 @@ async function sandboxSuite(page) {
 }
 
 (async () => {
-  const { browser, context, page, errors } = await launch();
+  const { browser, context, page, errors, boardPollNavigation } = await launch();
   try {
     if (scenario === 'live_core') {
       await liveCore(page);
     } else if (scenario === 'sandbox_suite') {
-      await sandboxSuite(page);
-    } else if (scenario === 'voice_mock') {
-      await voiceMock(page);
+      await sandboxSuite(page, boardPollNavigation);
     } else {
       throw new Error(`unknown scenario: ${scenario}`);
     }
+    await boardPollNavigation.verify(page);
     if (errors.length) throw new Error(errors.join('\n'));
   } finally {
     await context.close().catch(() => {});

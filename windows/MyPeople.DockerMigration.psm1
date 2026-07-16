@@ -80,6 +80,45 @@ function Write-MyPeopleTransaction {
     Move-Item -LiteralPath $temporary -Destination $Path -Force
 }
 
+function Enter-MyPeopleDockerOperationLock {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Owner
+    )
+    $directory = Split-Path $Path -Parent
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    try {
+        $stream = [IO.FileStream]::new(
+            $Path,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None,
+            4096,
+            [IO.FileOptions]::DeleteOnClose
+        )
+    } catch [IO.IOException] {
+        throw "Another MyPeople Docker operation already owns the lock: $Path"
+    }
+    try {
+        $payload = [Text.Encoding]::UTF8.GetBytes("$Owner`n")
+        $stream.Write($payload, 0, $payload.Length)
+        $stream.Flush($true)
+        return $stream
+    } catch {
+        $stream.Dispose()
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+function Exit-MyPeopleDockerOperationLock {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][IO.FileStream]$Lock
+    )
+    $Lock.Dispose()
+}
+
 function Invoke-MyPeopleDocker {
     param(
         [Parameter(Mandatory)][string[]]$Arguments,
@@ -161,6 +200,8 @@ Export-ModuleMember -Function @(
     'Read-MyPeoplePlainText',
     'Get-MyPeopleStableRosterHash',
     'Write-MyPeopleTransaction',
+    'Enter-MyPeopleDockerOperationLock',
+    'Exit-MyPeopleDockerOperationLock',
     'Invoke-MyPeopleDocker',
     'Test-MyPeopleDockerObject',
     'Invoke-MyPeopleRollback'

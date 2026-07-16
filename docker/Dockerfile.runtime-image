@@ -1,0 +1,20 @@
+ARG BASE_IMAGE=mypeople-node:integration-a54d9e3
+FROM ${BASE_IMAGE}
+
+USER root
+COPY --chown=mp:mp . /tmp/mypeople-source
+RUN python3 /tmp/mypeople-source/docker/sync_runtime_source.py \
+      /tmp/mypeople-source /home/mp/mypeople \
+    && rm -rf /tmp/mypeople-source \
+    && chown -R mp:mp /home/mp/mypeople \
+    && chmod +x /home/mp/mypeople/bin/* \
+    /home/mp/mypeople/install.sh \
+    /home/mp/mypeople/plugins/tmux-boss-hooks/scripts/emit-event
+
+USER mp
+WORKDIR /home/mp
+
+# Compose owns the production command. A transparent entrypoint prevents the
+# snapshot's development `sleep` entrypoint from consuming that command.
+ENTRYPOINT ["/usr/bin/env"]
+CMD ["sleep", "infinity"]

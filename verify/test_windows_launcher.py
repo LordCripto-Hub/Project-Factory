@@ -30,13 +30,33 @@ class WindowsLauncherContract(unittest.TestCase):
         text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
         compose = text.index("docker compose pinned deployment up")
         container_start = text.index("docker start mypeople")
+        memory_rehydrate = text.index("Sync-MyPeopleMemoryActivation")
         rehydrate = text.index("& $adapter.ActivateProfile")
         start_agents = text.index("mypeople up --detach")
+        self.assertLess(compose, memory_rehydrate)
+        self.assertLess(container_start, memory_rehydrate)
+        self.assertLess(memory_rehydrate, rehydrate)
         self.assertLess(compose, rehydrate)
         self.assertLess(container_start, rehydrate)
         self.assertLess(rehydrate, start_agents)
         self.assertIn("& $adapter.ValidateRuntime", text)
         self.assertIn("No provider binding configured", text)
+
+    def test_launcher_uses_dpapi_to_tmpfs_memory_rehydration(self):
+        text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
+        self.assertIn("MyPeople.Memory.psm1", text)
+        self.assertIn("Sync-MyPeopleMemoryActivation", text)
+        self.assertNotIn("MYPEOPLE_MEMORY_TOKEN=", text)
+
+        compose = (ROOT / "docker" / "compose.volume-backed.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("tmpfs:", compose)
+        self.assertIn("/run/mypeople-secrets", compose)
+        self.assertIn("uid=1000", compose)
+        self.assertIn("gid=1000", compose)
+        self.assertIn("mode=0700", compose)
+        self.assertNotIn("MYPEOPLE_MEMORY_TOKEN", compose)
 
     def test_launcher_recovers_the_pinned_volume_backed_deployment(self):
         text = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
@@ -46,6 +66,8 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertIn("docker compose", text)
         self.assertNotIn("compose down", text)
         self.assertNotIn("volume rm", text)
+        self.assertNotIn("compose.tailscale.yml", text)
+        self.assertNotIn("TS_AUTHKEY", text)
 
     def test_launcher_supports_noninteractive_migration_verification(self):
         launcher = (ROOT / "windows" / "Start-MyPeople.ps1").read_text(encoding="utf-8")
@@ -65,10 +87,24 @@ class WindowsLauncherContract(unittest.TestCase):
         self.assertIn("MyPeople\\launcher", text)
         self.assertIn("Copy-Item", text)
         self.assertIn("MyPeople.ProviderProfiles.psm1", text)
+        self.assertIn("MyPeople.Memory.psm1", text)
+        self.assertIn("Set-MyPeopleMemoryCredential.ps1", text)
+        self.assertIn("Set-MyPeopleMemoryActivation.ps1", text)
         self.assertIn("compose.volume-backed.yml", text)
+        self.assertIn("compose.tailscale.yml", text)
         self.assertIn("state-volumes.json", text)
         self.assertIn("-WindowStyle Hidden", text)
         self.assertIn("MyPeople.lnk", text)
+
+    def test_public_docs_use_windows_dictation_and_explicit_remote_opt_in(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(encoding="utf-8")
+        for text in (readme, manual):
+            self.assertIn("Win + H", text)
+            self.assertIn("compose.tailscale.yml", text)
+            self.assertIn("127.0.0.1", text)
+            self.assertNotIn("Ctrl + Windows", text)
+            self.assertNotIn("Voice Dock", text)
 
 
 if __name__ == "__main__":

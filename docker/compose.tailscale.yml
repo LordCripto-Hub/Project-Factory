@@ -1,0 +1,8 @@
+services:
+  mypeople:
+    environment:
+      MYPEOPLE_TAILSCALE_ENABLED: "1"
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN

@@ -1,0 +1,42 @@
+services:
+  verify:
+    image: ${MYPEOPLE_VERIFY_IMAGE:?set MYPEOPLE_VERIFY_IMAGE}
+    user: mp
+    init: true
+    read_only: true
+    network_mode: none
+    entrypoint: ["/bin/bash", "/workspace/verify/container-entrypoint.sh"]
+    environment:
+      MP_VERIFY_ISOLATED: "1"
+      MP_VERIFY_EVIDENCE_DIR: /evidence
+      MP_VERIFY_MODE: ${MP_VERIFY_MODE:?set MP_VERIFY_MODE}
+      MP_VERIFY_SOURCE_MODE: ${MP_VERIFY_SOURCE_MODE:?set MP_VERIFY_SOURCE_MODE}
+      MP_VERIFY_SMOKE_COMMAND: ${MP_VERIFY_SMOKE_COMMAND:-}
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+      CODEX_API_KEY: ""
+      GH_TOKEN: ""
+      GITHUB_TOKEN: ""
+      TAILSCALE_AUTHKEY: ""
+      MYPEOPLE_MEMORY_TOKEN: ""
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 1024
+    tmpfs:
+      - /tmp:exec,nosuid,nodev,uid=1000,gid=1000,mode=1777
+      - /run:exec,nosuid,nodev,uid=1000,gid=1000,mode=0755
+      - /home/mp/.config:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700
+      - /home/mp/.codex:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700
+      - /home/mp/.claude:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700
+      - /home/mp/recordings:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700
+      - /home/mp/workspaces:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700
+    volumes:
+      - type: bind
+        source: ${MP_VERIFY_SOURCE:?set MP_VERIFY_SOURCE}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${MP_VERIFY_EVIDENCE_DIR:?set MP_VERIFY_EVIDENCE_DIR}
+        target: /evidence

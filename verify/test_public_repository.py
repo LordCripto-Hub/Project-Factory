@@ -9,8 +9,6 @@ PUBLIC_FILES = [
     ROOT / "CONTRIBUTING.md",
     ROOT / "docs" / "MINIMAL-ARCHITECTURE.md",
     ROOT / "docs" / "USER-MANUAL.md",
-    ROOT / "docs" / "VOICE-DOCK.md",
-    ROOT / "bin" / "voice-dock.js",
     ROOT / "windows" / "Start-MyPeople.ps1",
     ROOT / "windows" / "Install-MyPeopleShortcut.ps1",
 ]
@@ -19,7 +17,7 @@ PUBLIC_FILES = [
 class PublicRepositoryContract(unittest.TestCase):
     def test_public_document_names_are_english(self):
         names = {path.name for path in (ROOT / "docs").glob("*.md")}
-        self.assertEqual(names, {"MINIMAL-ARCHITECTURE.md", "USER-MANUAL.md", "VOICE-DOCK.md"})
+        self.assertEqual(names, {"MINIMAL-ARCHITECTURE.md", "USER-MANUAL.md"})
 
     def test_public_surfaces_exist_and_are_nonempty(self):
         for path in PUBLIC_FILES:
@@ -53,6 +51,15 @@ class PublicRepositoryContract(unittest.TestCase):
             self.assertIn("mypeople-pre-volumes-", text)
             self.assertIn("Never run `docker compose down -v`", text)
             self.assertIn("Cloudflare memory remains disabled", text)
+
+    def test_memory_pilot_documents_the_real_security_boundary(self):
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Test-MyPeopleMemoryPilot.ps1", manual)
+        self.assertIn("disposable agent-free container", manual)
+        self.assertIn("Persistent memory activation is blocked", manual)
+        self.assertIn("same Linux user", manual)
 
 
 if __name__ == "__main__":

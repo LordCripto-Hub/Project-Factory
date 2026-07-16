@@ -29,5 +29,29 @@ assert.strictEqual(
   shouldIgnoreConsoleError('application crashed with Load failed', 'webkit'),
   false,
 );
+assert.strictEqual(
+  shouldIgnoreConsoleError('/127.0.0.1:35861/todo/board due to access control checks.', 'webkit', true),
+  true,
+);
+assert.strictEqual(
+  shouldIgnoreConsoleError('/127.0.0.1:35861/todo/board due to access control checks.', 'webkit'),
+  false,
+);
+assert.strictEqual(
+  shouldIgnoreConsoleError('/127.0.0.1:35861/todo/board due to access control checks.', 'chromium', true),
+  false,
+);
+assert.strictEqual(
+  shouldIgnoreConsoleError('/127.0.0.1:35861/todo/proof due to access control checks.', 'webkit', true),
+  false,
+);
+
+const journey = fs.readFileSync(path.join(__dirname, 'browser_journeys.js'), 'utf8');
+assert.match(journey, /const liveMarker = `browser-\$\{browserName\}-\$\{Date\.now\(\)\}`;/);
+assert.ok(journey.includes("await page.fill('#commentInput', `browser comment ${liveMarker}`);"));
+assert.ok(journey.includes("getByText(`browser comment ${liveMarker}`, { exact: true })"));
+assert.ok(journey.includes("page.on('framenavigated'"));
+assert.ok(journey.includes('boardPollNavigation.defer(e.message);'));
+assert.ok(journey.includes('await boardPollNavigation.verify(page);'));
 
 console.log('browser console error filter: ok');

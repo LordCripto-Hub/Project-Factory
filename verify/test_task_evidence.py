@@ -128,6 +128,12 @@ class TaskEvidenceContract(unittest.TestCase):
         self.assertEqual(ns.proof_file, ["screen.png"])
         self.assertEqual(ns.proof_url, ["https://example.test/result"])
 
+    def test_browser_journey_waits_for_the_current_upload_success_status(self):
+        priorities = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
+        journey = (ROOT / "verify" / "browser_journeys.js").read_text(encoding="utf-8")
+        self.assertIn("textContent='Uploaded '", priorities)
+        self.assertIn("waitForFunction(() => document.querySelector('#evidenceStatus')?.textContent.includes('Uploaded'))", journey)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -19,6 +19,11 @@ MAX_MEMORY_HOPS = 0
 MAX_MEMORY_TIMEOUT_SECONDS = 15
 PROJECT_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 ENV_REF_RE = re.compile(r"^env://([A-Z][A-Z0-9_]{1,63})$")
+FILE_REF_RE = re.compile(
+    r"^file:///run/mypeople-secrets/([A-Z][A-Z0-9_]{1,63})$"
+)
+MEMORY_SECRET_ROOT = Path("/run/mypeople-secrets")
+MAX_CREDENTIAL_BYTES = 4096
 SECRET_KEY_RE = re.compile(r"token|secret|password|credentialvalue|apikey", re.I)
 
 try:
@@ -200,7 +205,10 @@ def validate_profile(value) -> dict:
         raise ProfileError("invalid_memory_enabled")
     server_url = _validate_memory_url(memory.get("serverUrl"))
     credential_ref = str(memory.get("credentialRef") or "").strip()
-    if not ENV_REF_RE.fullmatch(credential_ref):
+    if not (
+        ENV_REF_RE.fullmatch(credential_ref)
+        or FILE_REF_RE.fullmatch(credential_ref)
+    ):
         raise ProfileError("invalid_credential_reference")
     result["memory"] = {
         "enabled": memory["enabled"],
@@ -235,19 +243,59 @@ class MemoryError(RuntimeError):
         super().__init__(code)
 
 
+def _credential_env_name(credential_ref: str) -> str:
+    match = ENV_REF_RE.fullmatch(credential_ref) or FILE_REF_RE.fullmatch(
+        credential_ref
+    )
+    if not match:
+        raise MemoryError("unauthorized")
+    return match.group(1)
+
+
+def resolve_memory_credential(credential_ref: str) -> tuple[str, str]:
+    credential_env = _credential_env_name(credential_ref)
+    if ENV_REF_RE.fullmatch(credential_ref):
+        token = os.environ.get(credential_env)
+        if token is None:
+            raise MemoryError("unauthorized")
+        try:
+            encoded = token.encode("utf-8")
+        except UnicodeError as error:
+            raise MemoryError("unauthorized") from error
+        token = token.strip()
+        if not token or len(encoded) > MAX_CREDENTIAL_BYTES or "\x00" in token:
+            raise MemoryError("unauthorized")
+        return credential_env, token
+
+    path = MEMORY_SECRET_ROOT / credential_env
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(os.fspath(path), flags)
+        try:
+            encoded = os.read(descriptor, MAX_CREDENTIAL_BYTES + 1)
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise MemoryError("unauthorized") from error
+    if not encoded or len(encoded) > MAX_CREDENTIAL_BYTES:
+        raise MemoryError("unauthorized")
+    try:
+        token = encoded.decode("utf-8").strip()
+    except UnicodeError as error:
+        raise MemoryError("unauthorized") from error
+    if not token or "\x00" in token:
+        raise MemoryError("unauthorized")
+    return credential_env, token
+
+
 def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=None):
     profile = validate_profile(profile)
     credential_ref = profile["memory"]["credentialRef"]
-    match = ENV_REF_RE.fullmatch(credential_ref)
-    if not match:
-        raise MemoryError("unauthorized")
-    credential_env = match.group(1)
-    token = os.environ.get(credential_env)
-    if not token:
-        raise MemoryError("unauthorized")
-    gateway_path = _runtime_setting(
-        "MEMORY_GATEWAY_PATH",
-        str(Path(__file__).resolve().parents[1] / "memory-gateway" / "memory-gateway.mjs"),
+    credential_env, token = resolve_memory_credential(credential_ref)
+    gateway_path = str(
+        Path(__file__).resolve().parents[1]
+        / "memory-gateway"
+        / "memory-gateway.mjs"
     )
     request = {
         "serverUrl": profile["memory"]["serverUrl"],
@@ -413,7 +461,7 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
     remaining = limit - _task_spec_chars(result)
     if remaining < 256:
         raise TaskSpecError("memory_budget_exceeded")
-    credential_env = ENV_REF_RE.fullmatch(profile["memory"]["credentialRef"]).group(1)
+    credential_env = _credential_env_name(profile["memory"]["credentialRef"])
     request = {
         "serverUrl": profile["memory"]["serverUrl"],
         "projectSlug": profile["slug"],

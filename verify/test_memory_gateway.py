@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -76,7 +77,7 @@ class MemoryGatewayBoundary(unittest.TestCase):
         self.assertFalse(observed["shell"])
         self.assertEqual(result["claims"], [])
 
-    def test_runtime_config_selects_gateway_without_exporting_it(self):
+    def test_runtime_config_cannot_replace_the_trusted_gateway(self):
         observed = {}
         def runner(command, **kwargs):
             observed["command"] = command
@@ -91,12 +92,103 @@ class MemoryGatewayBoundary(unittest.TestCase):
             project_context.call_memory_gateway(
                 enabled_profile(), "Question", runner=runner
             )
-        self.assertEqual(observed["command"][1], "/configured/memory-gateway.mjs")
+        self.assertNotEqual(observed["command"][1], "/configured/memory-gateway.mjs")
+        self.assertEqual(
+            Path(observed["command"][1]).resolve(),
+            (ROOT / "memory-gateway" / "memory-gateway.mjs").resolve(),
+        )
 
     def test_missing_token_is_typed_unauthorized(self):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(project_context.MemoryError, "unauthorized"):
                 project_context.call_memory_gateway(enabled_profile(), "Question")
+
+    def test_empty_or_oversized_environment_token_is_unauthorized(self):
+        for token in ("", "   ", "x" * 4097):
+            with self.subTest(size=len(token)), patch.dict(
+                os.environ, {"MYPEOPLE_MEMORY_TOKEN": token}, clear=True
+            ):
+                with self.assertRaisesRegex(
+                    project_context.MemoryError, "unauthorized"
+                ):
+                    project_context.call_memory_gateway(enabled_profile(), "Question")
+
+    def test_secret_file_is_resolved_only_into_child_environment(self):
+        observed = {}
+
+        def runner(command, **kwargs):
+            observed.update(command=command, **kwargs)
+            response = {
+                "ok": True,
+                "claims": [],
+                "truncated": False,
+                "responseChars": 0,
+                "aiUsage": "not_measured",
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+        with tempfile.TemporaryDirectory() as temp:
+            secret_path = Path(temp) / "MYPEOPLE_MEMORY_TOKEN"
+            secret_path.write_text("fixture-file-secret\n", encoding="utf-8")
+            value = enabled_profile()
+            value["memory"]["credentialRef"] = (
+                "file:///run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN"
+            )
+            with patch.object(
+                project_context,
+                "MEMORY_SECRET_ROOT",
+                Path(temp),
+            ):
+                project_context.call_memory_gateway(
+                    value, "Question", runner=runner, max_chars=1200
+                )
+
+        request = json.loads(observed["input"])
+        self.assertEqual(request["credentialEnv"], "MYPEOPLE_MEMORY_TOKEN")
+        self.assertNotIn("credentialRef", request)
+        self.assertNotIn("fixture-file-secret", observed["input"])
+        self.assertEqual(
+            observed["env"]["MYPEOPLE_MEMORY_TOKEN"], "fixture-file-secret"
+        )
+        self.assertNotIn(
+            "file:///run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN", observed["input"]
+        )
+
+    def test_missing_empty_and_oversized_secret_files_are_unauthorized(self):
+        value = enabled_profile()
+        value["memory"]["credentialRef"] = (
+            "file:///run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN"
+        )
+        with tempfile.TemporaryDirectory() as temp, patch.object(
+            project_context, "MEMORY_SECRET_ROOT", Path(temp)
+        ):
+            secret_path = Path(temp) / "MYPEOPLE_MEMORY_TOKEN"
+            for contents in (None, b"", b"x" * 4097):
+                if contents is None:
+                    secret_path.unlink(missing_ok=True)
+                else:
+                    secret_path.write_bytes(contents)
+                with self.subTest(size=None if contents is None else len(contents)):
+                    with self.assertRaisesRegex(
+                        project_context.MemoryError, "unauthorized"
+                    ):
+                        project_context.call_memory_gateway(value, "Question")
+
+    def test_secret_file_symlinks_are_unauthorized(self):
+        value = enabled_profile()
+        value["memory"]["credentialRef"] = (
+            "file:///run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN"
+        )
+        with tempfile.TemporaryDirectory() as temp, patch.object(
+            project_context, "MEMORY_SECRET_ROOT", Path(temp)
+        ):
+            target = Path(temp) / "target"
+            target.write_text("fixture-file-secret", encoding="utf-8")
+            (Path(temp) / "MYPEOPLE_MEMORY_TOKEN").symlink_to(target)
+            with self.assertRaisesRegex(
+                project_context.MemoryError, "unauthorized"
+            ):
+                project_context.call_memory_gateway(value, "Question")
 
     def test_timeout_and_raw_stderr_are_not_exposed(self):
         def runner(*args, **kwargs):

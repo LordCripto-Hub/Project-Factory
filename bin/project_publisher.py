@@ -25,6 +25,8 @@ from mpcommon import (
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 APPROVAL_ID = re.compile(r"^[0-9a-f]{24}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+PR_URL = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/pull/([1-9][0-9]*)$")
+PUBLISH_MODES = {"direct_main", "draft_pr"}
 
 
 class PublisherError(RuntimeError):
@@ -104,6 +106,36 @@ def _validate_profile(profile: dict, project_slug: str, branch: str) -> None:
         raise PublisherError("ProjectProfile repository is not publishable")
 
 
+def _valid_branch(value: str) -> bool:
+    return bool(
+        BRANCH.fullmatch(value)
+        and ".." not in value
+        and "//" not in value
+        and not value.endswith("/")
+        and not value.startswith("refs/")
+    )
+
+
+def default_head_branch(task_id: str, project_slug: str) -> str:
+    suffix = re.sub(r"[^a-z0-9]+", "-", f"{task_id}-{project_slug}".lower()).strip("-")
+    if not suffix:
+        raise PublisherError("cannot derive draft PR head branch")
+    return ("task/" + suffix)[:128].rstrip("-")
+
+
+def _validate_draft_pr_fields(base_branch: str, head_branch: str, title: str, body: str) -> None:
+    if not _valid_branch(base_branch):
+        raise PublisherError("invalid draft PR base branch")
+    if not _valid_branch(head_branch) or not head_branch.startswith("task/"):
+        raise PublisherError("draft PR head branch must use the task/ namespace")
+    if head_branch == base_branch or head_branch.lower() == "main":
+        raise PublisherError("draft PR head branch cannot be the base branch")
+    if not isinstance(title, str) or not title.strip() or len(title) > 240:
+        raise PublisherError("draft PR title must contain 1 to 240 characters")
+    if not isinstance(body, str) or len(body) > 8000:
+        raise PublisherError("draft PR body exceeds 8000 characters")
+
+
 def create_approval(
     *,
     task_id: str,
@@ -118,6 +150,11 @@ def create_approval(
     now: float | None = None,
     ttl_seconds: int = 900,
     id_factory: Callable[[], str] = lambda: secrets.token_hex(12),
+    mode: str = "direct_main",
+    base_branch: str | None = None,
+    head_branch: str | None = None,
+    pr_title: str | None = None,
+    pr_body: str | None = None,
 ) -> dict:
     current = time.time() if now is None else float(now)
     commit = commit.lower()
@@ -133,11 +170,21 @@ def create_approval(
         raise PublisherError("priority requires evidence before publication approval")
     if not COMMIT.fullmatch(commit):
         raise PublisherError("commit must be a full 40-character SHA")
-    if not BRANCH.fullmatch(branch) or ".." in branch:
+    if not _valid_branch(branch):
         raise PublisherError("invalid publication branch")
+    if mode not in PUBLISH_MODES:
+        raise PublisherError("invalid publication mode")
     if not 60 <= int(ttl_seconds) <= 3600:
         raise PublisherError("approval TTL must be between 60 and 3600 seconds")
     _validate_profile(profile, project_slug, branch)
+    if mode == "draft_pr":
+        base_branch = base_branch or branch
+        head_branch = head_branch or default_head_branch(task_id, project_slug)
+        pr_title = (pr_title or str(task.get("text") or f"Task {task_id}")).strip()
+        pr_body = pr_body if pr_body is not None else f"Authorized by Boss for MyPeople task `{task_id}`."
+        _validate_draft_pr_fields(base_branch, head_branch, pr_title, pr_body)
+        if base_branch != branch:
+            raise PublisherError("draft PR base branch must match the approved workspace branch")
     approval_id = id_factory()
     if not APPROVAL_ID.fullmatch(approval_id):
         raise PublisherError("approval ID generator returned an invalid value")
@@ -159,7 +206,15 @@ def create_approval(
         "approvedBy": actor,
         "createdAt": current,
         "expiresAt": current + int(ttl_seconds),
+        "mode": mode,
     }
+    if mode == "draft_pr":
+        record.update({
+            "baseBranch": base_branch,
+            "headBranch": head_branch,
+            "prTitle": pr_title,
+            "prBody": pr_body,
+        })
     atomic_json(path, record, mode=0o600)
     return record
 
@@ -236,10 +291,14 @@ def publish(
         record = load_json(path, None)
         if not isinstance(record, dict):
             raise PublisherError("approval not found")
-        if record.get("status") != "pending":
-            raise PublisherError("approval is not pending")
+        if record.get("mode") == "draft_pr" and record.get("status") == "pr_created":
+            return record
         if current >= float(record.get("expiresAt") or 0):
             raise PublisherError("approval has expired")
+        if record.get("mode") == "draft_pr" and record.get("status") == "branch_pushed":
+            return record
+        if record.get("status") != "pending":
+            raise PublisherError("approval is not pending")
         profile = load_profile(record["projectSlug"], profiles_root(profiles_dir))
         _preflight(record, profile, runner)
         if not execute:
@@ -253,9 +312,10 @@ def publish(
         record["publishingAt"] = current
         atomic_json(path, record, mode=0o600)
         workspace = os.path.realpath(profile["workingDirectory"])
+        destination = record.get("headBranch") if record.get("mode") == "draft_pr" else record["branch"]
         result = runner([
             "git", "-C", workspace, "push", "--porcelain", "origin",
-            f"{record['commit']}:refs/heads/{record['branch']}",
+            f"{record['commit']}:refs/heads/{destination}",
         ])
         if result.returncode != 0:
             record["status"] = "failed"
@@ -269,22 +329,76 @@ def publish(
                 "projectSlug": record["projectSlug"],
                 "commit": record["commit"],
                 "branch": record["branch"],
+                "headBranch": destination,
                 "status": "failed",
                 "timestamp": record["failedAt"],
             })
             raise PublisherError("git push failed; create a new approval after repair")
-        record["status"] = "published"
-        record["publishedAt"] = time.time()
+        record["status"] = "branch_pushed" if record.get("mode") == "draft_pr" else "published"
+        timestamp_key = "branchPushedAt" if record.get("mode") == "draft_pr" else "publishedAt"
+        record[timestamp_key] = time.time()
+        atomic_json(path, record, mode=0o600)
+        if record.get("mode") != "draft_pr":
+            _append_receipt(root, {
+                "approvalId": approval_id,
+                "taskId": record["taskId"],
+                "projectSlug": record["projectSlug"],
+                "commit": record["commit"],
+                "branch": record["branch"],
+                "approvedBy": record["approvedBy"],
+                "status": "published",
+                "timestamp": record["publishedAt"],
+            })
+        return record
+
+
+def finalize_draft_pr(
+    approval_id: str,
+    number: int,
+    url: str,
+    *,
+    approvals_dir: str | None = None,
+    now: float | None = None,
+) -> dict:
+    current = time.time() if now is None else float(now)
+    root = approvals_root(approvals_dir)
+    path = approval_path(approval_id, root)
+    with json_lock(path):
+        record = load_json(path, None)
+        if not isinstance(record, dict):
+            raise PublisherError("approval not found")
+        if record.get("mode") != "draft_pr":
+            raise PublisherError("approval is not a draft PR publication")
+        expected = record.get("pullRequest")
+        if record.get("status") == "pr_created":
+            if expected == {"number": int(number), "url": url}:
+                return record
+            raise PublisherError("draft PR is already finalized with different metadata")
+        if record.get("status") != "branch_pushed":
+            raise PublisherError("draft PR branch has not been pushed")
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise PublisherError("invalid pull request number")
+        match = PR_URL.fullmatch(str(url or ""))
+        if not match or int(match.group(3)) != number:
+            raise PublisherError("invalid pull request URL")
+        repository = record["repository"].removesuffix(".git")
+        if url.rsplit("/pull/", 1)[0] != repository:
+            raise PublisherError("pull request repository does not match approval")
+        record["status"] = "pr_created"
+        record["pullRequest"] = {"number": number, "url": url}
+        record["prCreatedAt"] = current
         atomic_json(path, record, mode=0o600)
         _append_receipt(root, {
             "approvalId": approval_id,
             "taskId": record["taskId"],
             "projectSlug": record["projectSlug"],
             "commit": record["commit"],
-            "branch": record["branch"],
+            "baseBranch": record["baseBranch"],
+            "headBranch": record["headBranch"],
             "approvedBy": record["approvedBy"],
-            "status": "published",
-            "timestamp": record["publishedAt"],
+            "pullRequest": record["pullRequest"],
+            "status": "pr_created",
+            "timestamp": current,
         })
         return record
 
@@ -302,6 +416,11 @@ def approve_runtime(
     commit: str,
     branch: str,
     ttl_seconds: int,
+    mode: str = "direct_main",
+    base_branch: str | None = None,
+    head_branch: str | None = None,
+    pr_title: str | None = None,
+    pr_body: str | None = None,
 ) -> dict:
     actor = os.environ.get("AGENT_ID", "").strip()
     todo_base = (
@@ -323,6 +442,11 @@ def approve_runtime(
         profile=profile,
         approvals_dir=approvals_root(),
         ttl_seconds=ttl_seconds,
+        mode=mode,
+        base_branch=base_branch,
+        head_branch=head_branch,
+        pr_title=pr_title,
+        pr_body=pr_body,
     )
     try:
         result=http_json("/todo/status", "POST", {

@@ -59,6 +59,25 @@ docker exec -it mypeople tmux attach -t mc-nightwatch
 
 Detach without stopping the session with `Ctrl+B`, then `D`.
 
+## Durable control queue
+
+Control commands are persisted in `run/control-queue.json` inside the durable
+runtime volume. A restart automatically preserves commands that were still
+`queued`. Commands already handed to a client but lacking a result become
+`uncertain`; they are never replayed automatically because `send`, `answer`,
+`spawn`, `kill`, and `revive` can have side effects.
+
+Inspect or explicitly retry one queue command:
+
+```bash
+mp queue-status <queue-task-id>
+mp queue-retry <queue-task-id>
+```
+
+Only `failed` or `uncertain` commands are retryable. The journal is private,
+atomic, bounded to active work plus the newest 500 terminal records, and stores
+no provider or Git credential.
+
 ## Switching models
 
 Boss to Sol:
@@ -192,9 +211,75 @@ If a post-stop stage fails, rollback removes only the failed new container, rena
 
 The launcher reads `%LOCALAPPDATA%\MyPeople\deployment\.env` and `compose.volume-backed.yml`. It may recreate the container from the pinned image, but never rebuilds implicitly or deletes state.
 
+The standard deployment publishes Priorities, HUD, and terminal ports only on
+127.0.0.1. It does not grant NET_ADMIN, mount /dev/net/tun, request a Tailscale
+auth key, or start tailscaled.
+
+Tailscale remains an explicit remote-network override:
+
+    docker compose --project-name mypeople --env-file .env -f compose.volume-backed.yml -f compose.tailscale.yml up -d
+
+Only use that second file when remote access is intentionally configured.
+Alternatively, cross-host nodes can use explicit UPSTREAM_QUEUE_URL,
+UPSTREAM_QUEUE_SECRET, and TTYD_PUBLIC_URL values with a LAN, VPN, or
+authenticated reverse proxy. The desktop launcher always uses the local
+Compose file alone.
+
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Preserved containers, images, backups, and restore-test volumes are cleaned only in a separate human-approved operation.
 
 Cloudflare memory remains disabled until the Docker migration, restore drill, desktop-launcher recovery, and rollback rehearsal all pass.
+
+### Safe image upgrades after migration
+
+Use the permanent transaction only from a clean, reviewed repository. Build the
+candidate from the currently pinned live image:
+
+```powershell
+$sha = (git rev-parse --short=7 HEAD).Trim()
+$image = "mypeople-node:integration-$sha"
+$base = docker inspect mypeople --format '{{.Config.Image}}'
+docker build -f docker/Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t $image .
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Upgrade-MyPeopleDockerImage.ps1 -CandidateImage $image
+```
+
+Before changing the live deployment, `Upgrade-MyPeopleDockerImage.ps1` runs the
+complete isolated verifier against the application source packaged inside that
+exact image. It pins the verified candidate ID and the current rollback ID to
+unique transaction-owned tags. It then stops MyPeople briefly, creates a
+current-user-protected portable backup, compares the archive hash before and
+after the Docker copy, restarts the old deployment, and only then recreates the
+service with the pinned candidate over the same eight named volumes.
+
+The transaction verifies Priorities, HUD, the local terminal, Docker init,
+supervisor uniqueness, every exact writable volume name-to-destination mapping,
+the read-only seed bind, the
+`repo-project-factory` tmux session, and unchanged board and stable-roster
+hashes. On failure it restores the previous Compose content with the retained
+transaction-owned rollback tag. It never runs `docker compose down -v`, removes
+a volume, or uses container renaming as rollback.
+
+Rollback rechecks the exact mounts and pre-upgrade board/stable-roster hashes.
+If the failed candidate changed persistent data, `transaction.json` records
+`rollbackStatus: recovery-required`; image rollback alone cannot undo that data
+mutation, so recover from the protected local archive.
+
+Evidence is stored under:
+
+```text
+%LOCALAPPDATA%\MyPeople\backups\docker-upgrade\<timestamp>
+```
+
+Retain `transaction.json`, `portable-state.tar.gz`, the candidate tag, the
+rollback tag, and the upgrade record until the new deployment has been used
+successfully. The archive is **sensitive local restore material**, not ordinary
+evidence. Never publish, commit, attach, or upload it, even though obvious auth,
+credential, token, key, environment, package-registry, PEM, and P12 filenames
+are excluded. Share only redacted configuration and transaction metadata.
+
+Provider sessions are independent of code upgrades. The transaction does not
+activate a provider profile, open OAuth, validate quota, run `mypeople up`, or
+require Boss and Nightwatch to be alive. Logged-out, exhausted, and deliberately
+stopped providers remain unchanged for a later provider-management cycle.
 
 The transient queue task registry and connected-client state remain process memory. `mp revive` still opens a new Codex conversation until exact session resume is implemented; explicit TaskSpecs and handoffs remain authoritative.
 
@@ -226,7 +311,7 @@ Worker TaskSpecs permit reading, editing, testing, and committing, while
 
 ```bash
 # Run inside the managed Boss terminal after the card is in review with evidence.
-mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main
+mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main --mode draft_pr --head task/<task-id>-project-factory --title "Short PR title"
 
 # Safe validation: checks the ledger and Git state without network mutation.
 mp publish <approval-id> --check
@@ -237,10 +322,11 @@ mp publish-status <approval-id>
 ```
 
 The approval expires after 15 minutes by default and is bound to the task,
-project, full commit, branch, repository, workspace, profile revision, and Boss
-identity. Publication is serialized by a file lock and never uses force push or
-tags. A failed or consumed approval cannot be reused; Boss must review and issue
-a new one.
+project, full commit, base branch, head branch, PR title/body, repository,
+workspace, profile revision, and Boss identity. Publication is serialized by a
+file lock and never uses force push or tags. A successful draft branch push is
+recorded as `branch_pushed`; if host PR creation is interrupted, the same bridge
+can resume idempotently before approval expiry. Final success is `pr_created`.
 
 Creating a valid Boss publication approval is also the review-resume boundary:
 the approved priority is transitioned from `review` to `working` before the
@@ -262,7 +348,8 @@ to the approved publisher process:
 # Validate the Boss approval without reading a credential or pushing.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Publish-MyPeopleProject.ps1 -ApprovalId <approval-id> -CheckOnly
 
-# Consume the approval and publish the exact commit.
+# Push the exact commit to its approved task branch, create/reconcile the draft
+# PR through the host gh login, and record the sanitized PR receipt.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Publish-MyPeopleProject.ps1 -ApprovalId <approval-id>
 ```
 
@@ -270,6 +357,10 @@ The bridge never writes or prints the credential. The transient secret exists
 only in the host process, stdin payload, publisher process, and Git askpass
 environment for the duration of that one publication. This is a governance
 boundary, not isolation from a malicious same-user process inside the container.
+GitHub CLI authentication remains on Windows; Docker receives no `gh` token and
+does not create the pull request itself. The legacy `direct_main` mode remains
+available for explicitly approved compatibility workflows, while `draft_pr` is
+the recommended mode.
 
 ### Revive semantics
 
@@ -290,9 +381,12 @@ never recorded.
 - The transient queue is lost when its process restarts.
 - Codex conversations are not resumed automatically.
 - ProjectProfile and TaskSpec are available, but external memory remains disabled until the Phase B security and deployment gate.
-- Ports are currently published on `0.0.0.0`; port 7681 allows terminal writes.
-- The complete verifier creates temporary cards; run it without active work or in an isolated environment.
+- Standard ports are bound to `127.0.0.1`; port 7681 remains the explicitly writable local terminal.
+- The complete verifier creates temporary cards only inside its disposable, portless container and never targets the live board.
 - The board Git exporter may quarantine small snapshots during heavy test churn; review them before treating the exporter as backup.
+- The board Git exporter defaults to `todos/board-backup/` inside the durable
+  `mypeople-todos` volume. An explicit `EXPORT_REPO` may override it for an
+  operator-controlled external target.
 - Preserved migration containers, images, backups, and restore-test volumes require an explicit cleanup review; startup never removes them.
 
 ## Technical verification
@@ -308,11 +402,29 @@ docker exec mypeople python3 /home/mp/mypeople/verify/test_project_workspace.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_project_publisher.py
 ```
 
-Complete suite:
+Complete suite (always disposable and isolated):
 
 ```powershell
-docker exec mypeople bash /home/mp/mypeople/verify/verify.sh
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image <reviewed-local-image>
 ```
+
+On Linux or from a Docker-capable shell:
+
+```bash
+MYPEOPLE_VERIFY_IMAGE=<reviewed-local-image> bash verify/verify.sh
+```
+
+Do not run the full suite with `docker exec mypeople`. Both host launchers
+create a unique Compose project with no host ports, external network, live
+volumes, Docker socket, or provider credentials. A timeout is enforced and
+cleanup always targets only that unique project. Evidence is deleted on
+success and retained under the printed temporary path on failure. Exit codes
+are `0` success, `1` suite failure, `124` timeout, and `125` host or cleanup
+failure.
+
+Provider and Tailnet-dependent runtime fixtures are synthetic. Use separate,
+read-only diagnostics when live provider authentication or remote Tailnet
+reachability must be checked.
 
 The release process records fresh results before publication; do not rely on an older chat statement as verification.
 
@@ -336,17 +448,56 @@ mp complete "Fixed the terminal popup" --proof "python verify/test_priorities_te
 
 MyPeople is the execution plane, not another memory system. Each task receives one compiled `TaskSpec`. External durable knowledge and targeted recall may contribute to that packet, but they are not queried automatically alongside complete Codex history. See [Minimal Architecture](MINIMAL-ARCHITECTURE.md).
 
-## Voice dictation
+## Synthetic memory activation and security boundary
 
-MyPeople exposes a compact microphone on operational surfaces without requiring an API key or paid transcription model.
+The Cloudflare MCP pilot is available only as a one-shot synthetic E2E. It
+uses the fixed endpoint
+`https://mypeople-memory-sandbox.labmkt.workers.dev/mcp`, exposes only
+`recall`, returns at most three provenance-complete claims, fixes graph hops
+at zero, and never writes project memory.
 
-1. Focus a text field or open the intended terminal.
-2. Click the microphone or press `Ctrl + Windows`.
-3. Animated bars indicate listening.
-4. Speak; final text is inserted directly.
-5. Trigger the control again to stop.
+Persistent memory activation is blocked. Boss, engineers, and services
+currently share the same Linux user inside the main container, so a token
+placed there would not be isolated from workers. The permanent design requires
+a separate credential broker identity before real project data or a live
+ProjectProfile can be enabled.
 
-Terminal dictation pastes text but never sends Enter. If Windows intercepts the shortcut or the browser denies microphone access, click the control or use `Win + H`. See [Voice Dock](VOICE-DOCK.md) for privacy and offline limitations.
+The safe pilot procedure is:
+
+1. Rotate the synthetic Worker bearer and store it under the current Windows
+   account with DPAPI by running `Set-MyPeopleMemoryCredential.ps1`.
+2. Start a disposable agent-free container from the reviewed candidate image
+   with a `tmpfs` mounted at `/run/mypeople-secrets`.
+3. Run `Test-MyPeopleMemoryPilot.ps1 -Container <pilot-container>`.
+4. The runner injects the credential over stdin, compiles positive and
+   cross-project-negative TaskSpecs through the real gateway, and clears the
+   tmpfs credential in `finally`.
+5. Remove the disposable container after the postcondition confirms that the
+   credential file is absent.
+
+Do not target the live `mypeople` container while agents are running. The
+pilot credential is pinned to the exact synthetic MCP URL, the gateway path
+cannot be replaced by runtime configuration, and symlinked credential files
+fail closed.
+
+Keyword recall in this pilot does not intentionally invoke a GPT, Codex,
+OpenAI API, or Workers AI model. Usage is still reported as `not_measured`
+unless provider telemetry proves otherwise. The model-token impact comes only
+from claims embedded in a worker prompt and is bounded to three short claims.
+
+## Windows dictation
+
+MyPeople does not request microphone permission, upload audio, run a
+transcription model, or expose a browser microphone control.
+
+1. Focus the intended text field or writable terminal.
+2. Press **Win + H**.
+3. Speak and let Windows insert the recognized text.
+4. Review the text before sending it or pressing Enter.
+
+Windows owns microphone permission, language selection, transcription, and
+the dictation UI. This works in Brave and other browsers because MyPeople only
+receives the text Windows types into the focused control.
 
 ## Recommended next stage
 
