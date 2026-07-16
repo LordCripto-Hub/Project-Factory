@@ -29,6 +29,28 @@ async function check(page, name, selector, getPollCount) {
   console.log(`${name} stable: ${after.join('x')}`);
 }
 
+async function checkWallActivation(page) {
+  const screen = page.locator('.screen').first();
+  if (await screen.getAttribute('role') !== 'link') throw new Error('Wall terminal card is not an accessible link');
+  if (await screen.getAttribute('tabindex') !== '0') throw new Error('Wall terminal card is not keyboard focusable');
+  const expected = `http://127.0.0.1:7681/?arg=-t&arg=${encodeURIComponent(agent.target)}`;
+  const clickPopup = page.waitForEvent('popup');
+  await screen.dispatchEvent('click');
+  const clicked = await clickPopup;
+  if (clicked.url() !== expected) throw new Error(`Wall click opened ${clicked.url()} instead of ${expected}`);
+  await clicked.close();
+  const keyPopup = page.waitForEvent('popup');
+  await screen.focus();
+  await page.keyboard.press('Enter');
+  const keyed = await keyPopup;
+  if (keyed.url() !== expected) throw new Error(`Wall keyboard activation opened ${keyed.url()} instead of ${expected}`);
+  await keyed.close();
+  await page.locator('[data-filter="idle"]').click();
+  if (await page.locator('.tile').first().isVisible()) throw new Error('Wall filter control stopped working');
+  await page.locator('[data-filter="all"]').click();
+  if (!(await page.locator('.tile').first().isVisible())) throw new Error('Wall all filter did not restore card');
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
@@ -38,6 +60,7 @@ async function check(page, name, selector, getPollCount) {
     route.fulfill({ contentType: 'application/json', body: JSON.stringify([{ ...agent, cols: 120 + wallCalls * 17, rows: 36 + wallCalls * 5 }]) });
   });
   await check(page, 'Wall', '.tile', () => wallCalls);
+  await checkWallActivation(page);
 
   let graphCalls = 0;
   await page.route('**/todo/terminal-graph', route => {
