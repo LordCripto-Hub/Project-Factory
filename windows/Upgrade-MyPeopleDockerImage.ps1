@@ -64,8 +64,10 @@ function Docker-Capture {
 }
 
 function Invoke-PinnedCompose {
-    Docker compose --project-name mypeople --env-file $environmentPath `
-        -f $composePath up -d --force-recreate
+    Invoke-MyPeopleDocker -Arguments @(
+        'compose', '--project-name', 'mypeople', '--env-file', $environmentPath,
+        '-f', $composePath, 'up', '--detach', '--force-recreate'
+    )
 }
 
 function Wait-MyPeopleControlPlane {

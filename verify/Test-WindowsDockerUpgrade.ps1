@@ -33,6 +33,7 @@ foreach ($required in @(
     'Docker tag $script:state.rollbackImageId $script:state.rollbackPinnedImage',
     '.env.previous.redacted',
     '--force-recreate',
+    "'up', '--detach', '--force-recreate'",
     'Get-MyPeopleStableRosterHash -Json',
     'mypeople-workspaces',
     '/home/mp/mypeople.seed.md',
@@ -67,6 +68,7 @@ foreach ($forbidden in @(
     'main:Boss [alive]',
     'nightwatch:Nightwatch [alive]',
     'mypeople up --detach',
+    'up -d --force-recreate',
     'Copy-Item -LiteralPath $environmentPath'
 )) {
     if ($upgrade -match [regex]::Escape($forbidden)) {
