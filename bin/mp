@@ -22,6 +22,9 @@ from project_publisher import (
     get_approval,
     publish as publish_project,
 )
+from provider_launch import pause as pause_provider_launch
+from provider_launch import resume as resume_provider_launch
+from provider_launch import status as provider_launch_status
 
 INSTALL_DIR = ROOT
 
@@ -554,6 +557,22 @@ def queue_task_status(ns):
     result=http_json("/task/"+urllib.parse.quote(ns.task_id,safe=""))
     print(json.dumps(result,sort_keys=True))
 
+def provider_pause_path():
+    return os.environ.get(
+        "PROVIDER_LAUNCH_PAUSE_PATH",
+        os.path.join(ROOT,"run","provider-launch.paused"),
+    )
+
+def providers_pause(ns):
+    print(json.dumps(pause_provider_launch(provider_pause_path(),ns.reason),sort_keys=True))
+
+def providers_resume(_ns):
+    resume_provider_launch(provider_pause_path())
+    print(json.dumps({"paused":False},sort_keys=True))
+
+def providers_status(_ns):
+    print(json.dumps(provider_launch_status(provider_pause_path()),sort_keys=True))
+
 def parser():
     p=argparse.ArgumentParser(prog="mp"); sub=p.add_subparsers(dest="verb",required=True)
     q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="claude",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.set_defaults(fn=spawn)
@@ -571,6 +590,9 @@ def parser():
     q=sub.add_parser("publish-pr-complete");q.add_argument("approval_id");q.add_argument("--number",type=int,required=True);q.add_argument("--url",required=True);q.set_defaults(fn=publish_pr_complete)
     q=sub.add_parser("queue-retry");q.add_argument("task_id");q.set_defaults(fn=queue_retry)
     q=sub.add_parser("queue-status");q.add_argument("task_id");q.set_defaults(fn=queue_task_status)
+    q=sub.add_parser("providers-pause");q.add_argument("--reason",default="operator requested");q.set_defaults(fn=providers_pause)
+    q=sub.add_parser("providers-resume");q.set_defaults(fn=providers_resume)
+    q=sub.add_parser("providers-status");q.set_defaults(fn=providers_status)
     return p
 
 def main(argv=None):

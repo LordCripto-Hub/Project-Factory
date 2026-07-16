@@ -1,0 +1,10 @@
+ARG BASE_IMAGE=mypeople-node:integration-a54d9e3
+FROM ${BASE_IMAGE}
+
+USER mp
+WORKDIR /home/mp
+
+# Compose owns the production command. A transparent entrypoint prevents the
+# snapshot's development `sleep` entrypoint from consuming that command.
+ENTRYPOINT ["/usr/bin/env"]
+CMD ["sleep", "infinity"]

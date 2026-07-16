@@ -5,7 +5,12 @@ ROOT=${INSTALL_DIR:-$HOME/mypeople}; export PATH="$HOME/.local/bin:$ROOT/bin:/us
 log="$ROOT/run/boss-supervisor.log"
 boss_id="$HOST_ID/main:Boss"
 nightwatch_id="$HOST_ID/nightwatch:Nightwatch"
+pause_file="$ROOT/run/provider-launch.paused"
 while :; do
+  if [[ "${MYPEOPLE_DISABLE_PROVIDER_LAUNCH:-0}" == "1" || -f "$pause_file" ]]; then
+    sleep 1
+    continue
+  fi
   if [[ -f "$ROOT/run/provider-switch.lock" ]]; then
     sleep 1
     continue
