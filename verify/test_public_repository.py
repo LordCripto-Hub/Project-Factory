@@ -61,6 +61,13 @@ class PublicRepositoryContract(unittest.TestCase):
         self.assertIn("Persistent memory activation is blocked", manual)
         self.assertIn("same Linux user", manual)
 
+    def test_launcher_degraded_mode_is_public(self):
+        for path in (ROOT / "README.md", ROOT / "docs" / "USER-MANUAL.md"):
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("Ready degraded", text)
+            self.assertIn("providers-resume", text)
+            self.assertIn("never imports another Windows login automatically", text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -158,6 +158,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Install-MyPeopleSh
 
 The installer copies the required launcher files to `%LOCALAPPDATA%\MyPeople\launcher`. The shortcut starts Docker Desktop when required, runs the pinned Compose deployment when it exists, rehydrates the selected provider profile, checks Priorities, queue/HUD, terminal readiness, and that Boss and Nightwatch are alive, then opens Priorities. It never deletes a volume or changes the pinned image.
 
+### Ready degraded
+
+The desktop shortcut keeps Priorities, HUD, and the terminal available when the
+configured provider cannot be validated. New provider launches remain paused,
+and the launcher never imports another Windows login automatically. Refresh the
+saved profile explicitly, then run the shortcut again; a successful validation
+runs `mp providers-resume` and restores Boss and Nightwatch.
+
+In degraded mode, interactive startup opens Priorities and displays a warning.
+Non-interactive startup prints the same bounded warning and exits successfully
+after the control-plane health gates pass. Provider output, tokens, credential
+paths, and raw HTTP response bodies are not copied into the launcher log.
+
 Manual startup remains available:
 
 ```powershell

@@ -51,6 +51,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Install-MyPeopleSh
 
 The installer copies the launcher to `%LOCALAPPDATA%\MyPeople\launcher`, so the desktop shortcut does not depend on the repository remaining in its original directory.
 
+### Ready degraded
+
+The desktop shortcut keeps Priorities, HUD, and the terminal available when the
+configured provider cannot be validated. New provider launches remain paused,
+and the launcher never imports another Windows login automatically. Refresh the
+saved profile explicitly, then run the shortcut again; a successful validation
+runs `mp providers-resume` and restores Boss and Nightwatch.
+
 ## Durable Docker state
 
 MyPeople uses a pinned local image plus eight named volumes:

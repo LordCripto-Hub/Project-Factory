@@ -1,4 +1,15 @@
 services:
+  provider-launch-gate:
+    profiles: ["launcher"]
+    image: ${MYPEOPLE_IMAGE:?set MYPEOPLE_IMAGE}
+    user: mp
+    network_mode: none
+    restart: "no"
+    entrypoint: ["/home/mp/mypeople/bin/mp"]
+    command: ["providers-pause", "--reason", "launcher_bootstrap"]
+    volumes:
+      - mypeople-run:/home/mp/mypeople/run
+
   mypeople:
     image: ${MYPEOPLE_IMAGE:?set MYPEOPLE_IMAGE}
     container_name: mypeople
