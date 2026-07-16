@@ -26,6 +26,17 @@ assert "Remove-Item -LiteralPath" in windows
 assert "$credentialRequest | & git credential fill" not in windows
 assert "docker exec -i mypeople" in windows
 assert "publish-with-credential" in windows
+assert "gh pr create" in windows
+assert "gh pr view" in windows
+assert "--draft" in windows
+assert "publish-pr-complete" in windows
+assert "branch_pushed" in windows
+assert "ConvertFrom-Json" in windows
+assert "headRefName" in windows
+assert "baseRefName" in windows
+assert "$pullRequest.state -ne 'OPEN'" in windows
+assert "$pullRequest.isDraft -ne $true" in windows
+assert "$preflight.status -in @('branch_pushed', 'pr_created')" in windows
 assert "protocol=https" in windows
 assert "host=github.com" in windows
 assert "Write-Output $credential" not in windows
@@ -37,6 +48,9 @@ assert "MYPEOPLE_GIT_PASSWORD" in askpass
 assert "set -x" not in askpass
 assert "print(payload)" not in wrapper
 assert "print(secret)" not in wrapper
+
+installer = (ROOT / "windows" / "Install-MyPeopleShortcut.ps1").read_text(encoding="utf-8")
+assert "Publish-MyPeopleProject.ps1" in installer
 
 fake_publisher = types.ModuleType("project_publisher")
 fake_publisher.PublisherError = RuntimeError

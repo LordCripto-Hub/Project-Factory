@@ -86,16 +86,23 @@ After a matching priority reaches review with evidence, Boss binds one
 short-lived approval to the full commit:
 
 ```bash
-mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main
+mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main --mode draft_pr --head task/<task-id>-project-factory --title "Short PR title"
 mp publish <approval-id> --check
-mp publish <approval-id>
 ```
 
-`project-publisher` is the only product component that invokes `git push`.
+The Windows `Publish-MyPeopleProject.ps1` bridge consumes the approval. Docker
+pushes only the approved SHA to the approved `task/...` head, then the host
+GitHub CLI login creates or reconciles the matching draft pull request and
+records its number and URL. `project-publisher` is the only product component
+that invokes `git push`.
 It rejects dirty worktrees, changed commits, remote or branch mismatches,
 expired approvals, and reuse. Git authentication remains an external credential
 helper or secret reference; credentials are never copied into the workspace,
 approval ledger, image, or repository.
+
+The legacy `direct_main` mode remains available only for explicitly approved
+compatibility workflows. `draft_pr` is the recommended public collaboration
+contract.
 
 ## Documentation
 

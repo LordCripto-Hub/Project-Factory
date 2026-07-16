@@ -226,7 +226,7 @@ Worker TaskSpecs permit reading, editing, testing, and committing, while
 
 ```bash
 # Run inside the managed Boss terminal after the card is in review with evidence.
-mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main
+mp approve-publish <task-id> --project project-factory --commit <40-character-sha> --branch main --mode draft_pr --head task/<task-id>-project-factory --title "Short PR title"
 
 # Safe validation: checks the ledger and Git state without network mutation.
 mp publish <approval-id> --check
@@ -237,10 +237,11 @@ mp publish-status <approval-id>
 ```
 
 The approval expires after 15 minutes by default and is bound to the task,
-project, full commit, branch, repository, workspace, profile revision, and Boss
-identity. Publication is serialized by a file lock and never uses force push or
-tags. A failed or consumed approval cannot be reused; Boss must review and issue
-a new one.
+project, full commit, base branch, head branch, PR title/body, repository,
+workspace, profile revision, and Boss identity. Publication is serialized by a
+file lock and never uses force push or tags. A successful draft branch push is
+recorded as `branch_pushed`; if host PR creation is interrupted, the same bridge
+can resume idempotently before approval expiry. Final success is `pr_created`.
 
 Creating a valid Boss publication approval is also the review-resume boundary:
 the approved priority is transitioned from `review` to `working` before the
@@ -262,7 +263,8 @@ to the approved publisher process:
 # Validate the Boss approval without reading a credential or pushing.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Publish-MyPeopleProject.ps1 -ApprovalId <approval-id> -CheckOnly
 
-# Consume the approval and publish the exact commit.
+# Push the exact commit to its approved task branch, create/reconcile the draft
+# PR through the host gh login, and record the sanitized PR receipt.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Publish-MyPeopleProject.ps1 -ApprovalId <approval-id>
 ```
 
@@ -270,6 +272,10 @@ The bridge never writes or prints the credential. The transient secret exists
 only in the host process, stdin payload, publisher process, and Git askpass
 environment for the duration of that one publication. This is a governance
 boundary, not isolation from a malicious same-user process inside the container.
+GitHub CLI authentication remains on Windows; Docker receives no `gh` token and
+does not create the pull request itself. The legacy `direct_main` mode remains
+available for explicitly approved compatibility workflows, while `draft_pr` is
+the recommended mode.
 
 ### Revive semantics
 
