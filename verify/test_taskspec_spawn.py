@@ -100,6 +100,19 @@ class TaskSpecSpawnContract(unittest.TestCase):
             ):
                 self.mp.resolve_owner_task_context(str(malformed), None)
 
+            unreadable = Path(temp) / "unreadable"
+            unreadable.mkdir()
+            unreadable.chmod(0)
+            try:
+                with self.assertRaisesRegex(
+                    self.mp.TaskSpecError, "working_directory_unreadable"
+                ):
+                    self.mp.resolve_owner_task_context(
+                        self.write_taskspec(temp, unreadable), None
+                    )
+            finally:
+                unreadable.chmod(0o700)
+
     def test_spawn_rejects_cwd_mismatch_before_tmux_creation(self):
         with tempfile.TemporaryDirectory() as temp:
             workspace = Path(temp) / "workspace"

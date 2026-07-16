@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 import sys
@@ -49,6 +50,7 @@ class WorkerHandoffContract(unittest.TestCase):
             project = Path(tmp) / "project"
             runtime = Path(tmp) / "runtime-roles"
             project.mkdir()
+            runtime.mkdir(mode=0o755)
             agents = project / "AGENTS.md"
             claude = project / "CLAUDE.md"
             agents.write_bytes(b"# Project AGENTS rules\n")
@@ -58,7 +60,10 @@ class WorkerHandoffContract(unittest.TestCase):
 
             with patch.dict(
                 os.environ,
-                {"MYPEOPLE_ROLE_BUNDLES_DIR": str(runtime)},
+                {
+                    "MYPEOPLE_ROLE_BUNDLES_DIR": str(runtime),
+                    "MP_VERIFY_ISOLATED": "1",
+                },
                 clear=False,
             ):
                 first = self.mp.materialize_worker_contract()
@@ -79,6 +84,34 @@ class WorkerHandoffContract(unittest.TestCase):
                 first["sha256"],
                 hashlib.sha256(content.encode("utf-8")).hexdigest(),
             )
+            self.assertEqual(stat.S_IMODE(runtime.stat().st_mode), 0o700)
+            self.assertEqual(
+                stat.S_IMODE((runtime / "worker").stat().st_mode), 0o700
+            )
+            self.assertEqual(
+                stat.S_IMODE(Path(first["path"]).parent.stat().st_mode), 0o700
+            )
+            self.assertEqual(stat.S_IMODE(Path(first["path"]).stat().st_mode), 0o600)
+
+    def test_worker_contract_rejects_symlink_escape_without_touching_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime-roles"
+            project = Path(tmp) / "project"
+            runtime.mkdir()
+            project.mkdir()
+            original_mode = stat.S_IMODE(project.stat().st_mode)
+            (runtime / "worker").symlink_to(project, target_is_directory=True)
+            with patch.dict(
+                os.environ,
+                {
+                    "MYPEOPLE_ROLE_BUNDLES_DIR": str(runtime),
+                    "MP_VERIFY_ISOLATED": "1",
+                },
+                clear=False,
+            ), self.assertRaises(OSError):
+                self.mp.materialize_worker_contract()
+            self.assertEqual(list(project.iterdir()), [])
+            self.assertEqual(stat.S_IMODE(project.stat().st_mode), original_mode)
 
     def test_worker_contract_adapters_are_backend_specific_but_content_equivalent(self):
         contract = {

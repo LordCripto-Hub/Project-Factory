@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, hashlib, json, mimetypes, os, pathlib, shlex, signal, subprocess, sys, time, uuid, urllib.request
+import argparse, hashlib, json, mimetypes, os, pathlib, shlex, signal, stat, subprocess, sys, time, uuid, urllib.request
 from mpcommon import *
 from provider_profiles import (
     codex_home,
@@ -189,6 +189,8 @@ def resolve_owner_task_context(taskspec_path, requested_cwd):
     cwd = os.path.realpath(working_directory)
     if not os.path.isdir(cwd):
         raise TaskSpecError("working_directory_missing")
+    if not os.access(cwd, os.R_OK | os.X_OK):
+        raise TaskSpecError("working_directory_unreadable")
     if requested_cwd and os.path.realpath(requested_cwd) != cwd:
         raise TaskSpecError("working_directory_mismatch")
     return {
@@ -196,44 +198,140 @@ def resolve_owner_task_context(taskspec_path, requested_cwd):
         "taskspec_sha256": hashlib.sha256(raw).hexdigest(),
     }
 
+def _open_absolute_directory_without_symlinks(path):
+    absolute = pathlib.Path(path)
+    if not absolute.is_absolute():
+        raise OSError("role storage must be absolute")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = os.open(os.path.sep, flags)
+    try:
+        for component in absolute.parts[1:]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+def _open_private_child(parent_descriptor, name):
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_descriptor)
+    except FileExistsError:
+        pass
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    child = os.open(name, flags, dir_fd=parent_descriptor)
+    os.fchmod(child, 0o700)
+    return child
+
+def _read_private_regular_file(parent_descriptor, name):
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("role contract is not a regular file")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+def _write_private_regular_file(parent_descriptor, name, content):
+    temporary = f".{name}.{os.getpid()}.{time.time_ns()}.tmp"
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = os.open(temporary, flags, 0o600, dir_fd=parent_descriptor)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+
 def materialize_worker_contract():
     content = WORKER_POLICY.strip() + "\n"
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    root = pathlib.Path(
-        os.path.realpath(
-            os.environ.get(
-                "MYPEOPLE_ROLE_BUNDLES_DIR",
-                os.path.join(ROOT, "run", "roles"),
-            )
-        )
+    isolated_override = (
+        os.environ.get("MP_VERIFY_ISOLATED") == "1"
+        and os.environ.get("MYPEOPLE_ROLE_BUNDLES_DIR")
     )
-    target_dir = root / "worker" / digest
-    target_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(target_dir, 0o700)
-    target = target_dir / "CONTRACT.md"
+    if isolated_override:
+        base = pathlib.Path(isolated_override)
+        components = ("worker", digest)
+        make_base_private = True
+    else:
+        base = pathlib.Path(ROOT) / "run"
+        components = ("roles", "worker", digest)
+        make_base_private = False
+    base = pathlib.Path(os.path.abspath(base))
+    target_dir = base.joinpath(*components)
+    if os.path.commonpath((str(base), str(target_dir))) != str(base):
+        raise OSError("role contract path escaped runtime storage")
+
+    descriptor = _open_absolute_directory_without_symlinks(base)
     try:
-        current = target.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        current = None
-    if current != content:
-        temporary = target.with_name(
-            f"{target.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        if make_base_private:
+            os.fchmod(descriptor, 0o700)
+        for component in components:
+            child = _open_private_child(descriptor, component)
+            os.close(descriptor)
+            descriptor = child
+        current = _read_private_regular_file(descriptor, "CONTRACT.md")
+        if current != content:
+            _write_private_regular_file(descriptor, "CONTRACT.md", content)
+        contract_descriptor = os.open(
+            "CONTRACT.md",
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=descriptor,
         )
         try:
-            with temporary.open("x", encoding="utf-8") as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, target)
+            if not stat.S_ISREG(os.fstat(contract_descriptor).st_mode):
+                raise OSError("role contract is not a regular file")
+            os.fchmod(contract_descriptor, 0o600)
         finally:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
-    os.chmod(target, 0o600)
+            os.close(contract_descriptor)
+    finally:
+        os.close(descriptor)
     return {
-        "path": str(target),
+        "path": str(target_dir / "CONTRACT.md"),
         "sha256": digest,
         "version": WORKER_CONTRACT_VERSION,
         "content": content,
