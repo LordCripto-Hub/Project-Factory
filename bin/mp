@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse, contextlib, hashlib, json, mimetypes, os, pathlib, shlex, signal, stat, subprocess, sys, time, uuid, urllib.request
 from agent_session import (
     SessionError,
+    apply_resume_args,
     capture_lock,
     discover_codex_session,
     snapshot_codex_sessions,
+    validate_resume_evidence,
 )
 from mpcommon import *
 from provider_profiles import (
@@ -387,6 +389,50 @@ def is_managed_codex_cwd(cwd):
     )
     return any(real_cwd == root or real_cwd.startswith(root + os.sep) for root in managed_roots)
 
+def resolve_provider_runtime(
+    aid,
+    backend,
+    is_master,
+    tab,
+    requested_model,
+    model_explicit,
+):
+    model = requested_model
+    profile_id = ""
+    provider_home = ""
+    if backend != "codex":
+        return model, profile_id, provider_home
+    bindings = load_provider_json(
+        os.environ.get(
+            "PROVIDER_BINDINGS_PATH",
+            os.path.join(ROOT, "run", "provider-bindings.json"),
+        ),
+        {},
+    )
+    profiles = load_provider_json(
+        os.environ.get(
+            "PROVIDER_PROFILES_PATH",
+            os.path.join(ROOT, "run", "provider-profiles.json"),
+        ),
+        {},
+    )
+    if bindings.get("globalProfile"):
+        profile_id = resolve_profile(bindings, aid)
+        profile = profiles.get(profile_id, {}) if isinstance(profiles, dict) else {}
+        if not model_explicit:
+            role = "boss" if is_master else "nightwatch" if tab == "Nightwatch" else "engineer"
+            model = resolve_model(profile, role)
+        provider_home = codex_home(
+            os.environ.get(
+                "PROVIDER_HOMES_DIR",
+                os.path.join(ROOT, "run", "provider-homes"),
+            ),
+            profile_id,
+        )
+        os.makedirs(provider_home, mode=0o700, exist_ok=True)
+        os.chmod(provider_home, 0o700)
+    return model, profile_id, provider_home
+
 def _build_launch_args(agent_id, cwd, boss, is_master, model, backend):
     aid = full_agent_id(agent_id)
     host, session, tab = parse_agent_id(aid)
@@ -450,7 +496,7 @@ def wait_for_composer(target, timeout=30):
         time.sleep(.5)
     return False
 
-def spawn(ns):
+def spawn(ns, resume_session=""):
     raw_boss = ns.boss
     if raw_boss is not None and not raw_boss.strip(): raise SystemExit("empty --boss is invalid; omit --boss for a top-level agent")
     if (ns.owner_task or ns.temporary) and raw_boss is None: raise SystemExit("--owner-task/--temporary require --boss")
@@ -486,38 +532,14 @@ def spawn(ns):
                 notify_agent(boss, message)
             raise SystemExit(message) from error
     model = ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL)
-    profile_id = ""
-    provider_home = ""
-    if ns.backend == "codex":
-        bindings = load_provider_json(
-            os.environ.get(
-                "PROVIDER_BINDINGS_PATH",
-                os.path.join(ROOT, "run", "provider-bindings.json"),
-            ),
-            {},
-        )
-        profiles = load_provider_json(
-            os.environ.get(
-                "PROVIDER_PROFILES_PATH",
-                os.path.join(ROOT, "run", "provider-profiles.json"),
-            ),
-            {},
-        )
-        if bindings.get("globalProfile"):
-            profile_id = resolve_profile(bindings, aid)
-            profile = profiles.get(profile_id, {}) if isinstance(profiles, dict) else {}
-            if ns.model is None:
-                role = "boss" if ns.master else "nightwatch" if tab == "Nightwatch" else "engineer"
-                model = resolve_model(profile, role)
-            provider_home = codex_home(
-                os.environ.get(
-                    "PROVIDER_HOMES_DIR",
-                    os.path.join(ROOT, "run", "provider-homes"),
-                ),
-                profile_id,
-            )
-            os.makedirs(provider_home, mode=0o700, exist_ok=True)
-            os.chmod(provider_home, 0o700)
+    model, profile_id, provider_home = resolve_provider_runtime(
+        aid,
+        ns.backend,
+        ns.master,
+        tab,
+        model,
+        ns.model is not None,
+    )
     aid, host, session, tab, cwd, boss, args = _build_launch_args(
         aid,
         taskspec_context.get("cwd") if ns.owner_task else ns.cwd,
@@ -534,6 +556,8 @@ def spawn(ns):
             ensure_codex_doctrine(cwd, nightwatch_source)
     if ns.owner_task:
         args = mount_worker_contract(args, ns.backend, worker_contract)
+    if resume_session:
+        args = apply_resume_args(ns.backend, args, resume_session)
     if ns.model is not None and ns.master is False and tab != "Nightwatch":
         pass
     launch_env={"AGENT_ID":aid,"QUEUE_URL":ENV.get("QUEUE_URL","http://127.0.0.1:9900"),"TODO_URL":os.environ.get("MYPEOPLE_TODO_URL") or os.environ.get("TODO_URL") or f"http://127.0.0.1:{ENV.get('TODO_PORT','9933')}","QUEUE_SECRET":ENV["QUEUE_SECRET"],
@@ -548,8 +572,8 @@ def spawn(ns):
         launch_env["VERIFY_RESERVED_OWNER_ID"]=os.environ["VERIFY_RESERVED_OWNER_ID"]
     command=shell_export(launch_env)+"; exec "+shlex.join(args)
     previous=next((x for x in load_roster() if x.get("agent_id")==aid),{})
-    if target_exists:
-        session_id = str(previous.get("session_id") or "")
+    if target_exists or resume_session:
+        session_id = str(resume_session or previous.get("session_id") or "")
         resume_state = previous.get("resume_state") or (
             "available" if session_id else "unavailable"
         )
@@ -568,7 +592,19 @@ def spawn(ns):
         "recovery_state": previous.get("recovery_state", "healthy"),
         "last_recovery_error": previous.get("last_recovery_error", ""),
     }
-    capture_enabled = ns.backend == "codex" and not target_exists
+    if resume_session:
+        session_identity.update(
+            session_id=resume_session,
+            session_backend=ns.backend,
+            session_profile=profile_id,
+            session_cwd=cwd,
+            resume_state="available",
+            recovery_attempts=0,
+            next_recovery_at=0,
+            recovery_state="healthy",
+            last_recovery_error="",
+        )
+    capture_enabled = ns.backend == "codex" and not target_exists and not resume_session
     capture_home = (
         provider_home
         or os.environ.get("CODEX_HOME")
@@ -647,7 +683,7 @@ def spawn(ns):
     rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"state":"alive",
          "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
          "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time()),
-         **session_identity}
+         "stop_intent":"","retired_reason":"","retired_at":0,**session_identity}
     if taskspec_path:
         rec["taskspec_path"] = taskspec_path
         rec["taskspec_sha256"] = taskspec_context["taskspec_sha256"]
@@ -729,52 +765,132 @@ def peek(ns):
 
 def kill(ns):
     aid=full_agent_id(ns.agent_id); _,s,t=parse_agent_id(aid)
+    rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
+    if not rec:raise SystemExit("unknown agent")
+    stopping={
+        **rec,
+        "retired":True,
+        "state":"stopping",
+        "stop_intent":"deliberate",
+        "retired_reason":ns.reason or "operator-request",
+        "retired_at":time.time(),
+        "recovery_state":"stopped",
+    }
+    update_roster(stopping)
     run_tmux(["kill-window","-t",f"mc-{s}:{t}"],check=False); run_tmux(["kill-session","-t",f"rec-{t}"],check=False)
+    final={**stopping,"state":"dead","recovery_state":"stopped"}
+    update_roster(final)
     rows=load_roster()
-    for r in rows:
-        if r.get("agent_id")==aid:r.update(retired=True,state="dead",retired_reason=ns.reason or "",retired_at=time.time())
-    save_roster(rows); atomic_json(agents_path(),[r for r in rows if not r.get("retired") and window_exists(f"mc-{r.get('session')}:{r.get('tab')}")])
+    atomic_json(agents_path(),[r for r in rows if not r.get("retired") and window_exists(f"mc-{r.get('session')}:{r.get('tab')}")])
     try:http_json("/agents/unregister","POST",{"agent_id":aid})
     except Exception:pass
+
+def namespace_from_record(rec):
+    return argparse.Namespace(
+        agent_id=rec["agent_id"],
+        backend=rec.get("backend","claude"),
+        cwd=rec.get("cwd",ROOT),
+        boss=rec.get("boss_id") or None,
+        master=bool(rec.get("is_master")),
+        model=rec.get("model") or None,
+        owner_task=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else None,
+        temporary=rec.get("lifecycle")=="temporary",
+    )
+
+def validate_record_receipt(rec,path_field,digest_field,error_code):
+    path=rec.get(path_field);expected=rec.get(digest_field)
+    if not path and not expected:return
+    try:
+        actual=hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+    except OSError as error:
+        raise SystemExit(error_code) from error
+    if not expected or actual!=expected:
+        raise SystemExit(error_code)
+
+def verify_owner_task_for_revive(rec,aid):
+    task_id=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else ""
+    if not task_id:return
+    try:
+        board=http_json("/todo/board",token=ENV.get("QUEUE_SECRET",""))
+    except Exception as error:
+        raise SystemExit(f"owner_task_verification_failed: {error}") from error
+    task=(board.get("tasks") or {}).get(task_id)
+    deleted=(board.get("deletedTasks") or {}).get(task_id)
+    if deleted or not task:
+        raise SystemExit("owner_task_closed: refusing revive")
+    if task.get("state") in ("done","cancelled") or task.get("ownerNeedsReplacement"):
+        raise SystemExit("owner_task_closed: refusing revive")
+    if task.get("assignee") and task.get("assignee")!=aid:
+        raise SystemExit("owner_task_reassigned: refusing revive")
 
 def revive(ns):
     aid=full_agent_id(ns.agent_id); rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
     if not rec:raise SystemExit("unknown agent")
     if (rec.get("state")=="alive" or rec.get("retired") is False) and window_exists(tmux_target(aid)):
         raise SystemExit("agent_already_alive: refusing duplicate revive")
-    task_id=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else ""
-    if task_id:
-        try:
-            board=http_json("/todo/board",token=ENV.get("QUEUE_SECRET",""))
-        except Exception as error:
-            raise SystemExit(f"owner_task_verification_failed: {error}") from error
-        task=(board.get("tasks") or {}).get(task_id)
-        deleted=(board.get("deletedTasks") or {}).get(task_id)
-        if deleted or not task:
-            raise SystemExit("owner_task_closed: refusing revive")
-        if task.get("state") in ("done","cancelled") or task.get("ownerNeedsReplacement"):
-            raise SystemExit("owner_task_closed: refusing revive")
-        if task.get("assignee") and task.get("assignee")!=aid:
-            raise SystemExit("owner_task_reassigned: refusing revive")
-    argv=["spawn",aid,"--backend",rec.get("backend","claude"),"--cwd",rec.get("cwd",ROOT)]
-    if rec.get("boss_id"):argv += ["--boss",rec["boss_id"]]
-    if rec.get("is_master"):argv += ["--master"]
-    if rec.get("model"):argv += ["--model",rec["model"]]
-    if rec.get("lifecycle")=="owner" and rec.get("owner_task_id"):argv += ["--owner-task",rec["owner_task_id"]]
-    elif rec.get("lifecycle")=="temporary":argv += ["--temporary"]
-    main(argv)
+    verify_owner_task_for_revive(rec,aid)
+    session_id=str(rec.get("session_id") or "")
+    if not session_id or rec.get("resume_state")!="available":
+        raise SystemExit("session_missing")
+    backend=rec.get("backend","claude")
+    if rec.get("session_backend")!=backend:
+        raise SystemExit("session_identity_mismatch")
+    real_cwd=os.path.realpath(rec.get("cwd",ROOT))
+    if os.path.realpath(rec.get("session_cwd") or "")!=real_cwd:
+        raise SystemExit("session_cwd_mismatch")
+    _,_,tab=parse_agent_id(aid)
+    _model,effective_profile,provider_home=resolve_provider_runtime(
+        aid,backend,bool(rec.get("is_master")),tab,rec.get("model") or None,True
+    )
+    if backend=="claude":
+        effective_profile=rec.get("provider_profile","")
+    if rec.get("session_profile","")!=effective_profile:
+        raise SystemExit("session_identity_mismatch")
+    validate_record_receipt(rec,"taskspec_path","taskspec_sha256","taskspec_receipt_mismatch")
+    validate_record_receipt(rec,"role_contract_path","role_contract_sha256","role_receipt_mismatch")
+    try:
+        validate_resume_evidence(
+            backend,
+            session_id,
+            codex_home=provider_home or os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
+            claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR",""),
+        )
+    except SessionError as error:
+        raise SystemExit(error.code) from error
+    snapshot=dict(rec)
+    update_roster({**rec,"state":"recovering","recovery_state":"recovering"})
+    try:
+        spawn(namespace_from_record(rec),resume_session=session_id)
+        if not window_exists(tmux_target(aid)):
+            raise RuntimeError("resume_process_failed")
+        current=next((x for x in load_roster() if x.get("agent_id")==aid),{})
+        if current.get("session_id")!=session_id:
+            raise RuntimeError("session_identity_mismatch")
+    except SessionError as error:
+        update_roster(snapshot)
+        raise SystemExit(error.code) from error
+    except BaseException:
+        update_roster(snapshot)
+        raise
 
 def switch_backend(ns):
     aid=full_agent_id(ns.agent_id); host,session,tab=parse_agent_id(aid)
     if host != ENV.get("HOST_ID"):raise SystemExit("remote backend switching is not supported")
     rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
     if not rec:raise SystemExit("unknown agent")
+    if rec.get("backend")!=ns.backend:
+        raise SystemExit("fresh_handoff_required")
+    original=dict(rec)
     desired={**rec,"backend":ns.backend,"model":ns.model,"retired":False,
-             "state":"switching","switched_at":time.time()}
+             "state":"switching","stop_intent":"","switched_at":time.time()}
     update_roster(desired)
     run_tmux(["kill-window","-t",f"mc-{session}:{tab}"],check=False)
     run_tmux(["kill-session","-t",f"rec-{tab}"],check=False)
-    main(["revive",aid])
+    try:
+        revive(argparse.Namespace(agent_id=aid))
+    except BaseException:
+        update_roster(original)
+        raise
 
 def status(_):
     try:

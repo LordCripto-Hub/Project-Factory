@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import importlib.machinery
 import importlib.util
 import json
@@ -89,6 +90,34 @@ class ExactSessionSpawnContract(unittest.TestCase):
             owner_task=None,
             temporary=False,
         )
+
+    def lifecycle_record(self, **overrides):
+        record = {
+            "agent_id": "node-1/main:Boss",
+            "host": "node-1",
+            "session": "main",
+            "tab": "Boss",
+            "backend": "codex",
+            "model": "gpt-test",
+            "provider_profile": "codex-primary",
+            "cwd": str(self.cwd),
+            "boss_id": "",
+            "is_master": True,
+            "lifecycle": "unclassified",
+            "owner_task_id": "",
+            "retired": True,
+            "retired_reason": "operator-request",
+            "state": "dead",
+            "stop_intent": "deliberate",
+            "recovery_state": "stopped",
+            "session_id": "019f0000-0000-7000-8000-000000000222",
+            "session_backend": "codex",
+            "session_profile": "codex-primary",
+            "session_cwd": os.path.realpath(self.cwd),
+            "resume_state": "available",
+        }
+        record.update(overrides)
+        return record
 
     @contextlib.contextmanager
     def fake_lock(self, *_args, **_kwargs):
@@ -211,6 +240,162 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.assertEqual(updated["session_id"], "session-1234")
         self.assertEqual(rows[0]["session_id"], "session-1234")
         self.assertEqual(rows[1]["session_id"], "keep-me")
+
+    def test_kill_persists_deliberate_stop_before_tmux_termination(self):
+        record = self.lifecycle_record(retired=False, state="alive", stop_intent="")
+        events = []
+
+        def persist(row):
+            events.append(("persist", copy.deepcopy(row)))
+
+        def save(rows):
+            events.append(("save", copy.deepcopy(rows)))
+
+        def tmux(argv, **_kwargs):
+            events.append(("tmux", list(argv)))
+            return Result()
+
+        with mock.patch.object(self.mp, "load_roster", return_value=[record]), \
+             mock.patch.object(self.mp, "update_roster", side_effect=persist), \
+             mock.patch.object(self.mp, "save_roster", side_effect=save), \
+             mock.patch.object(self.mp, "run_tmux", side_effect=tmux), \
+             mock.patch.object(self.mp, "atomic_json"), \
+             mock.patch.object(self.mp, "window_exists", return_value=False), \
+             mock.patch.object(self.mp, "http_json", return_value={}):
+            self.mp.kill(
+                argparse.Namespace(
+                    agent_id=record["agent_id"],
+                    reason="operator-request",
+                )
+            )
+
+        self.assertEqual(events[0][0], "persist")
+        first = events[0][1]
+        self.assertTrue(first["retired"])
+        self.assertEqual(first["state"], "stopping")
+        self.assertEqual(first["stop_intent"], "deliberate")
+        first_tmux = next(
+            index for index, event in enumerate(events) if event[0] == "tmux"
+        )
+        self.assertGreater(first_tmux, 0)
+        final = [event[1] for event in events if event[0] == "persist"][-1]
+        self.assertEqual(final["state"], "dead")
+        self.assertEqual(final["recovery_state"], "stopped")
+        self.assertEqual(final["session_id"], record["session_id"])
+
+    def test_revive_requires_session_and_matching_provider_identity(self):
+        missing = self.lifecycle_record(session_id="", resume_state="unavailable")
+        with mock.patch.object(self.mp, "load_roster", return_value=[missing]), \
+             mock.patch.object(self.mp, "window_exists", return_value=False), \
+             mock.patch.object(self.mp, "main"):
+            with self.assertRaisesRegex(SystemExit, "session_missing"):
+                self.mp.revive(argparse.Namespace(agent_id=missing["agent_id"]))
+
+        mismatch = self.lifecycle_record(session_profile="codex-secondary")
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PROVIDER_BINDINGS_PATH": str(self.bindings),
+                "PROVIDER_PROFILES_PATH": str(self.profiles),
+                "PROVIDER_HOMES_DIR": str(self.homes),
+            },
+            clear=False,
+        ), mock.patch.object(self.mp, "load_roster", return_value=[mismatch]), \
+             mock.patch.object(self.mp, "window_exists", return_value=False), \
+             mock.patch.object(self.mp, "main"):
+            with self.assertRaisesRegex(SystemExit, "session_identity_mismatch"):
+                self.mp.revive(argparse.Namespace(agent_id=mismatch["agent_id"]))
+
+    def test_valid_revive_passes_same_session_to_spawn_and_clears_stop(self):
+        current = {"record": self.lifecycle_record()}
+        spawned = []
+        window = {"alive": False}
+
+        def load():
+            return [copy.deepcopy(current["record"])]
+
+        def persist(row):
+            current["record"] = copy.deepcopy(row)
+
+        def spawn(ns, resume_session=""):
+            spawned.append((ns, resume_session))
+            current["record"].update(
+                state="alive",
+                retired=False,
+                stop_intent="",
+                recovery_state="healthy",
+                session_id=resume_session,
+            )
+            window["alive"] = True
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PROVIDER_BINDINGS_PATH": str(self.bindings),
+                "PROVIDER_PROFILES_PATH": str(self.profiles),
+                "PROVIDER_HOMES_DIR": str(self.homes),
+            },
+            clear=False,
+        ), mock.patch.object(self.mp, "load_roster", side_effect=load), \
+             mock.patch.object(self.mp, "update_roster", side_effect=persist), \
+             mock.patch.object(self.mp, "window_exists", side_effect=lambda *_: window["alive"]), \
+             mock.patch.object(self.mp, "spawn", side_effect=spawn, create=True), \
+             mock.patch.object(
+                 self.mp,
+                 "validate_resume_evidence",
+                 return_value="/private/session.jsonl",
+                 create=True,
+             ), \
+             mock.patch.object(self.mp, "main") as old_main:
+            self.mp.revive(
+                argparse.Namespace(agent_id=current["record"]["agent_id"])
+            )
+
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(
+            spawned[0][1],
+            "019f0000-0000-7000-8000-000000000222",
+        )
+        self.assertEqual(spawned[0][0].model, "gpt-test")
+        self.assertEqual(current["record"]["stop_intent"], "")
+        self.assertEqual(current["record"]["session_id"], spawned[0][1])
+        old_main.assert_not_called()
+
+    def test_failed_exact_revive_restores_deliberate_tombstone(self):
+        original = self.lifecycle_record()
+        persisted = []
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PROVIDER_BINDINGS_PATH": str(self.bindings),
+                "PROVIDER_PROFILES_PATH": str(self.profiles),
+                "PROVIDER_HOMES_DIR": str(self.homes),
+            },
+            clear=False,
+        ), mock.patch.object(self.mp, "load_roster", return_value=[copy.deepcopy(original)]), \
+             mock.patch.object(self.mp, "update_roster", side_effect=lambda row: persisted.append(copy.deepcopy(row))), \
+             mock.patch.object(self.mp, "window_exists", return_value=False), \
+             mock.patch.object(
+                 self.mp,
+                 "validate_resume_evidence",
+                 return_value="/private/session.jsonl",
+                 create=True,
+             ), \
+             mock.patch.object(
+                 self.mp,
+                 "spawn",
+                 side_effect=RuntimeError("provider failed"),
+                 create=True,
+             ), \
+             mock.patch.object(self.mp, "main"):
+            with self.assertRaisesRegex(RuntimeError, "provider failed"):
+                self.mp.revive(
+                    argparse.Namespace(agent_id=original["agent_id"])
+                )
+
+        self.assertGreaterEqual(len(persisted), 2)
+        self.assertEqual(persisted[-1], original)
 
 
 if __name__ == "__main__":
