@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+import os
+from pathlib import Path
 import re
+import time
 import unicodedata
 
 
@@ -26,6 +31,12 @@ PROJECT_FIELDS = {
 }
 HINT_FIELDS = {"taskClass", "risk", "maxTier"}
 PROJECT_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+ESCALATABLE_FAILURES = {
+    "verification_failed",
+    "implementation_blocked",
+    "model_capability_insufficient",
+}
 
 SIMPLE_SIGNALS = (
     "document",
@@ -423,3 +434,153 @@ def route_task(
         "nextEligibleTier": next_tier,
         "aiUsage": "none",
     }
+
+
+def _contains_forbidden_receipt_key(value) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if (
+                lowered.startswith("session")
+                or "token" in lowered
+                or "secret" in lowered
+                or "credential" in lowered
+            ):
+                return True
+            if _contains_forbidden_receipt_key(item):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_forbidden_receipt_key(item) for item in value)
+    return False
+
+
+def canonical_decision_bytes(decision) -> bytes:
+    if (
+        not isinstance(decision, dict)
+        or decision.get("schemaVersion") != 1
+        or not isinstance(decision.get("taskId"), str)
+        or not TASK_ID.fullmatch(decision["taskId"])
+        or _contains_forbidden_receipt_key(decision)
+    ):
+        raise RoutingError("routing_task_invalid")
+    try:
+        rendered = json.dumps(
+            decision,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise RoutingError("routing_task_invalid") from error
+    return rendered.encode("utf-8") + b"\n"
+
+
+def write_decision(root, decision) -> tuple[str, str]:
+    raw = canonical_decision_bytes(decision)
+    task_id = decision["taskId"]
+    root_path = Path(root).resolve()
+    target = root_path / f"{task_id}.json"
+    if target.parent != root_path:
+        raise RoutingError("routing_task_invalid")
+    root_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(root_path, 0o700)
+    temporary = root_path / (
+        f".{task_id}.{os.getpid()}.{time.time_ns()}.tmp"
+    )
+    descriptor = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
+        os.chmod(target, 0o600)
+    except OSError:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return str(target), hashlib.sha256(raw).hexdigest()
+
+
+def next_route(decision, failure, policy) -> dict:
+    policy = validate_policy(policy)
+    if failure not in ESCALATABLE_FAILURES:
+        raise RoutingError("routing_failure_not_escalatable")
+    if not isinstance(decision, dict):
+        raise RoutingError("routing_task_invalid")
+    slug = decision.get("projectSlug")
+    project = _project_policy(policy, slug)
+    current_tier = decision.get("tier")
+    current_model = decision.get("model")
+    if (
+        current_tier not in TIERS
+        or policy["tiers"][current_tier]["model"] != current_model
+        or current_model not in project["allowedModels"]
+    ):
+        raise RoutingError("routing_task_invalid")
+
+    attempt_count = decision.get("attemptCount")
+    escalation_count = decision.get("escalationCount")
+    max_attempts = min(
+        decision.get("maxAttempts", 0),
+        project["maxAttempts"],
+    )
+    max_escalations = min(
+        decision.get("maxEscalations", 0),
+        project["maxEscalations"],
+    )
+    if (
+        not _positive_int(attempt_count)
+        or not _positive_int(escalation_count, allow_zero=True)
+        or attempt_count >= max_attempts
+        or escalation_count >= max_escalations
+    ):
+        raise RoutingError("routing_budget_exhausted")
+
+    expected_next = _next_eligible_tier(
+        policy,
+        current_tier,
+        project["maxAutomaticTier"],
+        project["allowedModels"],
+    )
+    if (
+        not expected_next
+        or decision.get("nextEligibleTier") != expected_next
+    ):
+        raise RoutingError("routing_budget_exhausted")
+
+    result = copy.deepcopy(decision)
+    result["tier"] = expected_next
+    result["model"] = policy["tiers"][expected_next]["model"]
+    result["selection"] = "automatic_escalation"
+    result["attemptCount"] = attempt_count + 1
+    result["escalationCount"] = escalation_count + 1
+    result["nextEligibleTier"] = _next_eligible_tier(
+        policy,
+        expected_next,
+        project["maxAutomaticTier"],
+        project["allowedModels"],
+    )
+    reasons = result.get("reasonCodes")
+    if not isinstance(reasons, list) or any(
+        not isinstance(reason, str) for reason in reasons
+    ):
+        raise RoutingError("routing_task_invalid")
+    result["reasonCodes"] = list(
+        dict.fromkeys(
+            reasons + [f"escalated_after_{failure}"]
+        )
+    )
+    return result

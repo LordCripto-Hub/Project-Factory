@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
+import os
 from pathlib import Path
+import stat
+import tempfile
 import unittest
 
 
@@ -225,6 +229,119 @@ class RoutingPolicyContract(unittest.TestCase):
                 self.policy,
                 "codex-primary",
             )
+
+
+class RoutingReceiptContract(unittest.TestCase):
+    def setUp(self):
+        self.policy = task_routing.validate_policy(copy.deepcopy(POLICY))
+
+    def test_receipt_is_deterministic_private_atomic_and_secret_free(self):
+        decision = task_routing.route_task(
+            task_spec("Fix Docker integration"),
+            self.policy,
+            "codex-primary",
+        )
+        first_bytes = task_routing.canonical_decision_bytes(decision)
+        second_bytes = task_routing.canonical_decision_bytes(
+            copy.deepcopy(decision)
+        )
+        self.assertEqual(first_bytes, second_bytes)
+
+        with tempfile.TemporaryDirectory() as temp:
+            first_path, first_hash = task_routing.write_decision(
+                temp,
+                decision,
+            )
+            second_path, second_hash = task_routing.write_decision(
+                temp,
+                copy.deepcopy(decision),
+            )
+            self.assertEqual(first_path, second_path)
+            self.assertEqual(first_hash, second_hash)
+            self.assertRegex(first_hash, r"^[0-9a-f]{64}$")
+            self.assertEqual(
+                stat.S_IMODE(os.stat(first_path).st_mode),
+                0o600,
+            )
+            self.assertEqual(
+                json.loads(Path(first_path).read_text(encoding="utf-8")),
+                decision,
+            )
+            body = Path(first_path).read_text(encoding="utf-8").lower()
+            self.assertNotIn("session_id", body)
+            self.assertNotIn("credential", body)
+            self.assertNotIn("token", body)
+            self.assertEqual(list(Path(temp).glob("*.tmp")), [])
+
+    def test_receipt_rejects_unsafe_task_id_without_partial_file(self):
+        decision = task_routing.route_task(
+            task_spec("Translate docs"),
+            self.policy,
+            "codex-primary",
+        )
+        decision["taskId"] = "../escape"
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(
+                task_routing.RoutingError,
+                "routing_task_invalid",
+            ):
+                task_routing.write_decision(temp, decision)
+            self.assertEqual(list(Path(temp).iterdir()), [])
+
+    def test_next_route_advances_once_and_respects_budget(self):
+        decision = task_routing.route_task(
+            task_spec("Fix Docker integration"),
+            self.policy,
+            "codex-primary",
+        )
+        escalated = task_routing.next_route(
+            decision,
+            "verification_failed",
+            self.policy,
+        )
+        self.assertEqual(escalated["tier"], "strong")
+        self.assertEqual(escalated["model"], "gpt-5.6-sol")
+        self.assertEqual(escalated["selection"], "automatic_escalation")
+        self.assertEqual(escalated["attemptCount"], 2)
+        self.assertEqual(escalated["escalationCount"], 1)
+        self.assertIsNone(escalated["nextEligibleTier"])
+        self.assertIn(
+            "escalated_after_verification_failed",
+            escalated["reasonCodes"],
+        )
+
+        with self.assertRaisesRegex(
+            task_routing.RoutingError,
+            "routing_budget_exhausted",
+        ):
+            task_routing.next_route(
+                escalated,
+                "verification_failed",
+                self.policy,
+            )
+
+    def test_infrastructure_and_provider_failures_never_escalate_model(self):
+        decision = task_routing.route_task(
+            task_spec("Fix Docker integration"),
+            self.policy,
+            "codex-primary",
+        )
+        for failure in (
+            "provider_exhausted",
+            "authentication_failed",
+            "infrastructure_failed",
+            "context_missing",
+            "unknown_failure",
+        ):
+            with self.subTest(failure=failure), self.assertRaisesRegex(
+                task_routing.RoutingError,
+                "routing_failure_not_escalatable",
+            ):
+                task_routing.next_route(
+                    decision,
+                    failure,
+                    self.policy,
+                )
 
 
 if __name__ == "__main__":
