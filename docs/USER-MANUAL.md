@@ -198,9 +198,66 @@ are bound to the roster by SHA-256. Priorities receives one idempotent comment
 showing class, risk, tier, model, selection, and reason codes.
 
 Exact revive validates and reuses the original routing receipt and model; it
-does not classify again or spend an escalation. This phase can calculate one
-eligible next tier for typed implementation failures within attempt/escalation
-ceilings, but it does not kill or switch the worker automatically.
+does not classify again or spend an escalation.
+
+### Lossless automatic model escalation
+
+Only three explicit worker outcomes may advance one tier:
+`verification_failed`, `implementation_blocked`, and
+`model_capability_insufficient`. Inside its managed owner terminal, a worker
+reports its own assigned task:
+
+```bash
+mp fail --failure verification_failed \
+  --summary "The focused verifier still fails." \
+  --proof "python3 verify/example.py: 1 failed"
+```
+
+`mp fail` validates the environment-bound worker, Boss, open task, assignee,
+session availability, and routing receipt. It writes a private request, adds
+one bounded Priorities marker, and queues only an opaque request ID. The queue
+never receives the summary, proof, provider output, policy, or session ID.
+
+The owning Boss or a local operator shell can request the same transaction:
+
+```bash
+mp escalate node-1/main:Worker-1 \
+  --failure model_capability_insufficient \
+  --summary "The bounded implementation path exceeds this model." \
+  --proof "Boss review confirmed the capability blocker."
+```
+
+`mp escalate` rejects unrelated managed agents. Before any stop, it validates
+the open assigned task, current receipt, exact provider session, profile,
+working directory, TaskSpec, role contract, policy, budget, and next model. It
+then takes the provider-switch lock and repeats those gates.
+
+On success MyPeople keeps the same agent, assignee, task, Boss, provider
+profile, working directory, TaskSpec, role receipt, and same Codex session.
+Only the selected worker's tmux window and recorder stop. The exact session
+resumes on one higher policy-compliant model; unrelated workers and control
+services remain live. After identity verification, MyPeople sends one compact continuation message:
+
+```text
+Continue the same owner task from the preserved session. Re-run the failed verification and report with mp complete or one new structured failure.
+```
+
+The routing calculation consumes zero model tokens and records
+`routingAiUsage=none`. The continuation is one ordinary provider turn on the
+higher model, so it has that model's normal token cost. Provider context usage
+remains `not_measured` unless provider telemetry is available.
+
+Quota exhaustion, authentication, provider startup, session capture,
+infrastructure, Docker, tmux, queue, filesystem, network, missing profile or
+context, policy denial, timeout, silence, and crash outcomes never escalate the
+model. They remain typed operational failures.
+
+If forward resume, identity verification, or continuation delivery fails after
+the stop, MyPeople kills only the partial candidate and restores the prior
+model, receipt, and exact session. No continuation is sent. If rollback also
+fails, the selected worker and original card become `blocked` with
+`recovery_required`; private roster, routing, handoff, and transaction
+evidence is retained. There is no fresh-session fallback.
 
 For the operator procedure, expected live signals, and safe failure handling,
 see [Adaptive Routing Live Canary](ADAPTIVE-ROUTING-LIVE-CANARY.md).
@@ -474,7 +531,8 @@ never recorded.
 
 ## Known limitations
 
-- The transient queue is lost when its process restarts.
+- The durable queue quarantines uncertain post-delivery outcomes; an operator
+  must inspect them and use `mp queue-retry` explicitly.
 - Legacy roster records without a captured provider session ID cannot use exact
   resume; replace them only through an explicit operator-controlled handoff.
 - ProjectProfile and TaskSpec are available, but external memory remains disabled until the Phase B security and deployment gate.
@@ -485,8 +543,8 @@ never recorded.
   `mypeople-todos` volume. An explicit `EXPORT_REPO` may override it for an
   operator-controlled external target.
 - Preserved migration containers, images, backups, and restore-test volumes require an explicit cleanup review; startup never removes them.
-- Adaptive routing currently controls new Codex owner workers only. Automatic
-  cross-model replacement, hybrid providers, per-agent account controls, and
+- Adaptive routing and lossless cross-model replacement currently support
+  Codex owner workers only. Hybrid providers, per-agent account controls, and
   HUD model buttons remain separate gated work.
 
 ## Technical verification
@@ -500,6 +558,11 @@ docker exec mypeople python3 /home/mp/mypeople/verify/test_boss_supervisor_backe
 docker exec mypeople python3 /home/mp/mypeople/verify/test_codex_message_submit.py
 docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_task_routing.py
 docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_adaptive_owner_routing.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_provider_shared_primitives.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_routing_escalation.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_routing_escalation_cli.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_queue_routing_escalation.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_lossless_routing_escalation.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_project_workspace.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_project_publisher.py
 ```
@@ -608,8 +671,8 @@ receives the text Windows types into the focused control.
 ## Recommended next stage
 
 1. Add deliberate Boss stop, reconcile, revive, model, and provider-profile controls to Priorities.
-2. Connect bounded routing escalation to an explicit lossless worker-switch command.
-3. Bind local services safely and protect the writable terminal.
+2. Add hybrid provider and optional per-agent account controls behind the same transaction contract.
+3. Add provider token and cost telemetry without changing zero-token routing.
 4. Evaluate a JSON-to-SQLite board migration with a tested JSON rollback path.
 5. Activate read-only Cloudflare recall for one real ProjectProfile through a separate security-gated cycle.
 
