@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "tiers": {
+    "economy": {
+      "model": "gpt-5.6-luna",
+      "rank": 1
+    },
+    "standard": {
+      "model": "gpt-5.6-terra",
+      "rank": 2
+    },
+    "strong": {
+      "model": "gpt-5.6-sol",
+      "rank": 3
+    }
+  },
+  "defaults": {
+    "tier": "economy",
+    "maxAutomaticTier": "standard",
+    "maxAttempts": 2,
+    "maxEscalations": 1
+  },
+  "projects": {
+    "mypeople": {
+      "allowedModels": [
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol"
+      ],
+      "maxAutomaticTier": "strong",
+      "maxAttempts": 2,
+      "maxEscalations": 1
+    }
+  }
+}
