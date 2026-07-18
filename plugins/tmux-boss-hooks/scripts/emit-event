@@ -4,6 +4,9 @@ import glob,json,os,pathlib,re,sys,time,urllib.request
 AGENT=os.environ.get("AGENT_ID","")
 if not AGENT:sys.exit(0)
 ROOT=os.environ.get("INSTALL_DIR",os.path.expanduser("~/mypeople"));BOSS=os.environ.get("BOSS_ID","")
+sys.path.insert(0,os.path.join(ROOT,"bin"))
+from agent_session import SessionError,validate_session_id
+from mpcommon import record_session_identity
 try:data=json.load(sys.stdin)
 except:data={}
 event=data.get("hook_event_name") or data.get("event") or os.environ.get("CLAUDE_HOOK_EVENT","")
@@ -12,9 +15,31 @@ def load():
  try:return json.load(open(path))
  except:return {}
 def write(status,summary="",state="alive"):
- d=load();d.update(status=status,timestamp=time.time(),session_id=data.get("session_id",d.get("session_id","")),boss_id=BOSS,backend="claude",state=state)
+ d=load();raw_session=data.get("session_id","");session_id=""
+ if raw_session:
+  try:session_id=validate_session_id(raw_session)
+  except SessionError:session_id=""
+ d.update(status=status,timestamp=time.time(),session_id=session_id or d.get("session_id",""),boss_id=BOSS,backend="claude",state=state)
  if summary:d["summary"]=summary
  tmp=f"{path}.{os.getpid()}.{time.time_ns()}.tmp";json.dump(d,open(tmp,"w"),indent=2);os.replace(tmp,path)
+ if session_id:
+  identity={
+   "session_id":session_id,
+   "session_backend":"claude",
+   "session_profile":os.environ.get("MYPEOPLE_PROVIDER_PROFILE",""),
+   "session_cwd":os.path.realpath(os.getcwd()),
+   "session_recorded_at":time.time(),
+   "resume_state":"available",
+   "last_recovery_error":"",
+  }
+  deadline=time.monotonic()+max(0.0,float(os.environ.get("MYPEOPLE_HOOK_ROSTER_WAIT_SEC","2")))
+  while True:
+   try:
+    record_session_identity(AGENT,identity);break
+   except ValueError as error:
+    if str(error)!="unknown_agent" or time.monotonic()>=deadline:break
+    time.sleep(.05)
+   except OSError:break
 def assistant_text(obj):
  if not isinstance(obj,dict):return ""
  if obj.get("type")=="assistant":

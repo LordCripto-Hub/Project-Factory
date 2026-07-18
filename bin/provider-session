@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,11 @@ from mpcommon import (
     window_exists,
 )
 from provider_profiles import validate_profile_id
+from agent_session import (
+    HANDOFF_SNAPSHOT_FIELDS,
+    SessionError,
+    validate_session_id,
+)
 
 
 RUN_ROOT = os.path.realpath(
@@ -138,6 +144,42 @@ def redact(text: str) -> str:
     return value
 
 
+def sanitize_terminal_tail(text: str) -> str:
+    sensitive_assignment = re.compile(
+        r"(?i)(?:\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|"
+        r"PRIVATE_KEY|COOKIE|SESSION)[A-Z0-9_]*\b|\bset-cookie\b)\s*[:=]"
+    )
+    jwt = re.compile(
+        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+        r"(?:\.[A-Za-z0-9_-]+)?\b"
+    )
+    credential_path = re.compile(
+        r"/home/[^/\s]+/(?:(?:\.codex|\.claude|\.config)/|"
+        r"mypeople/run/provider-homes/)[^\s]+"
+    )
+    userinfo = re.compile(r"(?i)(https?://)[^/@\s]+@")
+    output = []
+    in_private_key = False
+    for raw_line in str(text or "").splitlines():
+        line = raw_line
+        if "-----BEGIN " in line and "PRIVATE KEY-----" in line:
+            in_private_key = True
+            output.append("[REDACTED_PRIVATE_KEY]")
+            continue
+        if in_private_key:
+            if "-----END " in line and "PRIVATE KEY-----" in line:
+                in_private_key = False
+            continue
+        line = redact(line)
+        line = credential_path.sub("[REDACTED_CREDENTIAL_PATH]", line)
+        line = userinfo.sub(r"\1[REDACTED_USERINFO]@", line)
+        line = jwt.sub("[REDACTED_JWT]", line)
+        if sensitive_assignment.search(line):
+            line = "[REDACTED_SENSITIVE_LINE]"
+        output.append(line)
+    return "\n".join(output)
+
+
 def build_handoff(record: dict, terminal_tail: str, limit: int = 4000) -> dict:
     public = {}
     for key in PUBLIC_HANDOFF_FIELDS:
@@ -146,12 +188,48 @@ def build_handoff(record: dict, terminal_tail: str, limit: int = 4000) -> dict:
         value = record[key]
         public[key] = redact(value) if isinstance(value, str) else value
     bounded = max(0, int(limit))
-    tail = redact(terminal_tail)
+    tail = sanitize_terminal_tail(terminal_tail)
     if bounded:
         tail = tail[-bounded:]
     else:
         tail = ""
-    return {"agent": public, "terminalTail": tail}
+    snapshot = {
+        field: (
+            os.path.realpath(str(record.get(field) or ""))
+            if field == "cwd"
+            else record.get(field)
+        )
+        for field in HANDOFF_SNAPSHOT_FIELDS
+    }
+    return {"agent": public, "terminalTail": tail, "snapshot": snapshot}
+
+
+def handoff_path_for_agent(transaction_dir: str, agent_id: str) -> str:
+    digest = hashlib.sha256(str(agent_id).encode("utf-8")).hexdigest()
+    return os.path.join(os.path.realpath(transaction_dir), "handoffs", digest + ".json")
+
+
+def write_handoffs(
+    transaction_dir: str,
+    selected: list[dict],
+) -> list[dict]:
+    handoff_dir = os.path.join(os.path.realpath(transaction_dir), "handoffs")
+    _private_dir(handoff_dir)
+    handoffs = []
+    for row in selected:
+        handoff = build_handoff(row, _capture_tail(row))
+        atomic_json(
+            handoff_path_for_agent(transaction_dir, row["agent_id"]),
+            handoff,
+            mode=0o600,
+        )
+        handoffs.append(handoff)
+    atomic_json(
+        os.path.join(transaction_dir, "handoffs.json"),
+        handoffs,
+        mode=0o600,
+    )
+    return handoffs
 
 
 def active_provider_roster(roster: list[dict]) -> list[dict]:
@@ -220,9 +298,42 @@ def revive_agents(roster: list[dict], selected_agent: str = "") -> None:
         run_mp(["revive", row["agent_id"]])
 
 
-def verify_roles(roster: list[dict], selected_agent: str = "") -> None:
+def fresh_handoff_agents(
+    transaction_dir: str,
+    transaction_id: str,
+    roster: list[dict],
+    selected_agent: str = "",
+) -> None:
+    for row in revival_order(_selected(roster, selected_agent)):
+        run_mp(
+            [
+                "fresh-handoff",
+                row["agent_id"],
+                "--transaction",
+                transaction_id,
+                "--handoff",
+                handoff_path_for_agent(transaction_dir, row["agent_id"]),
+            ]
+        )
+
+
+def verify_roles(
+    roster: list[dict],
+    selected_agent: str = "",
+    target_backend: str = "",
+    target_model: str = "",
+) -> None:
     actual = {row.get("agent_id"): row for row in load_roster()}
-    role_fields = ("backend", "is_master", "boss_id", "lifecycle", "owner_task_id")
+    bindings = load_json(BINDINGS_PATH, {})
+    role_fields = (
+        "is_master",
+        "boss_id",
+        "lifecycle",
+        "owner_task_id",
+        "cwd",
+        "taskspec_sha256",
+        "role_contract_sha256",
+    )
     failures = []
     for expected in _selected(roster, selected_agent):
         agent_id = expected["agent_id"]
@@ -231,6 +342,46 @@ def verify_roles(roster: list[dict], selected_agent: str = "") -> None:
             failures.append(agent_id)
             continue
         if not window_exists(tmux_target(agent_id)):
+            failures.append(agent_id)
+            continue
+        if target_backend and current.get("backend") != target_backend:
+            failures.append(agent_id)
+            continue
+        if not target_backend and current.get("backend") != expected.get("backend"):
+            failures.append(agent_id)
+            continue
+        expected_model = target_model or expected.get("model")
+        if expected_model and current.get("model") != expected_model:
+            failures.append(agent_id)
+            continue
+        if current.get("backend") == "codex":
+            expected_profile = (
+                (bindings.get("agentProfiles") or {}).get(agent_id)
+                or bindings.get("globalProfile")
+            )
+            if (
+                expected_profile
+                and current.get("provider_profile") != expected_profile
+            ):
+                failures.append(agent_id)
+                continue
+        try:
+            session_id = validate_session_id(current.get("session_id"))
+        except SessionError:
+            failures.append(agent_id)
+            continue
+        if (
+            current.get("resume_state") != "available"
+            or current.get("session_backend") != current.get("backend")
+            or current.get("session_profile")
+            != current.get("provider_profile", "")
+            or os.path.realpath(str(current.get("session_cwd") or ""))
+            != os.path.realpath(str(current.get("cwd") or ""))
+            or (
+                expected.get("session_id")
+                and session_id == expected.get("session_id")
+            )
+        ):
             failures.append(agent_id)
             continue
         if any(
@@ -305,6 +456,10 @@ def _capture_tail(row: dict) -> str:
 
 def command_prepare(args) -> None:
     transaction_dir = _transaction_dir(args.transaction)
+    target_backend = str(getattr(args, "backend", "") or "")
+    target_profile = str(getattr(args, "profile", "") or "")
+    if target_backend != "claude" and not target_profile:
+        raise RuntimeError("target provider profile is required")
     acquire_lock(LOCK_PATH, args.transaction)
     try:
         complete_roster = load_roster()
@@ -317,14 +472,19 @@ def command_prepare(args) -> None:
             roster,
             mode=0o600,
         )
-        handoffs = [build_handoff(row, _capture_tail(row)) for row in selected]
-        atomic_json(os.path.join(transaction_dir, "handoffs.json"), handoffs, mode=0o600)
+        write_handoffs(transaction_dir, selected)
         state = {
             "transaction": args.transaction,
             "selectedAgent": args.agent or "",
             "phase": "prepared",
             "created": time.time(),
         }
+        if getattr(args, "backend", ""):
+            state["targetBackend"] = args.backend
+        if getattr(args, "model", ""):
+            state["targetModel"] = args.model
+        if target_profile:
+            state["targetProfile"] = validate_profile_id(target_profile)
         atomic_json(os.path.join(transaction_dir, "state.json"), state, mode=0o600)
     except Exception:
         release_lock(LOCK_PATH, args.transaction)
@@ -351,8 +511,15 @@ def command_stop(args) -> None:
 def command_revive(args) -> None:
     transaction_dir = _transaction_dir(args.transaction)
     state = _read_state(transaction_dir)
+    if state.get("phase") != "stopped":
+        raise RuntimeError("provider switch transaction is not stopped")
     roster = _transaction_roster(transaction_dir)
-    revive_agents(roster, str(state.get("selectedAgent") or ""))
+    fresh_handoff_agents(
+        transaction_dir,
+        state["transaction"],
+        roster,
+        str(state.get("selectedAgent") or ""),
+    )
     _write_phase(transaction_dir, state, "revived")
 
 
@@ -360,7 +527,12 @@ def command_verify(args) -> None:
     transaction_dir = _transaction_dir(args.transaction)
     state = _read_state(transaction_dir)
     roster = _transaction_roster(transaction_dir)
-    verify_roles(roster, str(state.get("selectedAgent") or ""))
+    verify_roles(
+        roster,
+        str(state.get("selectedAgent") or ""),
+        str(state.get("targetBackend") or ""),
+        str(state.get("targetModel") or ""),
+    )
     _write_phase(transaction_dir, state, "verified")
 
 
@@ -399,6 +571,9 @@ def parser() -> argparse.ArgumentParser:
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--transaction", required=True)
     prepare.add_argument("--agent", default="")
+    prepare.add_argument("--backend", choices=["claude", "codex"], default="")
+    prepare.add_argument("--model", default="")
+    prepare.add_argument("--profile", default="")
     prepare.set_defaults(function=command_prepare)
     for name, function in (
         ("stop", command_stop),

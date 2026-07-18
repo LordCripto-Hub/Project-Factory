@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, hashlib, json, mimetypes, os, pathlib, shlex, signal, stat, subprocess, sys, time, uuid, urllib.request
+import argparse, contextlib, hashlib, json, mimetypes, os, pathlib, shlex, signal, stat, subprocess, sys, time, uuid, urllib.request
+from agent_session import (
+    SessionError,
+    apply_resume_args,
+    capture_lock,
+    discover_codex_session,
+    snapshot_codex_sessions,
+    validate_fresh_handoff,
+    validate_resume_evidence,
+)
 from mpcommon import *
 from provider_profiles import (
     codex_home,
@@ -27,6 +36,10 @@ from provider_launch import resume as resume_provider_launch
 from provider_launch import status as provider_launch_status
 
 INSTALL_DIR = ROOT
+RECOVERY_COOLDOWN = float(os.environ.get("MYPEOPLE_RECOVERY_COOLDOWN_SEC","30"))
+RECOVERY_MAX = int(os.environ.get("MYPEOPLE_RECOVERY_MAX","3"))
+STARTING_STALE = float(os.environ.get("MYPEOPLE_STARTING_STALE_SEC","90"))
+BOOTSTRAP_MAX = int(os.environ.get("MYPEOPLE_BOOTSTRAP_RETRY_MAX","3"))
 
 
 def record_taskspec_event(event):
@@ -381,6 +394,50 @@ def is_managed_codex_cwd(cwd):
     )
     return any(real_cwd == root or real_cwd.startswith(root + os.sep) for root in managed_roots)
 
+def resolve_provider_runtime(
+    aid,
+    backend,
+    is_master,
+    tab,
+    requested_model,
+    model_explicit,
+):
+    model = requested_model
+    profile_id = ""
+    provider_home = ""
+    if backend != "codex":
+        return model, profile_id, provider_home
+    bindings = load_provider_json(
+        os.environ.get(
+            "PROVIDER_BINDINGS_PATH",
+            os.path.join(ROOT, "run", "provider-bindings.json"),
+        ),
+        {},
+    )
+    profiles = load_provider_json(
+        os.environ.get(
+            "PROVIDER_PROFILES_PATH",
+            os.path.join(ROOT, "run", "provider-profiles.json"),
+        ),
+        {},
+    )
+    if bindings.get("globalProfile"):
+        profile_id = resolve_profile(bindings, aid)
+        profile = profiles.get(profile_id, {}) if isinstance(profiles, dict) else {}
+        if not model_explicit:
+            role = "boss" if is_master else "nightwatch" if tab == "Nightwatch" else "engineer"
+            model = resolve_model(profile, role)
+        provider_home = codex_home(
+            os.environ.get(
+                "PROVIDER_HOMES_DIR",
+                os.path.join(ROOT, "run", "provider-homes"),
+            ),
+            profile_id,
+        )
+        os.makedirs(provider_home, mode=0o700, exist_ok=True)
+        os.chmod(provider_home, 0o700)
+    return model, profile_id, provider_home
+
 def _build_launch_args(agent_id, cwd, boss, is_master, model, backend):
     aid = full_agent_id(agent_id)
     host, session, tab = parse_agent_id(aid)
@@ -444,7 +501,97 @@ def wait_for_composer(target, timeout=30):
         time.sleep(.5)
     return False
 
-def spawn(ns):
+def wait_for_stable_window(target, duration=None, poll=0.1):
+    stable_for = (
+        float(os.environ.get("MYPEOPLE_RESUME_STABILITY_SEC", "1"))
+        if duration is None
+        else float(duration)
+    )
+    deadline = time.monotonic() + max(0.0, stable_for)
+    while True:
+        if not window_exists(target):
+            return False
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(max(0.01, float(poll)))
+
+def resolve_owner_runtime(ns, receipt_record=None):
+    if not ns.owner_task:
+        return "", {}, None
+    if receipt_record is None:
+        taskspec_path = compile_owner_task_spec(ns.owner_task)
+        taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
+        return taskspec_path, taskspec_context, materialize_worker_contract()
+    if receipt_record.get("owner_task_id") != ns.owner_task:
+        raise SystemExit("taskspec_receipt_mismatch")
+    validate_record_receipt(
+        receipt_record,
+        "taskspec_path",
+        "taskspec_sha256",
+        "taskspec_receipt_mismatch",
+    )
+    validate_record_receipt(
+        receipt_record,
+        "role_contract_path",
+        "role_contract_sha256",
+        "role_receipt_mismatch",
+    )
+    taskspec_path = str(receipt_record.get("taskspec_path") or "")
+    taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
+    if taskspec_context["taskspec_sha256"] != receipt_record.get("taskspec_sha256"):
+        raise SystemExit("taskspec_receipt_mismatch")
+    try:
+        role_content = pathlib.Path(
+            receipt_record["role_contract_path"]
+        ).read_text(encoding="utf-8")
+    except (KeyError, OSError, UnicodeError) as error:
+        raise SystemExit("role_receipt_mismatch") from error
+    worker_contract = {
+        "path": receipt_record["role_contract_path"],
+        "sha256": receipt_record["role_contract_sha256"],
+        "version": receipt_record.get("role_contract_version"),
+        "content": role_content,
+    }
+    return taskspec_path, taskspec_context, worker_contract
+
+def startup_message_for(ns, tab, initial_message=""):
+    if str(initial_message or "").strip():
+        return str(initial_message)
+    if ns.master:
+        return (
+            "Read your Boss doctrine now. Internalize the queue quickstart, "
+            "operate autonomously, and reply with a concise readiness summary "
+            "containing plan, queue, mp, and verify."
+        )
+    if tab == "Nightwatch":
+        doctrine = "AGENTS.md" if ns.backend == "codex" else "CLAUDE.md"
+        return (
+            f"Read {doctrine} and internalize the Nightwatch "
+            "approve/edit/reject protocol. Reply with a concise nightwatch, "
+            "CEO-equivalent, approve, WhatsApp, never-done readiness summary."
+        )
+    if ns.owner_task:
+        return (
+            "Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH. The MyPeople worker "
+            "contract is already mounted; also follow the repository's own "
+            f"instructions. Work only on owner task {ns.owner_task}, run the "
+            "required verification, then report with mp complete and at least "
+            "one --proof. Do not close the task yourself."
+        )
+    if ns.backend == "codex":
+        return (
+            "Initialize this temporary MyPeople worker session, read local "
+            "project instructions when present, and reply with a concise "
+            "readiness summary."
+        )
+    return ""
+
+def spawn(
+    ns,
+    resume_session="",
+    initial_message="",
+    receipt_record=None,
+):
     raw_boss = ns.boss
     if raw_boss is not None and not raw_boss.strip(): raise SystemExit("empty --boss is invalid; omit --boss for a top-level agent")
     if (ns.owner_task or ns.temporary) and raw_boss is None: raise SystemExit("--owner-task/--temporary require --boss")
@@ -466,9 +613,11 @@ def spawn(ns):
     worker_contract = None
     if ns.owner_task:
         try:
-            taskspec_path = compile_owner_task_spec(ns.owner_task)
-            taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
-            worker_contract = materialize_worker_contract()
+            (
+                taskspec_path,
+                taskspec_context,
+                worker_contract,
+            ) = resolve_owner_runtime(ns, receipt_record)
         except TaskSpecError as error:
             message = f"[taskspec] task {ns.owner_task} blocked: {error.code}. Fix the project/profile/context request and retry."
             if boss:
@@ -480,38 +629,14 @@ def spawn(ns):
                 notify_agent(boss, message)
             raise SystemExit(message) from error
     model = ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL)
-    profile_id = ""
-    provider_home = ""
-    if ns.backend == "codex":
-        bindings = load_provider_json(
-            os.environ.get(
-                "PROVIDER_BINDINGS_PATH",
-                os.path.join(ROOT, "run", "provider-bindings.json"),
-            ),
-            {},
-        )
-        profiles = load_provider_json(
-            os.environ.get(
-                "PROVIDER_PROFILES_PATH",
-                os.path.join(ROOT, "run", "provider-profiles.json"),
-            ),
-            {},
-        )
-        if bindings.get("globalProfile"):
-            profile_id = resolve_profile(bindings, aid)
-            profile = profiles.get(profile_id, {}) if isinstance(profiles, dict) else {}
-            if ns.model is None:
-                role = "boss" if ns.master else "nightwatch" if tab == "Nightwatch" else "engineer"
-                model = resolve_model(profile, role)
-            provider_home = codex_home(
-                os.environ.get(
-                    "PROVIDER_HOMES_DIR",
-                    os.path.join(ROOT, "run", "provider-homes"),
-                ),
-                profile_id,
-            )
-            os.makedirs(provider_home, mode=0o700, exist_ok=True)
-            os.chmod(provider_home, 0o700)
+    model, profile_id, provider_home = resolve_provider_runtime(
+        aid,
+        ns.backend,
+        ns.master,
+        tab,
+        model,
+        ns.model is not None,
+    )
     aid, host, session, tab, cwd, boss, args = _build_launch_args(
         aid,
         taskspec_context.get("cwd") if ns.owner_task else ns.cwd,
@@ -520,6 +645,7 @@ def spawn(ns):
         model,
         ns.backend,
     )
+    startup_message = startup_message_for(ns, tab, initial_message)
     if ns.backend == "codex" and ns.master:
         ensure_codex_doctrine(cwd)
     elif ns.backend == "codex" and tab == "Nightwatch":
@@ -528,6 +654,8 @@ def spawn(ns):
             ensure_codex_doctrine(cwd, nightwatch_source)
     if ns.owner_task:
         args = mount_worker_contract(args, ns.backend, worker_contract)
+    if resume_session:
+        args = apply_resume_args(ns.backend, args, resume_session)
     if ns.model is not None and ns.master is False and tab != "Nightwatch":
         pass
     launch_env={"AGENT_ID":aid,"QUEUE_URL":ENV.get("QUEUE_URL","http://127.0.0.1:9900"),"TODO_URL":os.environ.get("MYPEOPLE_TODO_URL") or os.environ.get("TODO_URL") or f"http://127.0.0.1:{ENV.get('TODO_PORT','9933')}","QUEUE_SECRET":ENV["QUEUE_SECRET"],
@@ -536,19 +664,147 @@ def spawn(ns):
         launch_env["MYPEOPLE_TASKSPEC_PATH"] = taskspec_path
     if provider_home:
         launch_env["CODEX_HOME"] = provider_home
+    if profile_id:
+        launch_env["MYPEOPLE_PROVIDER_PROFILE"] = profile_id
     if os.environ.get("VERIFY_RESERVED_OWNER_ID"):
         launch_env["VERIFY_RESERVED_OWNER_ID"]=os.environ["VERIFY_RESERVED_OWNER_ID"]
     command=shell_export(launch_env)+"; exec "+shlex.join(args)
+    previous=next((x for x in load_roster() if x.get("agent_id")==aid),{})
+    fresh_session = not target_exists and not resume_session
+    if target_exists or resume_session:
+        session_id = str(resume_session or previous.get("session_id") or "")
+        resume_state = previous.get("resume_state") or (
+            "available" if session_id else "unavailable"
+        )
+    else:
+        session_id = ""
+        resume_state = "pending"
+    session_identity = {
+        "session_id": session_id,
+        "session_backend": (
+            ns.backend
+            if fresh_session
+            else previous.get("session_backend", ns.backend)
+        ),
+        "session_profile": (
+            profile_id
+            if fresh_session
+            else previous.get("session_profile", profile_id)
+        ),
+        "session_cwd": (
+            cwd
+            if fresh_session
+            else previous.get("session_cwd", cwd)
+        ),
+        "session_recorded_at": (
+            0
+            if fresh_session
+            else previous.get("session_recorded_at", 0)
+        ),
+        "resume_state": resume_state,
+        "recovery_attempts": previous.get("recovery_attempts", 0),
+        "next_recovery_at": previous.get("next_recovery_at", 0),
+        "recovery_state": previous.get("recovery_state", "healthy"),
+        "last_recovery_error": previous.get("last_recovery_error", ""),
+    }
+    if resume_session:
+        session_identity.update(
+            session_id=resume_session,
+            session_backend=ns.backend,
+            session_profile=profile_id,
+            session_cwd=cwd,
+            resume_state="available",
+            recovery_attempts=0,
+            next_recovery_at=0,
+            recovery_state="healthy",
+            last_recovery_error="",
+        )
+    capture_enabled = ns.backend == "codex" and not target_exists and not resume_session
+    capture_home = (
+        provider_home
+        or os.environ.get("CODEX_HOME")
+        or os.path.expanduser("~/.codex")
+    )
+    capture_root = os.environ.get(
+        "MYPEOPLE_SESSION_CAPTURE_DIR",
+        os.path.join(ROOT, "run", "session-capture"),
+    )
+    capture_context = (
+        capture_lock(
+            capture_root,
+            "codex",
+            profile_id or "default",
+            timeout=float(
+                os.environ.get("MYPEOPLE_SESSION_CAPTURE_LOCK_SEC", "5")
+            ),
+        )
+        if capture_enabled
+        else contextlib.nullcontext()
+    )
     created=False
-    if not target_exists:
-        if run_tmux(["has-session","-t",f"mc-{session}"],check=False).returncode:
-            run_tmux(["new-session","-d","-s",f"mc-{session}","-n",tab,"-c",cwd,command])
-            run_tmux(["set-option","-t",f"mc-{session}","-g","automatic-rename","off"],check=False)
-        else:
-            run_tmux(["new-window","-d","-t",f"mc-{session}","-n",tab,"-c",cwd,command])
-        run_tmux(["set-option","-t",target,"-w","automatic-rename","off"])
-        run_tmux(["set-option","-t",target,"-w","allow-rename","off"])
-        run_tmux(["rename-window","-t",target,tab]); created=True
+    with capture_context:
+        capture_before = (
+            snapshot_codex_sessions(capture_home)
+            if capture_enabled
+            else set()
+        )
+        if not target_exists:
+            if run_tmux(["has-session","-t",f"mc-{session}"],check=False).returncode:
+                run_tmux(["new-session","-d","-s",f"mc-{session}","-n",tab,"-c",cwd,command])
+                run_tmux(["set-option","-t",f"mc-{session}","-g","automatic-rename","off"],check=False)
+            else:
+                run_tmux(["new-window","-d","-t",f"mc-{session}","-n",tab,"-c",cwd,command])
+            run_tmux(["set-option","-t",target,"-w","automatic-rename","off"])
+            run_tmux(["set-option","-t",target,"-w","allow-rename","off"])
+            run_tmux(["rename-window","-t",target,tab]); created=True
+        if created and capture_enabled:
+            try:
+                if not wait_for_composer(target):
+                    raise SessionError("session_process_not_ready")
+                if not tmux_send_message(target, startup_message):
+                    raise SessionError("session_process_not_ready")
+                time.sleep(
+                    float(
+                        os.environ.get(
+                            "MYPEOPLE_INITIAL_SUBMIT_RETRY_SEC",
+                            "0.5",
+                        )
+                    )
+                )
+                if snapshot_codex_sessions(capture_home) == capture_before:
+                    run_tmux(
+                        ["send-keys", "-t", target, "Enter"],
+                        check=False,
+                    )
+                discovered = discover_codex_session(
+                    capture_home,
+                    cwd,
+                    capture_before,
+                    timeout=float(
+                        os.environ.get(
+                            "MYPEOPLE_SESSION_CAPTURE_TIMEOUT_SEC",
+                            "90",
+                        )
+                    ),
+                )
+                session_identity.update(
+                    session_id=discovered["session_id"],
+                    session_backend="codex",
+                    session_profile=profile_id,
+                    session_cwd=cwd,
+                    session_recorded_at=time.time(),
+                    resume_state="available",
+                    last_recovery_error="",
+                )
+            except SessionError as error:
+                session_identity.update(
+                    session_id="",
+                    session_backend="codex",
+                    session_profile=profile_id,
+                    session_cwd=cwd,
+                    resume_state="unavailable",
+                    last_recovery_error=error.code,
+                )
     lifecycle="owner" if ns.owner_task else "temporary" if ns.temporary else "unclassified"
     audit=["mp","spawn",aid,"--backend",ns.backend,"--cwd",cwd]
     if boss:audit += ["--boss",boss]
@@ -556,10 +812,10 @@ def spawn(ns):
     if model:audit += ["--model",model]
     if ns.owner_task:audit += ["--owner-task",ns.owner_task]
     if ns.temporary:audit += ["--temporary"]
-    previous=next((x for x in load_roster() if x.get("agent_id")==aid),{})
     rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"state":"alive",
          "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
-         "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time())}
+         "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time()),
+         "stop_intent":"","retired_reason":"","retired_at":0,**session_identity}
     if taskspec_path:
         rec["taskspec_path"] = taskspec_path
         rec["taskspec_sha256"] = taskspec_context["taskspec_sha256"]
@@ -567,22 +823,25 @@ def spawn(ns):
         rec["role_contract_path"] = worker_contract["path"]
         rec["role_contract_sha256"] = worker_contract["sha256"]
         rec["role_contract_version"] = worker_contract["version"]
-    if profile_id:
-        rec["provider_profile"] = profile_id
+    rec["provider_profile"] = profile_id
     if ns.master: rec["summary"]="autonomous plan approve queue mp verify fire-and-forget"
     if tab=="Nightwatch": rec["summary"]="nightwatch ceo-equivalent approve whatsapp never-done"
+    if resume_session and created:
+        if (
+            not wait_for_composer(target)
+            or not wait_for_stable_window(target)
+        ):
+            run_tmux(["kill-window","-t",target],check=False)
+            raise RuntimeError("resume_process_failed")
     update_roster(rec); write_status(aid,"starting",rec.get("summary",""),boss_id=boss,backend=ns.backend)
     queue_register(rec); recorder(session,tab)
-    if created and ns.master:
+    if created and resume_session:
+        pass
+    elif created and capture_enabled:
+        pass
+    elif created and startup_message:
         wait_for_composer(target)
-        tmux_send_message(target,"Read your Boss doctrine now. Internalize the queue quickstart, operate autonomously, and reply with a concise readiness summary containing plan, queue, mp, and verify.")
-    elif created and tab=="Nightwatch":
-        wait_for_composer(target)
-        doctrine_name = "AGENTS.md" if ns.backend == "codex" else "CLAUDE.md"
-        tmux_send_message(target,f"Read {doctrine_name} and internalize the Nightwatch approve/edit/reject protocol. Reply with a concise nightwatch, CEO-equivalent, approve, WhatsApp, never-done readiness summary.")
-    elif created and ns.owner_task:
-        wait_for_composer(target)
-        tmux_send_message(target,f"Read the TaskSpec at $MYPEOPLE_TASKSPEC_PATH. The MyPeople worker contract is already mounted; also follow the repository's own instructions. Work only on owner task {ns.owner_task}, run the required verification, then report with mp complete and at least one --proof. Do not close the task yourself.")
+        tmux_send_message(target, startup_message)
     print(aid)
 
 def notify_agent(agent_id, message):
@@ -641,52 +900,323 @@ def peek(ns):
 
 def kill(ns):
     aid=full_agent_id(ns.agent_id); _,s,t=parse_agent_id(aid)
+    rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
+    if not rec:raise SystemExit("unknown agent")
+    stopping={
+        **rec,
+        "retired":True,
+        "state":"stopping",
+        "stop_intent":"deliberate",
+        "retired_reason":ns.reason or "operator-request",
+        "retired_at":time.time(),
+        "recovery_state":"stopped",
+    }
+    update_roster(stopping)
     run_tmux(["kill-window","-t",f"mc-{s}:{t}"],check=False); run_tmux(["kill-session","-t",f"rec-{t}"],check=False)
+    final={**stopping,"state":"dead","recovery_state":"stopped"}
+    update_roster(final)
     rows=load_roster()
-    for r in rows:
-        if r.get("agent_id")==aid:r.update(retired=True,state="dead",retired_reason=ns.reason or "",retired_at=time.time())
-    save_roster(rows); atomic_json(agents_path(),[r for r in rows if not r.get("retired") and window_exists(f"mc-{r.get('session')}:{r.get('tab')}")])
+    atomic_json(agents_path(),[r for r in rows if not r.get("retired") and window_exists(f"mc-{r.get('session')}:{r.get('tab')}")])
     try:http_json("/agents/unregister","POST",{"agent_id":aid})
     except Exception:pass
+
+def namespace_from_record(rec):
+    return argparse.Namespace(
+        agent_id=rec["agent_id"],
+        backend=rec.get("backend","claude"),
+        cwd=rec.get("cwd",ROOT),
+        boss=rec.get("boss_id") or None,
+        master=bool(rec.get("is_master")),
+        model=rec.get("model") or None,
+        owner_task=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else None,
+        temporary=rec.get("lifecycle")=="temporary",
+    )
+
+def validate_record_receipt(rec,path_field,digest_field,error_code):
+    path=rec.get(path_field);expected=rec.get(digest_field)
+    if not path and not expected:return
+    try:
+        actual=hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+    except OSError as error:
+        raise SystemExit(error_code) from error
+    if not expected or actual!=expected:
+        raise SystemExit(error_code)
+
+def verify_owner_task_for_revive(rec,aid):
+    task_id=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else ""
+    if not task_id:return
+    try:
+        board=http_json("/todo/board",token=ENV.get("QUEUE_SECRET",""))
+    except Exception as error:
+        raise SystemExit(f"owner_task_verification_failed: {error}") from error
+    task=(board.get("tasks") or {}).get(task_id)
+    deleted=(board.get("deletedTasks") or {}).get(task_id)
+    if deleted or not task:
+        raise SystemExit("owner_task_closed: refusing revive")
+    if task.get("state") in ("done","cancelled") or task.get("ownerNeedsReplacement"):
+        raise SystemExit("owner_task_closed: refusing revive")
+    if task.get("assignee") and task.get("assignee")!=aid:
+        raise SystemExit("owner_task_reassigned: refusing revive")
 
 def revive(ns):
     aid=full_agent_id(ns.agent_id); rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
     if not rec:raise SystemExit("unknown agent")
     if (rec.get("state")=="alive" or rec.get("retired") is False) and window_exists(tmux_target(aid)):
         raise SystemExit("agent_already_alive: refusing duplicate revive")
-    task_id=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else ""
-    if task_id:
-        try:
-            board=http_json("/todo/board",token=ENV.get("QUEUE_SECRET",""))
-        except Exception as error:
-            raise SystemExit(f"owner_task_verification_failed: {error}") from error
-        task=(board.get("tasks") or {}).get(task_id)
-        deleted=(board.get("deletedTasks") or {}).get(task_id)
-        if deleted or not task:
-            raise SystemExit("owner_task_closed: refusing revive")
-        if task.get("state") in ("done","cancelled") or task.get("ownerNeedsReplacement"):
-            raise SystemExit("owner_task_closed: refusing revive")
-        if task.get("assignee") and task.get("assignee")!=aid:
-            raise SystemExit("owner_task_reassigned: refusing revive")
-    argv=["spawn",aid,"--backend",rec.get("backend","claude"),"--cwd",rec.get("cwd",ROOT)]
-    if rec.get("boss_id"):argv += ["--boss",rec["boss_id"]]
-    if rec.get("is_master"):argv += ["--master"]
-    if rec.get("model"):argv += ["--model",rec["model"]]
-    if rec.get("lifecycle")=="owner" and rec.get("owner_task_id"):argv += ["--owner-task",rec["owner_task_id"]]
-    elif rec.get("lifecycle")=="temporary":argv += ["--temporary"]
-    main(argv)
+    verify_owner_task_for_revive(rec,aid)
+    session_id=str(rec.get("session_id") or "")
+    if not session_id or rec.get("resume_state")!="available":
+        raise SystemExit("session_missing")
+    backend=rec.get("backend","claude")
+    if rec.get("session_backend")!=backend:
+        raise SystemExit("session_identity_mismatch")
+    real_cwd=os.path.realpath(rec.get("cwd",ROOT))
+    if os.path.realpath(rec.get("session_cwd") or "")!=real_cwd:
+        raise SystemExit("session_cwd_mismatch")
+    _,_,tab=parse_agent_id(aid)
+    _model,effective_profile,provider_home=resolve_provider_runtime(
+        aid,backend,bool(rec.get("is_master")),tab,rec.get("model") or None,True
+    )
+    if backend=="claude":
+        effective_profile=rec.get("provider_profile","")
+    if rec.get("session_profile","")!=effective_profile:
+        raise SystemExit("session_identity_mismatch")
+    validate_record_receipt(rec,"taskspec_path","taskspec_sha256","taskspec_receipt_mismatch")
+    validate_record_receipt(rec,"role_contract_path","role_contract_sha256","role_receipt_mismatch")
+    try:
+        validate_resume_evidence(
+            backend,
+            session_id,
+            codex_home=provider_home or os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
+            claude_config_dir=os.environ.get("CLAUDE_CONFIG_DIR",""),
+            expected_cwd=real_cwd,
+        )
+    except SessionError as error:
+        raise SystemExit(error.code) from error
+    snapshot=dict(rec)
+    update_roster({**rec,"state":"recovering","recovery_state":"recovering"})
+    try:
+        spawn(
+            namespace_from_record(rec),
+            resume_session=session_id,
+            receipt_record=rec,
+        )
+        if not window_exists(tmux_target(aid)):
+            raise RuntimeError("resume_process_failed")
+        current=next((x for x in load_roster() if x.get("agent_id")==aid),{})
+        if current.get("session_id")!=session_id:
+            raise RuntimeError("session_identity_mismatch")
+    except SessionError as error:
+        update_roster(snapshot)
+        raise SystemExit(error.code) from error
+    except BaseException:
+        update_roster(snapshot)
+        raise
+
+def render_fresh_handoff(handoff):
+    agent = handoff.get("agent") if isinstance(handoff, dict) else {}
+    if not isinstance(agent, dict):
+        agent = {}
+    tail = str(handoff.get("terminalTail") or "")[-4000:]
+    return (
+        "This is a fresh provider session authorized by a provider-switch "
+        "transaction; do not claim exact session resume. Read the mounted "
+        "role doctrine and TaskSpec when present, preserve the same task and "
+        "working directory, and continue from this sanitized handoff.\n\n"
+        "Agent snapshot:\n"
+        + json.dumps(agent, ensure_ascii=False, sort_keys=True)
+        + "\n\nRecent terminal progress:\n"
+        + tail
+    )
+
+def fresh_handoff(ns):
+    transactions_root = os.environ.get(
+        "PROVIDER_TRANSACTIONS_DIR",
+        os.path.join(ROOT, "run", "provider-transactions"),
+    )
+    switch_lock = os.environ.get(
+        "PROVIDER_SWITCH_LOCK",
+        os.path.join(ROOT, "run", "provider-switch.lock"),
+    )
+    aid = full_agent_id(ns.agent_id)
+    try:
+        authorized = validate_fresh_handoff(
+            transactions_root,
+            switch_lock,
+            ns.transaction,
+            ns.handoff,
+            aid,
+        )
+    except SessionError as error:
+        raise SystemExit(error.code) from error
+    record = authorized["record"]
+    state = authorized.get("state") or {}
+    runtime = namespace_from_record(record)
+    runtime.backend = state.get("targetBackend") or runtime.backend
+    runtime.model = state.get("targetModel") or runtime.model
+    if runtime.backend not in {"codex", "claude"}:
+        raise SystemExit("fresh_handoff_not_authorized")
+    _, _, tab = parse_agent_id(aid)
+    target_profile = str(state.get("targetProfile") or "")
+    if runtime.backend == "codex":
+        _model, effective_profile, _home = resolve_provider_runtime(
+            aid,
+            runtime.backend,
+            bool(runtime.master),
+            tab,
+            runtime.model,
+            runtime.model is not None,
+        )
+        if not target_profile or effective_profile != target_profile:
+            raise SystemExit("fresh_handoff_not_authorized")
+    elif target_profile:
+        raise SystemExit("fresh_handoff_not_authorized")
+    validate_record_receipt(
+        record,
+        "taskspec_path",
+        "taskspec_sha256",
+        "taskspec_receipt_mismatch",
+    )
+    validate_record_receipt(
+        record,
+        "role_contract_path",
+        "role_contract_sha256",
+        "role_receipt_mismatch",
+    )
+    spawn(
+        runtime,
+        resume_session="",
+        initial_message=render_fresh_handoff(authorized["handoff"]),
+        receipt_record=record,
+    )
 
 def switch_backend(ns):
     aid=full_agent_id(ns.agent_id); host,session,tab=parse_agent_id(aid)
     if host != ENV.get("HOST_ID"):raise SystemExit("remote backend switching is not supported")
     rec=next((x for x in load_roster() if x.get("agent_id")==aid),None)
     if not rec:raise SystemExit("unknown agent")
+    if rec.get("backend")!=ns.backend:
+        raise SystemExit("fresh_handoff_required")
+    original=dict(rec)
     desired={**rec,"backend":ns.backend,"model":ns.model,"retired":False,
-             "state":"switching","switched_at":time.time()}
+             "state":"switching","stop_intent":"","switched_at":time.time()}
     update_roster(desired)
     run_tmux(["kill-window","-t",f"mc-{session}:{tab}"],check=False)
     run_tmux(["kill-session","-t",f"rec-{tab}"],check=False)
-    main(["revive",aid])
+    try:
+        revive(argparse.Namespace(agent_id=aid))
+    except BaseException:
+        update_roster(original)
+        raise
+
+def reconcile(ns):
+    selected=str(getattr(ns,"agent_id","") or "").strip()
+    selected=full_agent_id(selected) if selected else ""
+    current_time=time.time()
+    attempted=[];blocked=[]
+    for original in load_roster():
+        rec=dict(original);aid=rec.get("agent_id","")
+        if not aid or (selected and aid!=selected):continue
+        if rec.get("retired") or rec.get("stop_intent")=="deliberate":continue
+        if window_exists(tmux_target(aid)):
+            if (
+                rec.get("resume_state")=="available"
+                and rec.get("session_id")
+                and (
+                rec.get("recovery_state")!="healthy"
+                or int(rec.get("recovery_attempts") or 0)
+                or float(rec.get("next_recovery_at") or 0)
+                )
+            ):
+                update_roster({
+                    **rec,
+                    "state":"alive",
+                    "recovery_state":"healthy",
+                    "recovery_attempts":0,
+                    "next_recovery_at":0,
+                    "last_recovery_error":"",
+                })
+            continue
+        attempts=int(rec.get("recovery_attempts") or 0)
+        if float(rec.get("next_recovery_at") or 0)>current_time:continue
+        if attempts>=RECOVERY_MAX:
+            update_roster({
+                **rec,
+                "state":"dead",
+                "recovery_state":"blocked",
+                "last_recovery_error":"recovery_attempts_exhausted",
+            })
+            blocked.append(aid);continue
+        session_id=str(rec.get("session_id") or "")
+        if not session_id:
+            status=load_json(status_path(aid),{})
+            activity_state=status.get("status") or rec.get("state")
+            started_at=float(status.get("timestamp") or rec.get("created") or current_time)
+            if activity_state!="starting":
+                update_roster({
+                    **rec,
+                    "state":"dead",
+                    "recovery_state":"blocked",
+                    "last_recovery_error":"session_missing",
+                })
+                blocked.append(aid);continue
+            if current_time-started_at<STARTING_STALE:continue
+            if attempts>=BOOTSTRAP_MAX:
+                update_roster({
+                    **rec,
+                    "state":"dead",
+                    "recovery_state":"blocked",
+                    "last_recovery_error":"recovery_attempts_exhausted",
+                })
+                blocked.append(aid);continue
+            next_attempt=attempts+1
+            update_roster({
+                **rec,
+                "state":"starting",
+                "recovery_state":"recovering",
+                "recovery_attempts":next_attempt,
+                "next_recovery_at":0,
+                "last_recovery_error":"bootstrap_retry",
+            })
+            attempted.append(aid)
+            try:
+                spawn(namespace_from_record(rec))
+            except BaseException:
+                exhausted=next_attempt>=BOOTSTRAP_MAX
+                update_roster({
+                    **rec,
+                    "state":"dead",
+                    "recovery_state":"blocked" if exhausted else "cooldown",
+                    "recovery_attempts":next_attempt,
+                    "next_recovery_at":0 if exhausted else current_time+RECOVERY_COOLDOWN,
+                    "last_recovery_error":"bootstrap_process_failed",
+                })
+                if exhausted:blocked.append(aid)
+            continue
+        next_attempt=attempts+1
+        update_roster({
+            **rec,
+            "state":"recovering",
+            "recovery_state":"recovering",
+            "recovery_attempts":next_attempt,
+            "next_recovery_at":0,
+            "last_recovery_error":"",
+        })
+        attempted.append(aid)
+        try:
+            revive(argparse.Namespace(agent_id=aid))
+        except BaseException:
+            exhausted=next_attempt>=RECOVERY_MAX
+            update_roster({
+                **rec,
+                "state":"dead",
+                "recovery_state":"blocked" if exhausted else "cooldown",
+                "recovery_attempts":next_attempt,
+                "next_recovery_at":0 if exhausted else current_time+RECOVERY_COOLDOWN,
+                "last_recovery_error":"resume_process_failed",
+            })
+            if exhausted:blocked.append(aid)
+    print(json.dumps({"attempted":attempted,"blocked":blocked},sort_keys=True))
 
 def status(_):
     try:
@@ -762,6 +1292,8 @@ def parser():
     q=sub.add_parser("kill");q.add_argument("agent_id");q.add_argument("--reason");q.set_defaults(fn=kill)
     q=sub.add_parser("revive");q.add_argument("agent_id");q.set_defaults(fn=revive)
     q=sub.add_parser("switch");q.add_argument("agent_id");q.add_argument("--backend",required=True,choices=["claude","codex"]);q.add_argument("--model",required=True);q.set_defaults(fn=switch_backend)
+    q=sub.add_parser("fresh-handoff");q.add_argument("agent_id");q.add_argument("--transaction",required=True);q.add_argument("--handoff",required=True);q.set_defaults(fn=fresh_handoff)
+    q=sub.add_parser("reconcile");q.add_argument("--agent",dest="agent_id",default="");q.set_defaults(fn=reconcile)
     q=sub.add_parser("answer");q.add_argument("agent_id");q.add_argument("choice",type=int);q.set_defaults(fn=answer)
     q=sub.add_parser("status");q.set_defaults(fn=status)
     q=sub.add_parser("approve-publish");q.add_argument("task_id");q.add_argument("--project",required=True);q.add_argument("--commit",required=True);q.add_argument("--branch",default="main");q.add_argument("--ttl",type=int,default=900);q.add_argument("--mode",choices=["direct_main","draft_pr"],default="direct_main");q.add_argument("--base");q.add_argument("--head");q.add_argument("--title");q.add_argument("--body");q.set_defaults(fn=approve_publish)

@@ -83,6 +83,26 @@ class PublicRepositoryContract(unittest.TestCase):
         self.assertIn("the project's `AGENTS.md` or `CLAUDE.md`", manual)
         self.assertIn("role contract SHA-256", manual)
 
+    def test_exact_session_recovery_contract_is_public(self):
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(encoding="utf-8")
+        for path in (ROOT / "README.md", ROOT / "docs" / "USER-MANUAL.md"):
+            text = path.read_text(encoding="utf-8")
+            normalized = " ".join(text.split())
+            self.assertIn("exact session resume", normalized)
+            self.assertIn("deliberate stop", normalized)
+            self.assertIn("mp reconcile", normalized)
+            self.assertIn("three recovery attempts", normalized)
+            self.assertIn("explicit fresh handoff", normalized)
+            self.assertIn("no silent fresh fallback", normalized)
+        self.assertNotIn(
+            "still opens a new Codex conversation",
+            manual,
+        )
+        self.assertNotIn(
+            "Codex conversations are not resumed automatically",
+            manual,
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -54,7 +54,7 @@ class WindowsProviderProfileContract(unittest.TestCase):
             ROOT / "windows" / "Switch-MyPeopleProviderProfile.ps1"
         ).read_text(encoding="utf-8")
         preflight = text.index("Get-MyPeopleProviderProfiles")
-        prepare = text.index("provider-session prepare")
+        prepare = text.index("$phase = 'provider-session prepare'")
         stop = text.index("provider-session stop")
         validate = text.index("& $adapter.ValidateRuntime")
         revive = text.index("provider-session revive")
@@ -73,6 +73,9 @@ class WindowsProviderProfileContract(unittest.TestCase):
         self.assertIn("$newAgents.Remove($Agent)", text)
         self.assertIn("[int]$TimeoutSeconds", text)
         self.assertIn("$adapter = Get-MyPeopleProviderAdapter", text)
+        self.assertIn("[string]$TargetProfile", text)
+        self.assertIn("'--profile'", text)
+        self.assertIn("-TargetProfile $targetProfile", text)
         self.assertNotRegex(text, r"(?m)\\\s*$")
 
     def test_status_script_reports_only_non_secret_metadata(self):

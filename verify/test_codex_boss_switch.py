@@ -122,11 +122,15 @@ class CodexBossContract(unittest.TestCase):
             self.assertEqual(records[0]["model"], "gpt-5.6-sol")
             self.assertTrue(provider_homes.joinpath("codex", "codex-primary").is_dir())
 
-    def test_switch_persists_desired_backend_before_stopping_window(self):
+    def test_switch_persists_desired_model_before_exact_revive(self):
         rec = {
             "agent_id": self.agent_id,
-            "backend": "claude",
-            "model": "",
+            "backend": "codex",
+            "model": "gpt-5.6-luna",
+            "provider_profile": "codex-primary",
+            "session_profile": "codex-primary",
+            "session_backend": "codex",
+            "session_id": "session-1234",
             "session": "main",
             "tab": "Boss",
             "cwd": self.boss_dir,
@@ -138,7 +142,8 @@ class CodexBossContract(unittest.TestCase):
         self.mp.load_roster = lambda: [copy.deepcopy(rec)]
         self.mp.update_roster = lambda row: events.append(("persist", copy.deepcopy(row)))
         self.mp.run_tmux = lambda argv, **kwargs: events.append(("tmux", list(argv))) or Result()
-        self.mp.main = lambda argv=None: events.append(("main", list(argv or [])))
+        self.mp.revive = lambda ns: events.append(("revive", ns.agent_id))
+        self.mp.main = lambda argv=None: events.append(("legacy-main", list(argv or [])))
 
         self.mp.switch_backend(argparse.Namespace(
             agent_id=self.agent_id, backend="codex", model="gpt-5.6-sol"
@@ -149,11 +154,32 @@ class CodexBossContract(unittest.TestCase):
         self.assertEqual(events[0][1]["model"], "gpt-5.6-sol")
         self.assertEqual(events[0][1]["state"], "switching")
         self.assertFalse(events[0][1]["retired"])
-        self.assertEqual(events[-1], ("main", ["revive", self.agent_id]))
+        self.assertEqual(events[-1], ("revive", self.agent_id))
+        self.assertNotIn("legacy-main", [event[0] for event in events])
         self.assertLess(
             events.index(events[0]),
             next(i for i, event in enumerate(events) if event[:2] == ("tmux", ["kill-window", "-t", "mc-main:Boss"])),
         )
+
+    def test_switch_rejects_backend_change_without_fresh_handoff(self):
+        rec = {
+            "agent_id": self.agent_id,
+            "backend": "claude",
+            "model": "sonnet",
+            "session": "main",
+            "tab": "Boss",
+            "cwd": self.boss_dir,
+            "is_master": True,
+            "retired": False,
+            "state": "alive",
+        }
+        self.mp.load_roster = lambda: [copy.deepcopy(rec)]
+        with self.assertRaisesRegex(SystemExit, "fresh_handoff_required"):
+            self.mp.switch_backend(argparse.Namespace(
+                agent_id=self.agent_id,
+                backend="codex",
+                model="gpt-5.6-sol",
+            ))
 
     def test_switch_parser_requires_explicit_backend_and_model(self):
         ns = self.mp.parser().parse_args([
