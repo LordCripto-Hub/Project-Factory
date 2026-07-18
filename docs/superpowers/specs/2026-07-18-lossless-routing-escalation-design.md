@@ -23,6 +23,8 @@ capacity, not the owner of durable task state.
 - Advance exactly one permitted routing tier.
 - Stop and restart only the selected worker process.
 - Resume the exact same Codex session under the higher model.
+- Deliver exactly one compact fixed continuation message after exact resume so
+  the higher model continues the same task instead of waiting at an idle prompt.
 - Preserve the same task ID, assignee, ProjectProfile, TaskSpec, role contract,
   workspace, provider profile, agent ID, Boss, and evidence.
 - Record a bounded private handoff, immutable routing history, transaction
@@ -219,8 +221,12 @@ The command performs these gates in order:
     profile, cwd, TaskSpec hash, role hash, and new routing hash/model.
 14. Verify unrelated roster records are unchanged and their windows remain
     live.
-15. Mark the transaction and request committed, then release the lock.
-16. Add one idempotent Priorities result comment.
+15. Submit exactly one fixed continuation message to the resumed worker:
+    `Continue the same owner task from the preserved session. Re-run the
+    failed verification and report with mp complete or one new structured
+    failure.`
+16. Mark the transaction and request committed, then release the lock.
+17. Add one idempotent Priorities result comment.
 
 The candidate receipt uses the existing closed decision schema and
 `selection=automatic_escalation`. Its `attemptCount` and
@@ -243,10 +249,17 @@ It must not use fresh spawn, session discovery, a blank session ID, or a fresh
 handoff provider transaction. The provider transcript remains authoritative
 for exact session identity.
 
-No new handoff prompt is injected during exact resume. The transaction itself
-makes no model request. Provider context accounting on the worker's next turn
-remains provider-defined and is recorded as `not_measured` unless telemetry
-exists.
+No handoff, terminal tail, summary, or evidence is injected into the provider
+conversation. After exact resume verification, MyPeople submits the one fixed
+continuation message above. Delivery is attempted exactly once and is part of
+the forward transaction gate; a local delivery failure enters rollback rather
+than silently leaving the stronger worker idle.
+
+Classification, route calculation, receipt handling, and process transaction
+make no model request. The fixed continuation message starts one normal turn
+on the selected higher model and therefore consumes that model's ordinary
+tokens. Provider context accounting remains provider-defined and is recorded
+as `not_measured` unless telemetry exists.
 
 ## Priorities Visibility
 
@@ -259,7 +272,7 @@ The request produces at most one bounded request comment:
 A committed transaction produces one result comment:
 
 ```text
-[routing:<12 hex>] escalation=committed failure=verification_failed from=gpt-5.6-luna to=gpt-5.6-terra sameTask=true exactResume=true aiUsage=none
+[routing:<12 hex>] escalation=committed failure=verification_failed from=gpt-5.6-luna to=gpt-5.6-terra sameTask=true exactResume=true continuation=sent routingAiUsage=none
 ```
 
 A rollback or recovery-required outcome uses the transaction marker and typed
@@ -329,6 +342,8 @@ visible; replay remains safe because the transaction is request-idempotent.
 - duplicate request idempotency and lock contention;
 - queue payload contains no summary, evidence, credential, or session ID;
 - exact resume receives the same session ID and candidate model;
+- the fixed continuation message is submitted exactly once and no handoff
+  payload is injected;
 - only the selected tmux window and recording session are stopped;
 - same task, assignee, cwd, TaskSpec, role, Boss, backend, and profile;
 - unrelated roster records and windows remain unchanged;
@@ -345,6 +360,7 @@ submits a typed capability failure, processes the queue request, and proves:
 - agent ID, provider session ID, task ID, assignee, Boss, provider profile,
   workspace, TaskSpec hash, and role hash are identical;
 - attempt and escalation counters advance once;
+- the fixed continuation message is submitted exactly once after verification;
 - Boss, Nightwatch, queue, HUD, Docker fixture, and unrelated worker remain
   available;
 - prior and committed receipts plus transaction evidence exist privately;
@@ -386,6 +402,7 @@ credentials, provider session IDs, or private runtime paths.
 - The selected worker is the only stopped process.
 - Exact Codex session ID and durable task identity remain unchanged.
 - No fresh provider session is created.
+- Exactly one compact continuation message starts the next higher-model turn.
 - Provider, profile, account, backend, workspace, TaskSpec, role, and Boss
   remain unchanged.
 - Prior and candidate routing receipts and the private handoff remain auditable.
