@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "bin"))
 SPEC = importlib.util.spec_from_file_location(
     "task_routing", ROOT / "bin" / "task_routing.py"
 )
@@ -429,6 +431,28 @@ class RoutingReceiptContract(unittest.TestCase):
             with self.subTest(injected=injected):
                 candidate = copy.deepcopy(decision)
                 candidate.update(injected)
+                with self.assertRaisesRegex(
+                    task_routing.RoutingError,
+                    "routing_task_invalid",
+                ):
+                    task_routing.canonical_decision_bytes(candidate)
+
+    def test_receipt_uses_provider_profile_identifier_contract(self):
+        decision = task_routing.route_task(
+            task_spec("Fix Docker integration"),
+            self.policy,
+            "1primary",
+        )
+        self.assertEqual(decision["providerProfile"], "1primary")
+        task_routing.canonical_decision_bytes(decision)
+
+        for unsafe in (
+            "session-abc",
+            "019f0000-0000-7000-8000-000000000999",
+        ):
+            with self.subTest(unsafe=unsafe):
+                candidate = copy.deepcopy(decision)
+                candidate["providerProfile"] = unsafe
                 with self.assertRaisesRegex(
                     task_routing.RoutingError,
                     "routing_task_invalid",

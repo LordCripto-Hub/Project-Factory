@@ -11,6 +11,7 @@ import re
 import time
 import unicodedata
 
+from provider_profiles import validate_profile_id
 
 TIERS = ("economy", "standard", "strong")
 TASK_CLASSES = ("simple", "implementation", "critical")
@@ -50,8 +51,12 @@ DECISION_FIELDS = {
 }
 PROJECT_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-SAFE_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9._:/-]{0,127}$")
 REASON_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+SESSION_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 ESCALATABLE_FAILURES = {
     "verification_failed",
     "implementation_blocked",
@@ -517,12 +522,12 @@ def _contains_forbidden_receipt_key(value) -> bool:
     return False
 
 
-def _safe_receipt_identifier(value) -> bool:
-    if not isinstance(value, str) or not SAFE_IDENTIFIER.fullmatch(value):
-        return False
+def _contains_sensitive_value(value) -> bool:
     lowered = value.lower()
-    return not (
-        lowered.startswith(("sk-", "tskey-"))
+    return (
+        SESSION_UUID.fullmatch(value) is not None
+        or "session" in lowered
+        or lowered.startswith(("sk-", "tskey-"))
         or any(
             fragment in lowered
             for fragment in (
@@ -533,6 +538,24 @@ def _safe_receipt_identifier(value) -> bool:
                 "apikey",
             )
         )
+    )
+
+
+def _safe_provider_profile(value) -> bool:
+    try:
+        validate_profile_id(value)
+    except ValueError:
+        return False
+    return not _contains_sensitive_value(value)
+
+
+def _safe_model(value) -> bool:
+    return (
+        isinstance(value, str)
+        and value == value.strip()
+        and 0 < len(value) <= 128
+        and not re.search(r"[\x00-\x1f\x7f]", value)
+        and not _contains_sensitive_value(value)
     )
 
 
@@ -553,8 +576,8 @@ def canonical_decision_bytes(decision) -> bytes:
         or decision.get("taskClass") not in TASK_CLASSES
         or decision.get("risk") not in RISKS
         or decision.get("tier") not in TIERS
-        or not _safe_receipt_identifier(decision.get("model"))
-        or not _safe_receipt_identifier(
+        or not _safe_model(decision.get("model"))
+        or not _safe_provider_profile(
             decision.get("providerProfile")
         )
         or decision.get("selection")
