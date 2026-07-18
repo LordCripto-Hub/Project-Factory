@@ -21,7 +21,7 @@
     "maxEscalations": 1
   },
   "projects": {
-    "mypeople": {
+    "example-project": {
       "allowedModels": [
         "gpt-5.6-luna",
         "gpt-5.6-terra",

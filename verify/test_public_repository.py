@@ -10,6 +10,7 @@ PUBLIC_FILES = [
     ROOT / "docs" / "MINIMAL-ARCHITECTURE.md",
     ROOT / "docs" / "UPSTREAM-MYPEOPLE-REVIEW.md",
     ROOT / "docs" / "USER-MANUAL.md",
+    ROOT / "docs" / "ADAPTIVE-ROUTING-LIVE-CANARY.md",
     ROOT / "windows" / "Start-MyPeople.ps1",
     ROOT / "windows" / "Install-MyPeopleShortcut.ps1",
 ]
@@ -22,6 +23,7 @@ class PublicRepositoryContract(unittest.TestCase):
                 "MINIMAL-ARCHITECTURE.md",
                 "UPSTREAM-MYPEOPLE-REVIEW.md",
                 "USER-MANUAL.md",
+                "ADAPTIVE-ROUTING-LIVE-CANARY.md",
             },
         )
 
@@ -61,6 +63,16 @@ class PublicRepositoryContract(unittest.TestCase):
         self.assertIn("English", policy)
         self.assertIn("credentials", policy)
         self.assertIn("personal", policy)
+
+    def test_adaptive_routing_canary_is_linked_and_sanitized(self):
+        canary = ROOT / "docs" / "ADAPTIVE-ROUTING-LIVE-CANARY.md"
+        raw = canary.read_bytes()
+        self.assertTrue(raw.startswith(b"# Adaptive Routing Live Canary"))
+        self.assertNotRegex(raw.decode("utf-8"), r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+        for path in (ROOT / "README.md", ROOT / "docs" / "USER-MANUAL.md"):
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("ADAPTIVE-ROUTING-LIVE-CANARY.md", text)
+            self.assertIn("every projectprofile slug", text.lower())
 
     def test_durable_docker_operator_contract_is_public(self):
         for path in (ROOT / "README.md", ROOT / "docs" / "USER-MANUAL.md"):

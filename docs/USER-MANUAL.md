@@ -191,6 +191,8 @@ The private policy is stored at
 /home/mp/mypeople/run/routing-policy.json; a custom location may be supplied
 with MYPEOPLE_ROUTING_POLICY_PATH. Runtime startup creates the default policy
 only when the file is absent and never overwrites operator configuration.
+Every ProjectProfile slug must have an explicit matching project entry in that
+private policy. MyPeople never auto-authorizes a newly added project.
 Canonical decisions live under run/routing-decisions, are mode 0600, and
 are bound to the roster by SHA-256. Priorities receives one idempotent comment
 showing class, risk, tier, model, selection, and reason codes.
@@ -199,6 +201,9 @@ Exact revive validates and reuses the original routing receipt and model; it
 does not classify again or spend an escalation. This phase can calculate one
 eligible next tier for typed implementation failures within attempt/escalation
 ceilings, but it does not kill or switch the worker automatically.
+
+For the operator procedure, expected live signals, and safe failure handling,
+see [Adaptive Routing Live Canary](ADAPTIVE-ROUTING-LIVE-CANARY.md).
 
 ## One-click Windows startup
 
