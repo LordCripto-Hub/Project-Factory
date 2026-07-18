@@ -586,7 +586,7 @@ def prepare_owner_routing(
     profile_id,
     receipt_record=None,
 ):
-    if not ns.owner_task:
+    if not ns.owner_task or ns.backend != "codex":
         return None, "", ""
     if receipt_record is not None:
         path = str(receipt_record.get("routing_path") or "")

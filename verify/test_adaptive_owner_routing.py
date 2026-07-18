@@ -149,6 +149,27 @@ class AdaptiveOwnerRoutingContract(unittest.TestCase):
             self.assertTrue(Path(path).is_file())
             self.assertRegex(digest, r"^[0-9a-f]{64}$")
 
+    def test_non_codex_owner_keeps_existing_provider_agnostic_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            context, _taskspec = self.context(temp)
+            ns = owner_namespace(context["cwd"], model="sonnet")
+            ns.backend = "claude"
+            with mock.patch.object(
+                self.mp,
+                "load_routing_policy",
+                side_effect=AssertionError(
+                    "Claude is outside Codex adaptive routing"
+                ),
+            ):
+                decision, path, digest = self.mp.prepare_owner_routing(
+                    ns,
+                    context,
+                    "",
+                )
+            self.assertIsNone(decision)
+            self.assertEqual(path, "")
+            self.assertEqual(digest, "")
+
     def test_fresh_spawn_records_route_before_launching_selected_model(self):
         with tempfile.TemporaryDirectory() as temp:
             context, taskspec = self.context(temp)
