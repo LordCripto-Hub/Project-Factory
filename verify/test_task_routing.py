@@ -416,10 +416,6 @@ class RoutingReceiptContract(unittest.TestCase):
             {"providerSessionId": "019-provider-session"},
             {"apiKey": "secret-value"},
             {"password": "secret-value"},
-            {
-                "providerProfile":
-                    "019f0000-0000-7000-8000-000000000999"
-            },
             {"model": "sk-secret-material"},
             {
                 "reasonCodes": [
@@ -438,26 +434,34 @@ class RoutingReceiptContract(unittest.TestCase):
                     task_routing.canonical_decision_bytes(candidate)
 
     def test_receipt_uses_provider_profile_identifier_contract(self):
-        decision = task_routing.route_task(
+        for profile_id in (
+            "1primary",
+            "session-abc",
+            "019f0000-0000-7000-8000-000000000999",
+        ):
+            with self.subTest(profile_id=profile_id):
+                decision = task_routing.route_task(
+                    task_spec("Fix Docker integration"),
+                    self.policy,
+                    profile_id,
+                )
+                self.assertEqual(
+                    decision["providerProfile"],
+                    profile_id,
+                )
+                task_routing.canonical_decision_bytes(decision)
+
+        invalid = task_routing.route_task(
             task_spec("Fix Docker integration"),
             self.policy,
             "1primary",
         )
-        self.assertEqual(decision["providerProfile"], "1primary")
-        task_routing.canonical_decision_bytes(decision)
-
-        for unsafe in (
-            "session-abc",
-            "019f0000-0000-7000-8000-000000000999",
+        invalid["providerProfile"] = 1
+        with self.assertRaisesRegex(
+            task_routing.RoutingError,
+            "routing_task_invalid",
         ):
-            with self.subTest(unsafe=unsafe):
-                candidate = copy.deepcopy(decision)
-                candidate["providerProfile"] = unsafe
-                with self.assertRaisesRegex(
-                    task_routing.RoutingError,
-                    "routing_task_invalid",
-                ):
-                    task_routing.canonical_decision_bytes(candidate)
+            task_routing.canonical_decision_bytes(invalid)
 
     def test_next_route_advances_once_and_respects_budget(self):
         decision = task_routing.route_task(

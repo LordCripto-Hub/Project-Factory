@@ -542,11 +542,13 @@ def _contains_sensitive_value(value) -> bool:
 
 
 def _safe_provider_profile(value) -> bool:
+    if not isinstance(value, str):
+        return False
     try:
         validate_profile_id(value)
     except ValueError:
         return False
-    return not _contains_sensitive_value(value)
+    return True
 
 
 def _safe_model(value) -> bool:
