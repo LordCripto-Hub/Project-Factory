@@ -1456,13 +1456,154 @@ def verify_forward_escalation(original, candidate, roster_before):
     return current
 
 
+def stop_partial_escalation_window(agent_id):
+    _host, session, tab = parse_agent_id(agent_id)
+    run_tmux(
+        ["kill-window", "-t", f"mc-{session}:{tab}"], check=False
+    )
+    run_tmux(["kill-session", "-t", f"rec-{tab}"], check=False)
+
+
+def verify_restored_escalation(original, roster_before):
+    rows = load_roster()
+    by_id = {row.get("agent_id"): row for row in rows}
+    current = by_id.get(original["agent_id"])
+    if (
+        not isinstance(current, dict)
+        or current.get("state") != "alive"
+        or current.get("retired")
+        or current.get("resume_state") != "available"
+        or any(
+            current.get(field) != original.get(field)
+            for field in ESCALATION_IDENTITY_FIELDS
+        )
+        or current.get("model") != original.get("model")
+        or current.get("routing_path") != original.get("routing_path")
+        or current.get("routing_sha256")
+        != original.get("routing_sha256")
+        or not window_exists(tmux_target(original["agent_id"]))
+    ):
+        raise RuntimeError("routing_rollback_verification_failed")
+    validated_routing_decision(current)
+    for before in roster_before:
+        other_id = before.get("agent_id")
+        if other_id == original["agent_id"]:
+            continue
+        if by_id.get(other_id) != before or not window_exists(
+            tmux_target(other_id)
+        ):
+            raise RuntimeError("routing_unrelated_worker_changed")
+    return current
+
+
+def rollback_routing_escalation(
+    request,
+    original,
+    roster_before,
+):
+    root = routing_escalations_root()
+    request_id = request["requestId"]
+    write_escalation_transaction_state(
+        root,
+        request_id,
+        "rolling_back",
+        errorCode="routing_forward_failed",
+        continuationSent=False,
+    )
+    try:
+        stop_partial_escalation_window(original["agent_id"])
+        recovering = {
+            **original,
+            "state": "recovering",
+            "retired": False,
+            "stop_intent": "",
+            "recovery_state": "recovering",
+        }
+        update_roster(recovering)
+        spawn(
+            namespace_from_record(original),
+            resume_session=original["session_id"],
+            receipt_record=original,
+        )
+        verify_restored_escalation(original, roster_before)
+        write_status(
+            original["agent_id"],
+            "blocked",
+            "Routing escalation rolled back to the prior exact session.",
+            activity_event="routing_escalation_rolled_back",
+        )
+        state = write_escalation_transaction_state(
+            root, request_id, "rolled_back"
+        )
+        write_escalation_request_state(root, request, "rolled_back")
+        return state
+    except BaseException:
+        blocked = {
+            **original,
+            "state": "dead",
+            "retired": False,
+            "stop_intent": "",
+            "recovery_state": "blocked",
+            "last_recovery_error": (
+                "routing_escalation_recovery_required"
+            ),
+        }
+        update_roster(blocked)
+        try:
+            http_json(
+                "/todo/status",
+                "POST",
+                {
+                    "task_id": request["taskId"],
+                    "state": "blocked",
+                    "verified": False,
+                    "by": request["bossId"],
+                },
+            )
+        except Exception:
+            pass
+        try:
+            write_status(
+                original["agent_id"],
+                "blocked",
+                "Routing escalation requires manual recovery.",
+                activity_event=(
+                    "routing_escalation_recovery_required"
+                ),
+            )
+        except Exception:
+            pass
+        try:
+            notify_agent(
+                request["bossId"],
+                (
+                    "routing_escalation_recovery_required "
+                    f"task={request['taskId']} "
+                    f"agent={request['agentId']}"
+                ),
+            )
+        except Exception:
+            pass
+        state = write_escalation_transaction_state(
+            root,
+            request_id,
+            "recovery_required",
+            errorCode="routing_rollback_failed",
+            continuationSent=False,
+        )
+        write_escalation_request_state(
+            root, request, "recovery_required"
+        )
+        return state
+
+
 def escalation_result(state):
     return {
         "phase": state["phase"],
         "failure": state.get("failure", ""),
         "fromModel": state.get("fromModel", ""),
         "toModel": state.get("toModel", ""),
-        "exactResume": state["phase"] == "committed",
+        "exactResume": state["phase"] in {"committed", "rolled_back"},
         "continuationSent": bool(state.get("continuationSent")),
         "routingAiUsage": "none",
     }
@@ -1481,13 +1622,21 @@ def ensure_escalation_result_comment(request, state):
         if isinstance(comment, dict)
     ):
         return False
+    exact = (
+        "true"
+        if state["phase"] in {"committed", "rolled_back"}
+        else "false"
+    )
+    continuation = (
+        "sent" if state.get("continuationSent") else "not_sent"
+    )
     body = (
         f"{marker} escalation={state['phase']} "
         f"failure={request['failure']} "
         f"from={state.get('fromModel', '')} "
         f"to={state.get('toModel', '')} "
-        "sameTask=true exactResume=true continuation=sent "
-        "routingAiUsage=none"
+        f"sameTask=true exactResume={exact} "
+        f"continuation={continuation} routingAiUsage=none"
     )
     http_json(
         "/todo/comment",
@@ -1567,6 +1716,7 @@ def execute_routing_escalation(agent_id, request):
     lock_path = provider_switch_lock_path()
     acquire_provider_transaction_lock(lock_path, request_id)
     committed_state = None
+    selected_stopped = False
     try:
         original, prior, candidate = revalidate_escalation_subject(
             request, original, candidate
@@ -1578,6 +1728,7 @@ def execute_routing_escalation(agent_id, request):
             original, candidate, candidate_path, candidate_sha
         )
         stop_selected_worker_process(candidate_record)
+        selected_stopped = True
         write_escalation_transaction_state(
             root,
             request_id,
@@ -1615,6 +1766,14 @@ def execute_routing_escalation(agent_id, request):
             continuationSent=True,
         )
         write_escalation_request_state(root, request, "committed")
+    except BaseException:
+        if not selected_stopped:
+            raise
+        committed_state = rollback_routing_escalation(
+            request,
+            original,
+            roster_before,
+        )
     finally:
         release_provider_transaction_lock(lock_path, request_id)
     try:

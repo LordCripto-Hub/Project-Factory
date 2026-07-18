@@ -160,6 +160,9 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
         }
         self.events = []
         self.messages = []
+        self.fail_forward_verify = False
+        self.fail_rollback = False
+        self.mutate_on_lock = False
         self.mp = load_mp()
         self.env = mock.patch.dict(
             os.environ,
@@ -204,6 +207,10 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
             )
             self.events.append(("comment", body["body"]))
             return {"ok": True}
+        if path == "/todo/status":
+            self.board["tasks"][body["task_id"]]["state"] = body["state"]
+            self.events.append(("task-status", body["state"]))
+            return {"ok": True}
         raise AssertionError(f"unexpected request: {method} {path}")
 
     def update_roster(self, record):
@@ -214,6 +221,8 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
             ("spawn", namespace.agent_id, namespace.model, resume_session)
         )
         self.assertEqual(resume_session, self.sid)
+        if namespace.model == "gpt-5.6-luna" and self.fail_rollback:
+            raise RuntimeError("simulated rollback failure")
         revived = copy.deepcopy(receipt_record)
         revived.update(
             state="alive",
@@ -221,6 +230,13 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
             resume_state="available",
             recovery_state="healthy",
         )
+        if (
+            namespace.model == "gpt-5.6-terra"
+            and self.fail_forward_verify
+        ):
+            revived["session_id"] = (
+                "019f0000-0000-7000-8000-000000000999"
+            )
         self.update_roster(revived)
 
     def run_tmux(self, argv, **_kwargs):
@@ -241,6 +257,13 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
         self.events.append(("message", target, message))
         self.messages.append((target, message))
         return True
+
+    def acquire_lock(self, path, owner):
+        self.events.append(("lock", "acquire", owner))
+        if self.mutate_on_lock:
+            self.roster[self.worker]["session_id"] = (
+                "019f0000-0000-7000-8000-000000000999"
+            )
 
     def patches(self):
         return (
@@ -283,9 +306,7 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
                 self.mp,
                 "acquire_provider_transaction_lock",
                 create=True,
-                side_effect=lambda path, owner: self.events.append(
-                    ("lock", "acquire", owner)
-                ),
+                side_effect=self.acquire_lock,
             ),
             mock.patch.object(
                 self.mp,
@@ -295,13 +316,20 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
                     ("lock", "release", owner)
                 ),
             ),
+            mock.patch.object(
+                self.mp,
+                "notify_agent",
+                side_effect=lambda target, message: self.events.append(
+                    ("notify", target, message)
+                ),
+            ),
         )
 
     def execute(self):
         patches = self.patches()
         with patches[0], patches[1], patches[2], patches[3], patches[4], \
                 patches[5], patches[6], patches[7], patches[8], patches[9], \
-                patches[10]:
+                patches[10], patches[11]:
             return self.mp.execute_routing_escalation(
                 self.worker, copy.deepcopy(self.request)
             )
@@ -363,6 +391,65 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(self.events), event_count)
         self.assertEqual(len(self.messages), message_count)
+
+    def test_forward_failure_restores_prior_exact_worker(self):
+        self.fail_forward_verify = True
+        result = self.execute()
+        current = self.roster[self.worker]
+        self.assertEqual(result["phase"], "rolled_back")
+        self.assertEqual(current["model"], "gpt-5.6-luna")
+        self.assertEqual(current["session_id"], self.sid)
+        self.assertEqual(
+            current["routing_sha256"], self.original["routing_sha256"]
+        )
+        self.assertEqual(self.messages, [])
+
+    def test_failed_rollback_preserves_evidence_and_blocks_task(self):
+        self.fail_forward_verify = True
+        self.fail_rollback = True
+        result = self.execute()
+        self.assertEqual(result["phase"], "recovery_required")
+        self.assertEqual(
+            self.board["tasks"]["task-1"]["state"], "blocked"
+        )
+        self.assertEqual(
+            self.roster[self.worker]["recovery_state"], "blocked"
+        )
+        transaction = (
+            self.root
+            / "escalations"
+            / "transactions"
+            / ("a" * 32)
+        )
+        for name in (
+            "roster-before.json",
+            "routing-before.json",
+            "routing-candidate.json",
+            "handoff.json",
+        ):
+            self.assertTrue((transaction / name).is_file())
+        notices = [
+            event for event in self.events if event[0] == "notify"
+        ]
+        self.assertEqual(notices[0][1], self.boss)
+        self.assertNotIn(self.sid, notices[0][2])
+
+    def test_stale_request_mutates_nothing(self):
+        self.mutate_on_lock = True
+        with self.assertRaisesRegex(
+            SystemExit, "routing_escalation_stale"
+        ):
+            self.execute()
+        self.assertFalse(
+            any(
+                event[0] in {"spawn", "comment"}
+                or (
+                    event[0] == "tmux"
+                    and event[1][0].startswith("kill-")
+                )
+                for event in self.events
+            )
+        )
 
 
 if __name__ == "__main__":
