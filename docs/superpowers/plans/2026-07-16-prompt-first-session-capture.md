@@ -137,7 +137,7 @@ try:
     if not tmux_send_message(target, startup_message):
         raise SessionError('session_process_not_ready')
     discovered = discover_codex_session(capture_home, cwd, capture_before, timeout=float(
-        os.environ.get('MYPEOPLE_SESSION_CAPTURE_TIMEOUT_SEC', '45')
+        os.environ.get('MYPEOPLE_SESSION_CAPTURE_TIMEOUT_SEC', '90')
     ))
     session_identity.update(
         session_id=discovered['session_id'],

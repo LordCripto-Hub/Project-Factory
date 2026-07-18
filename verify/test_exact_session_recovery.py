@@ -75,6 +75,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.statuses = []
         self.events = []
         self.exported = {}
+        self.discovery_kwargs = []
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -145,6 +146,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
 
         def discover_session(*_args, **_kwargs):
             self.events.append(('discover',))
+            self.discovery_kwargs.append(dict(_kwargs))
             if discovery_error:
                 raise discovery_error
             return discovery_value
@@ -192,6 +194,21 @@ class ExactSessionSpawnContract(unittest.TestCase):
             self.events.index(sends[0]),
             self.events.index(("discover",)),
         )
+
+    def test_fresh_codex_allows_90_seconds_for_session_capture_by_default(self):
+        previous = os.environ.pop("MYPEOPLE_SESSION_CAPTURE_TIMEOUT_SEC", None)
+        try:
+            self.run_spawn(
+                {
+                    "session_id": "019f0000-0000-7000-8000-000000000336",
+                    "cwd": os.path.realpath(self.cwd),
+                    "path": str(self.root / "rollout.jsonl"),
+                }
+            )
+        finally:
+            if previous is not None:
+                os.environ["MYPEOPLE_SESSION_CAPTURE_TIMEOUT_SEC"] = previous
+        self.assertEqual(self.discovery_kwargs, [{"timeout": 90.0}])
 
     def test_temporary_codex_worker_gets_one_bounded_readiness_prompt(self):
         namespace = self.namespace()

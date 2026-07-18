@@ -770,7 +770,7 @@ def spawn(
                     timeout=float(
                         os.environ.get(
                             "MYPEOPLE_SESSION_CAPTURE_TIMEOUT_SEC",
-                            "45",
+                            "90",
                         )
                     ),
                 )

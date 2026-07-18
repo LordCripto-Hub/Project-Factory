@@ -146,7 +146,9 @@ probe message when a real role prompt already exists.
 
 The lock is held only during provider startup and session identification. It
 does not serialize prompts, tools, or subsequent work. The default discovery
-deadline is 45 seconds and is configurable for deterministic tests.
+deadline is 90 seconds and is configurable for deterministic tests. The
+larger default absorbs slow provider startup without spending additional
+tokens; it only extends the failure wait when no transcript appears.
 
 Profile-scoped serialization prevents two concurrent MyPeople spawns sharing
 one `CODEX_HOME` from claiming the same session. A malformed record, duplicate
