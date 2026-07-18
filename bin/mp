@@ -721,7 +721,11 @@ def spawn(
     aid = full_agent_id(ns.agent_id); host, session, tab = parse_agent_id(aid)
     if host != ENV.get("HOST_ID"):
         model = ns.model if ns.model is not None else (
-            "" if ns.master else None if ns.owner_task else DEFAULT_ENG_MODEL
+            ""
+            if ns.master
+            else None
+            if ns.owner_task and ns.backend == "codex"
+            else DEFAULT_ENG_MODEL
         )
         payload={"backend":ns.backend,"cwd":ns.cwd,"boss":raw_boss,"is_master":ns.master,"model":model,
                  "owner_task_id":ns.owner_task or "","temporary":ns.temporary}
@@ -752,7 +756,11 @@ def spawn(
             if boss:
                 notify_agent(boss, message)
             raise SystemExit(message) from error
-    fresh_owner_route = bool(ns.owner_task and receipt_record is None)
+    fresh_owner_route = bool(
+        ns.owner_task
+        and ns.backend == "codex"
+        and receipt_record is None
+    )
     model = ns.model if ns.model is not None else (
         None if ns.master or fresh_owner_route else DEFAULT_ENG_MODEL
     )
@@ -1002,9 +1010,9 @@ def spawn(
                 routing_decision,
                 routing_sha256,
             )
-        except Exception as error:
+        except Exception:
             print(
-                f"warning: routing comment deferred: {error}",
+                "warning: routing comment deferred",
                 file=sys.stderr,
             )
     if created and resume_session:
@@ -1352,7 +1360,10 @@ def reconcile(ns):
             })
             attempted.append(aid)
             try:
-                spawn(namespace_from_record(rec))
+                spawn(
+                    namespace_from_record(rec),
+                    receipt_record=rec,
+                )
             except BaseException:
                 exhausted=next_attempt>=BOOTSTRAP_MAX
                 update_roster({

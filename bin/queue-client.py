@@ -88,7 +88,15 @@ def execute(task):
         if boss is not None:argv += ["--boss",boss]
         if p.get("is_master"):argv += ["--master"]
         model=p.get("model")
-        if model is None and not p.get("is_master"):model=DEFAULT_ENG_MODEL
+        if (
+            model is None
+            and not p.get("is_master")
+            and not (
+                p.get("backend") == "codex"
+                and p.get("owner_task_id")
+            )
+        ):
+            model=DEFAULT_ENG_MODEL
         if model:argv += ["--model",model]
         if p.get("owner_task_id"):argv += ["--owner-task",p["owner_task_id"]]
         elif p.get("temporary"):argv += ["--temporary"]

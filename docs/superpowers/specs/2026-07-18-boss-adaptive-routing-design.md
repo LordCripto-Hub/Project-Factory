@@ -121,8 +121,9 @@ Optional hints are:
 }
 ```
 
-Hints constrain classification but cannot bypass project policy. An explicit
-`maxTier` is a ceiling, not a request to spend that tier.
+Hints constrain classification but cannot downgrade stronger task signals or
+bypass project policy. An explicit `maxTier` is a ceiling, not a request to
+spend that tier.
 
 Without hints, the engine computes stable reason codes from a small bilingual
 English/Spanish vocabulary and structural signals:
@@ -140,8 +141,11 @@ English/Spanish vocabulary and structural signals:
   `insufficient_strong_signal` rather than guessing upward.
 
 Signals produce named reason codes, not a hidden free-form score. Tier choice
-is the maximum justified signal after applying task and project ceilings.
-Rules are order-independent and tested in both languages.
+is the maximum justified signal after applying task and project ceilings. If
+that exact tier is absent from the project allowlist, the engine selects the
+least expensive allowed tier above it within the ceiling; it never silently
+downgrades. Escalation still advances exactly one configured tier and never
+skips a missing tier. Rules are order-independent and tested in both languages.
 
 ### 3. Routing decision receipt
 

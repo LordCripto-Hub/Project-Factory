@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import importlib.machinery
 import importlib.util
 import json
+import io
 import os
 from pathlib import Path
 import sys
@@ -24,6 +26,17 @@ def load_runtime():
     loader = importlib.machinery.SourceFileLoader(
         "mp_adaptive_owner_routing",
         str(ROOT / "bin" / "mp"),
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def load_queue_client():
+    loader = importlib.machinery.SourceFileLoader(
+        "queue_client_adaptive_owner_routing",
+        str(ROOT / "bin" / "queue-client.py"),
     )
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
@@ -170,6 +183,79 @@ class AdaptiveOwnerRoutingContract(unittest.TestCase):
             self.assertEqual(path, "")
             self.assertEqual(digest, "")
 
+    def test_non_codex_owner_keeps_legacy_default_model_resolution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            context, taskspec = self.context(temp)
+            contract = {
+                "path": str(Path(temp) / "CONTRACT.md"),
+                "sha256": "a" * 64,
+                "version": "1.0.0",
+                "content": "worker contract",
+            }
+            ns = owner_namespace(context["cwd"])
+            ns.backend = "claude"
+
+            def inspect_provider(
+                _aid,
+                backend,
+                _master,
+                _tab,
+                requested,
+                explicit,
+            ):
+                self.assertEqual(backend, "claude")
+                self.assertEqual(requested, self.mp.DEFAULT_ENG_MODEL)
+                self.assertFalse(explicit)
+                raise RuntimeError("provider boundary reached")
+
+            with mock.patch.object(
+                self.mp,
+                "resolve_owner_runtime",
+                return_value=(taskspec, context, contract),
+            ), mock.patch.object(
+                self.mp,
+                "window_exists",
+                return_value=False,
+            ), mock.patch.object(
+                self.mp,
+                "resolve_provider_runtime",
+                side_effect=inspect_provider,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "provider boundary reached",
+                ):
+                    self.mp.spawn(ns)
+
+    def test_remote_codex_owner_preserves_automatic_model_selection(self):
+        queue_client = load_queue_client()
+        captured = []
+
+        def run(argv, **_kwargs):
+            captured.append(list(argv))
+            return Result()
+
+        task = {
+            "type": "spawn",
+            "target_agent": "node-2/main:worker",
+            "payload": {
+                "backend": "codex",
+                "boss": "node-1/main:Boss",
+                "model": None,
+                "owner_task_id": "task-1",
+            },
+        }
+        with mock.patch.object(
+            queue_client.subprocess,
+            "run",
+            side_effect=run,
+        ):
+            ok, _output = queue_client.execute(task)
+
+        self.assertTrue(ok)
+        self.assertNotIn("--model", captured[-1])
+        self.assertIn("--owner-task", captured[-1])
+
     def test_fresh_spawn_records_route_before_launching_selected_model(self):
         with tempfile.TemporaryDirectory() as temp:
             context, taskspec = self.context(temp)
@@ -179,6 +265,7 @@ class AdaptiveOwnerRoutingContract(unittest.TestCase):
             provider_home.mkdir()
             records = []
             comments = []
+            stderr = io.StringIO()
             tmux_calls = []
             contract = {
                 "path": str(Path(temp) / "CONTRACT.md"),
@@ -190,6 +277,10 @@ class AdaptiveOwnerRoutingContract(unittest.TestCase):
                 contract["content"],
                 encoding="utf-8",
             )
+
+            def fail_comment(*args):
+                comments.append(args)
+                raise RuntimeError("sensitive-provider-output")
 
             with mock.patch.dict(
                 os.environ,
@@ -252,9 +343,10 @@ class AdaptiveOwnerRoutingContract(unittest.TestCase):
             ), mock.patch.object(
                 self.mp,
                 "ensure_routing_comment",
-                side_effect=lambda *args: comments.append(args),
+                side_effect=fail_comment,
             ):
-                self.mp.spawn(owner_namespace(context["cwd"]))
+                with contextlib.redirect_stderr(stderr):
+                    self.mp.spawn(owner_namespace(context["cwd"]))
 
             record = records[-1]
             self.assertEqual(record["model"], "gpt-5.6-terra")
@@ -266,6 +358,11 @@ class AdaptiveOwnerRoutingContract(unittest.TestCase):
             )
             self.assertIn("gpt-5.6-terra", launch[-1])
             self.assertEqual(len(comments), 1)
+            self.assertIn("routing comment deferred", stderr.getvalue())
+            self.assertNotIn(
+                "sensitive-provider-output",
+                stderr.getvalue(),
+            )
 
     def test_policy_denial_precedes_tmux_and_roster_mutation(self):
         with tempfile.TemporaryDirectory() as temp:

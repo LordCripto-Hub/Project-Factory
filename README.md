@@ -90,7 +90,10 @@ explicit critical signals. The routing step makes no provider call and records
 aiUsage: none.
 
 Each project policy defines allowed models, the maximum automatic tier, attempt
-limits, and escalation limits. Manual model requests pass through the same
+limits, and escalation limits. Hints can raise classification or impose a
+ceiling, but they cannot downgrade stronger task signals. If the exact
+justified tier is unavailable, routing chooses the cheapest allowed tier above
+it within the ceiling and never silently downgrades. Manual model requests pass through the same
 allowlist and ceilings and fail closed instead of being silently substituted.
 The canonical routing receipt is private, SHA-256-bound to the roster, and
 summarized once in the Priorities task comments.

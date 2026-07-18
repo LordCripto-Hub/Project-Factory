@@ -630,8 +630,15 @@ class ExactSessionSpawnContract(unittest.TestCase):
             if revive_error:
                 raise revive_error
 
-        def spawn(ns, resume_session=""):
-            events.append(("bootstrap_retry", ns.agent_id, resume_session))
+        def spawn(ns, resume_session="", receipt_record=None):
+            events.append(
+                (
+                    "bootstrap_retry",
+                    ns.agent_id,
+                    resume_session,
+                    receipt_record,
+                )
+            )
 
         with mock.patch.object(self.mp, "load_roster", side_effect=load), \
              mock.patch.object(self.mp, "update_roster", side_effect=persist), \
@@ -746,7 +753,12 @@ class ExactSessionSpawnContract(unittest.TestCase):
         )
         retried, events = self.run_reconcile(starting, now=1000.0)
         self.assertIn(
-            ("bootstrap_retry", starting["agent_id"], ""),
+            (
+                "bootstrap_retry",
+                starting["agent_id"],
+                "",
+                starting,
+            ),
             events,
         )
         self.assertEqual(retried["recovery_attempts"], 3)

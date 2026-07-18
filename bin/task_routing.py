@@ -30,8 +30,28 @@ PROJECT_FIELDS = {
     "maxEscalations",
 }
 HINT_FIELDS = {"taskClass", "risk", "maxTier"}
+DECISION_FIELDS = {
+    "schemaVersion",
+    "taskId",
+    "projectSlug",
+    "taskClass",
+    "risk",
+    "tier",
+    "model",
+    "providerProfile",
+    "selection",
+    "reasonCodes",
+    "maxAttempts",
+    "maxEscalations",
+    "attemptCount",
+    "escalationCount",
+    "nextEligibleTier",
+    "aiUsage",
+}
 PROJECT_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SAFE_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9._:/-]{0,127}$")
+REASON_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 ESCALATABLE_FAILURES = {
     "verification_failed",
     "implementation_blocked",
@@ -116,7 +136,7 @@ def validate_policy(value: dict) -> dict:
     if value.get("schemaVersion") != 1:
         _policy_error()
     tiers = value.get("tiers")
-    if not isinstance(tiers, dict) or tuple(tiers.keys()) != TIERS:
+    if not isinstance(tiers, dict) or set(tiers) != set(TIERS):
         _policy_error()
 
     ranks = []
@@ -152,6 +172,8 @@ def validate_policy(value: dict) -> dict:
             defaults.get("maxEscalations"),
             allow_zero=True,
         )
+        or defaults.get("maxEscalations")
+        > defaults.get("maxAttempts") - 1
     ):
         _policy_error()
     if (
@@ -196,6 +218,7 @@ def validate_policy(value: dict) -> dict:
             max_tier not in TIERS
             or not _positive_int(max_attempts)
             or not _positive_int(max_escalations, allow_zero=True)
+            or max_escalations > max_attempts - 1
         ):
             _policy_error()
 
@@ -236,6 +259,14 @@ def _task_text(task_spec) -> str:
         not isinstance(command, str) for command in commands
     ):
         raise RoutingError("routing_task_invalid")
+    for field in ("allowedActions", "forbiddenActions"):
+        actions = task_spec.get(field)
+        if not isinstance(actions, list) or any(
+            not isinstance(action, str) for action in actions
+        ):
+            raise RoutingError("routing_task_invalid")
+    if task_spec.get("evidencePolicy") not in {"optional", "required"}:
+        raise RoutingError("routing_task_invalid")
     return _normalize(
         " ".join(
             (
@@ -251,30 +282,45 @@ def _classify(task_spec):
     hints = _validated_hints(task_spec)
     reasons = []
     text = _task_text(task_spec)
-    if hints.get("taskClass"):
-        task_class = hints["taskClass"]
-        reasons.append("explicit_task_class")
-    elif _contains_signal(text, CRITICAL_SIGNALS):
-        task_class = "critical"
+    if _contains_signal(text, CRITICAL_SIGNALS):
+        signal_class = "critical"
         reasons.append("critical_signal")
     elif _contains_signal(text, IMPLEMENTATION_SIGNALS):
-        task_class = "implementation"
+        signal_class = "implementation"
         reasons.append("implementation_signal")
     elif _contains_signal(text, SIMPLE_SIGNALS):
-        task_class = "simple"
+        signal_class = "simple"
         reasons.append("simple_signal")
     else:
-        task_class = "simple"
+        signal_class = "simple"
         reasons.append("insufficient_strong_signal")
 
+    task_class = signal_class
+    if hints.get("taskClass"):
+        task_class = max(
+            (signal_class, hints["taskClass"]),
+            key=TASK_CLASSES.index,
+        )
+        reasons.append("explicit_task_class")
     inferred_risk = {
         "simple": "low",
         "implementation": "medium",
         "critical": "high",
     }[task_class]
-    risk = hints.get("risk") or inferred_risk
+    risk = inferred_risk
     if hints.get("risk"):
+        risk = max(
+            (inferred_risk, hints["risk"]),
+            key=RISKS.index,
+        )
         reasons.append("explicit_risk")
+    commands = task_spec.get("verificationCommands")
+    if (
+        task_spec.get("evidencePolicy") == "required"
+        and len(commands) > 1
+    ):
+        risk = RISKS[min(RISKS.index(risk) + 1, len(RISKS) - 1)]
+        reasons.append("structural_verification_signal")
     desired_rank = max(
         TASK_CLASSES.index(task_class) + 1,
         RISKS.index(risk) + 1,
@@ -323,35 +369,37 @@ def _minimum_tier(policy, tiers):
 def _automatic_tier(policy, desired, ceiling, allowed_models, reasons):
     desired_rank = _tier_rank(policy, desired)
     ceiling_rank = _tier_rank(policy, ceiling)
-    target_rank = min(desired_rank, ceiling_rank)
-    if target_rank < desired_rank:
+    target = desired if desired_rank <= ceiling_rank else ceiling
+    if target != desired:
         reasons.append("tier_ceiling")
     candidates = [
         tier
         for tier in TIERS
-        if _tier_rank(policy, tier) <= target_rank
+        if _tier_rank(policy, target)
+        <= _tier_rank(policy, tier)
+        <= _tier_rank(policy, ceiling)
         and policy["tiers"][tier]["model"] in allowed_models
     ]
     if not candidates:
         raise RoutingError("routing_model_denied")
-    selected = max(candidates, key=lambda item: _tier_rank(policy, item))
-    if _tier_rank(policy, selected) < target_rank:
-        reasons.append("model_allowlist_ceiling")
+    selected = min(candidates, key=lambda item: _tier_rank(policy, item))
+    if selected != target:
+        reasons.append("model_allowlist_floor")
     return selected
 
 
 def _next_eligible_tier(policy, tier, ceiling, allowed_models):
-    rank = _tier_rank(policy, tier)
-    ceiling_rank = _tier_rank(policy, ceiling)
-    candidates = [
-        candidate
-        for candidate in TIERS
-        if rank < _tier_rank(policy, candidate) <= ceiling_rank
-        and policy["tiers"][candidate]["model"] in allowed_models
-    ]
-    if not candidates:
+    ordered = sorted(TIERS, key=lambda item: _tier_rank(policy, item))
+    position = ordered.index(tier) + 1
+    if position >= len(ordered):
         return None
-    return min(candidates, key=lambda item: _tier_rank(policy, item))
+    candidate = ordered[position]
+    if (
+        _tier_rank(policy, candidate) > _tier_rank(policy, ceiling)
+        or policy["tiers"][candidate]["model"] not in allowed_models
+    ):
+        return None
+    return candidate
 
 
 def route_task(
@@ -377,6 +425,14 @@ def route_task(
     slug = task_spec["projectSlug"]
     project = _project_policy(policy, slug)
     task_class, risk, desired_tier, hints, reasons = _classify(task_spec)
+    default_tier = policy["defaults"]["tier"]
+    if (
+        "insufficient_strong_signal" in reasons
+        and _tier_rank(policy, default_tier)
+        > _tier_rank(policy, desired_tier)
+    ):
+        desired_tier = default_tier
+        reasons.append("default_tier")
     project_ceiling = project["maxAutomaticTier"]
     task_ceiling = hints.get("maxTier") or project_ceiling
     ceiling = _minimum_tier(policy, (project_ceiling, task_ceiling))
@@ -439,12 +495,19 @@ def route_task(
 def _contains_forbidden_receipt_key(value) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
-            lowered = str(key).lower()
+            lowered = re.sub(r"[^a-z0-9]+", "", str(key).lower())
             if (
-                lowered.startswith("session")
-                or "token" in lowered
-                or "secret" in lowered
-                or "credential" in lowered
+                any(
+                    fragment in lowered
+                    for fragment in (
+                        "session",
+                        "token",
+                        "secret",
+                        "credential",
+                        "password",
+                        "apikey",
+                    )
+                )
             ):
                 return True
             if _contains_forbidden_receipt_key(item):
@@ -454,12 +517,74 @@ def _contains_forbidden_receipt_key(value) -> bool:
     return False
 
 
+def _safe_receipt_identifier(value) -> bool:
+    if not isinstance(value, str) or not SAFE_IDENTIFIER.fullmatch(value):
+        return False
+    lowered = value.lower()
+    return not (
+        lowered.startswith(("sk-", "tskey-"))
+        or any(
+            fragment in lowered
+            for fragment in (
+                "secret",
+                "token",
+                "credential",
+                "password",
+                "apikey",
+            )
+        )
+    )
+
+
 def canonical_decision_bytes(decision) -> bytes:
+    reason_codes = (
+        decision.get("reasonCodes")
+        if isinstance(decision, dict)
+        else None
+    )
     if (
         not isinstance(decision, dict)
+        or set(decision) != DECISION_FIELDS
         or decision.get("schemaVersion") != 1
         or not isinstance(decision.get("taskId"), str)
         or not TASK_ID.fullmatch(decision["taskId"])
+        or not isinstance(decision.get("projectSlug"), str)
+        or not PROJECT_SLUG.fullmatch(decision["projectSlug"])
+        or decision.get("taskClass") not in TASK_CLASSES
+        or decision.get("risk") not in RISKS
+        or decision.get("tier") not in TIERS
+        or not _safe_receipt_identifier(decision.get("model"))
+        or not _safe_receipt_identifier(
+            decision.get("providerProfile")
+        )
+        or decision.get("selection")
+        not in {"automatic", "manual", "automatic_escalation"}
+        or not isinstance(reason_codes, list)
+        or not reason_codes
+        or any(
+            not isinstance(reason, str)
+            or not REASON_CODE.fullmatch(reason)
+            for reason in reason_codes
+        )
+        or not _positive_int(decision.get("maxAttempts"))
+        or not _positive_int(
+            decision.get("maxEscalations"),
+            allow_zero=True,
+        )
+        or decision.get("maxEscalations")
+        > decision.get("maxAttempts") - 1
+        or not _positive_int(decision.get("attemptCount"))
+        or decision.get("attemptCount") > decision.get("maxAttempts")
+        or not _positive_int(
+            decision.get("escalationCount"),
+            allow_zero=True,
+        )
+        or decision.get("escalationCount")
+        > decision.get("maxEscalations")
+        or decision.get("escalationCount")
+        > decision.get("attemptCount") - 1
+        or decision.get("nextEligibleTier") not in (None, *TIERS)
+        or decision.get("aiUsage") != "none"
         or _contains_forbidden_receipt_key(decision)
     ):
         raise RoutingError("routing_task_invalid")
@@ -516,10 +641,14 @@ def write_decision(root, decision) -> tuple[str, str]:
 
 def next_route(decision, failure, policy) -> dict:
     policy = validate_policy(policy)
-    if failure not in ESCALATABLE_FAILURES:
+    if (
+        not isinstance(failure, str)
+        or failure not in ESCALATABLE_FAILURES
+    ):
         raise RoutingError("routing_failure_not_escalatable")
     if not isinstance(decision, dict):
         raise RoutingError("routing_task_invalid")
+    canonical_decision_bytes(decision)
     slug = decision.get("projectSlug")
     project = _project_policy(policy, slug)
     current_tier = decision.get("tier")
@@ -533,12 +662,22 @@ def next_route(decision, failure, policy) -> dict:
 
     attempt_count = decision.get("attemptCount")
     escalation_count = decision.get("escalationCount")
+    decision_max_attempts = decision.get("maxAttempts")
+    decision_max_escalations = decision.get("maxEscalations")
+    if (
+        not _positive_int(decision_max_attempts)
+        or not _positive_int(
+            decision_max_escalations,
+            allow_zero=True,
+        )
+    ):
+        raise RoutingError("routing_task_invalid")
     max_attempts = min(
-        decision.get("maxAttempts", 0),
+        decision_max_attempts,
         project["maxAttempts"],
     )
     max_escalations = min(
-        decision.get("maxEscalations", 0),
+        decision_max_escalations,
         project["maxEscalations"],
     )
     if (

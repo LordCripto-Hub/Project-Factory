@@ -179,7 +179,11 @@ TaskSpec locally and chooses the least expensive policy-compliant tier:
 The classifier is deterministic and makes no provider call, so the routing
 decision itself consumes zero model tokens and records aiUsage: none.
 Optional TaskSpec routing hints may constrain class, risk, and maximum tier but
-cannot bypass project policy. An explicit --model is treated as a manual
+cannot downgrade stronger text or structural signals and cannot bypass project
+policy. Required evidence with multiple verification commands can raise risk by
+at most one tier. If the exact justified tier is unavailable, Boss selects the
+least expensive allowed tier above it within the effective ceiling; it never
+silently downgrades. An explicit --model is treated as a manual
 request and is rejected rather than silently substituted when its model or tier
 is not allowed.
 

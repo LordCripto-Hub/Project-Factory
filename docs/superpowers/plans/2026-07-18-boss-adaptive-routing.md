@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 standard library, MyPeople `mp` CLI, JSON runtime contracts, `unittest`, Docker isolated verifier, PowerShell backup-first image upgrade.
 
-**Execution choice:** Inline execution was authorized by Rafa with si proba como queda eso.
+**Execution choice:** The operator approved inline execution.
 
 ---
 

@@ -13,8 +13,6 @@ PUBLIC_FILES = [
     ROOT / "windows" / "Start-MyPeople.ps1",
     ROOT / "windows" / "Install-MyPeopleShortcut.ps1",
 ]
-
-
 class PublicRepositoryContract(unittest.TestCase):
     def test_public_document_names_are_english(self):
         names = {path.name for path in (ROOT / "docs").glob("*.md")}
@@ -44,6 +42,19 @@ class PublicRepositoryContract(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             for pattern in forbidden:
                 self.assertIsNone(pattern.search(text), f"{path}: {pattern.pattern}")
+
+    def test_internal_public_plans_have_no_personal_or_control_material(self):
+        forbidden = (
+            re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]"),
+            re.compile(r"(?i)\brafa\b"),
+        )
+        for path in (ROOT / "docs" / "superpowers").rglob("*.md"):
+            text = path.read_text(encoding="utf-8")
+            for pattern in forbidden:
+                self.assertIsNone(
+                    pattern.search(text),
+                    f"{path}: {pattern.pattern}",
+                )
 
     def test_repository_declares_english_only_public_content(self):
         policy = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")

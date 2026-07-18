@@ -159,6 +159,103 @@ class RoutingPolicyContract(unittest.TestCase):
         self.assertIn("explicit_task_class", decision["reasonCodes"])
         self.assertIn("explicit_risk", decision["reasonCodes"])
 
+    def test_explicit_hints_cannot_downgrade_critical_text(self):
+        decision = task_routing.route_task(
+            task_spec(
+                "Repair production authentication and prevent data loss",
+                routingHints={
+                    "taskClass": "simple",
+                    "risk": "low",
+                },
+            ),
+            self.policy,
+            "codex-primary",
+        )
+        self.assertEqual(decision["taskClass"], "critical")
+        self.assertEqual(decision["risk"], "high")
+        self.assertEqual(decision["tier"], "strong")
+        self.assertIn("critical_signal", decision["reasonCodes"])
+        self.assertIn("explicit_task_class", decision["reasonCodes"])
+        self.assertIn("explicit_risk", decision["reasonCodes"])
+
+    def test_configured_default_tier_applies_to_ambiguous_tasks(self):
+        policy = copy.deepcopy(POLICY)
+        policy["defaults"]["tier"] = "standard"
+        decision = task_routing.route_task(
+            task_spec("Investigate an unclear report"),
+            policy,
+            "codex-primary",
+        )
+        self.assertEqual(decision["tier"], "standard")
+        self.assertEqual(decision["model"], "gpt-5.6-terra")
+        self.assertIn("default_tier", decision["reasonCodes"])
+
+    def test_sparse_allowlist_never_downgrades_or_skips_escalation_tiers(self):
+        policy = copy.deepcopy(POLICY)
+        policy["projects"]["mypeople"]["allowedModels"] = [
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+        ]
+        implementation = task_routing.route_task(
+            task_spec("Fix the Docker API integration"),
+            policy,
+            "codex-primary",
+        )
+        self.assertEqual(implementation["tier"], "strong")
+        self.assertEqual(implementation["model"], "gpt-5.6-sol")
+
+        economy = task_routing.route_task(
+            task_spec("Translate the operator manual"),
+            policy,
+            "codex-primary",
+        )
+        self.assertIsNone(economy["nextEligibleTier"])
+        with self.assertRaisesRegex(
+            task_routing.RoutingError,
+            "routing_budget_exhausted",
+        ):
+            task_routing.next_route(
+                economy,
+                "verification_failed",
+                policy,
+            )
+
+    def test_required_multi_command_evidence_raises_at_most_one_tier(self):
+        decision = task_routing.route_task(
+            task_spec(
+                "Document the operator workflow",
+                evidencePolicy="required",
+                verificationCommands=[
+                    "python3 verify/docs.py",
+                    "python3 verify/links.py",
+                ],
+            ),
+            self.policy,
+            "codex-primary",
+        )
+        self.assertEqual(decision["taskClass"], "simple")
+        self.assertEqual(decision["risk"], "medium")
+        self.assertEqual(decision["tier"], "standard")
+        self.assertIn(
+            "structural_verification_signal",
+            decision["reasonCodes"],
+        )
+
+        for field, value in (
+            ("allowedActions", "read"),
+            ("forbiddenActions", [1]),
+            ("evidencePolicy", "unknown"),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                task_routing.RoutingError,
+                "routing_task_invalid",
+            ):
+                task_routing.route_task(
+                    task_spec("Document the manual", **{field: value}),
+                    self.policy,
+                    "codex-primary",
+                )
+
     def test_manual_model_is_allowed_or_denied_without_substitution(self):
         allowed = task_routing.route_task(
             task_spec("Fix the API integration"),
@@ -197,6 +294,15 @@ class RoutingPolicyContract(unittest.TestCase):
             )
 
     def test_policy_validation_and_project_lookup_fail_closed(self):
+        reordered = copy.deepcopy(POLICY)
+        reordered["tiers"] = {
+            "strong": reordered["tiers"]["strong"],
+            "economy": reordered["tiers"]["economy"],
+            "standard": reordered["tiers"]["standard"],
+        }
+        validated = task_routing.validate_policy(reordered)
+        self.assertEqual(set(validated["tiers"]), set(POLICY["tiers"]))
+
         invalid = []
         unknown = copy.deepcopy(POLICY)
         unknown["surprise"] = True
@@ -207,6 +313,16 @@ class RoutingPolicyContract(unittest.TestCase):
         negative_budget = copy.deepcopy(POLICY)
         negative_budget["defaults"]["maxAttempts"] = -1
         invalid.append(negative_budget)
+        impossible_default_budget = copy.deepcopy(POLICY)
+        impossible_default_budget["defaults"]["maxAttempts"] = 1
+        impossible_default_budget["defaults"]["maxEscalations"] = 1
+        invalid.append(impossible_default_budget)
+        impossible_project_budget = copy.deepcopy(POLICY)
+        impossible_project_budget["projects"]["mypeople"]["maxAttempts"] = 1
+        impossible_project_budget["projects"]["mypeople"][
+            "maxEscalations"
+        ] = 1
+        invalid.append(impossible_project_budget)
         unknown_model = copy.deepcopy(POLICY)
         unknown_model["projects"]["mypeople"]["allowedModels"].append(
             "unknown-model"
@@ -288,6 +404,37 @@ class RoutingReceiptContract(unittest.TestCase):
                 task_routing.write_decision(temp, decision)
             self.assertEqual(list(Path(temp).iterdir()), [])
 
+    def test_receipt_rejects_extra_or_secret_bearing_fields(self):
+        decision = task_routing.route_task(
+            task_spec("Fix Docker integration"),
+            self.policy,
+            "codex-primary",
+        )
+        malicious = (
+            {"providerSessionId": "019-provider-session"},
+            {"apiKey": "secret-value"},
+            {"password": "secret-value"},
+            {
+                "providerProfile":
+                    "019f0000-0000-7000-8000-000000000999"
+            },
+            {"model": "sk-secret-material"},
+            {
+                "reasonCodes": [
+                    {"providerSessionId": "019-provider-session"}
+                ]
+            },
+        )
+        for injected in malicious:
+            with self.subTest(injected=injected):
+                candidate = copy.deepcopy(decision)
+                candidate.update(injected)
+                with self.assertRaisesRegex(
+                    task_routing.RoutingError,
+                    "routing_task_invalid",
+                ):
+                    task_routing.canonical_decision_bytes(candidate)
+
     def test_next_route_advances_once_and_respects_budget(self):
         decision = task_routing.route_task(
             task_spec("Fix Docker integration"),
@@ -332,6 +479,8 @@ class RoutingReceiptContract(unittest.TestCase):
             "infrastructure_failed",
             "context_missing",
             "unknown_failure",
+            {},
+            [],
         ):
             with self.subTest(failure=failure), self.assertRaisesRegex(
                 task_routing.RoutingError,
@@ -342,6 +491,23 @@ class RoutingReceiptContract(unittest.TestCase):
                     failure,
                     self.policy,
                 )
+
+    def test_next_route_rejects_malformed_receipt_budgets_with_typed_error(self):
+        decision = task_routing.route_task(
+            task_spec("Fix Docker integration"),
+            self.policy,
+            "codex-primary",
+        )
+        decision["maxAttempts"] = "2"
+        with self.assertRaisesRegex(
+            task_routing.RoutingError,
+            "routing_task_invalid",
+        ):
+            task_routing.next_route(
+                decision,
+                "verification_failed",
+                self.policy,
+            )
 
 
 if __name__ == "__main__":
