@@ -156,6 +156,7 @@ class ExactSessionSpawnContract(unittest.TestCase):
             "PROVIDER_PROFILES_PATH": str(self.profiles),
             "PROVIDER_HOMES_DIR": str(self.homes),
             "MYPEOPLE_SESSION_CAPTURE_DIR": str(self.root / "capture-locks"),
+            "MYPEOPLE_INITIAL_SUBMIT_RETRY_SEC": "0",
         }
         with mock.patch.dict(os.environ, environment, clear=False), \
              mock.patch.object(self.mp, "window_exists", return_value=False), \
@@ -193,6 +194,22 @@ class ExactSessionSpawnContract(unittest.TestCase):
         self.assertLess(
             self.events.index(sends[0]),
             self.events.index(("discover",)),
+        )
+
+    def test_fresh_codex_retries_enter_when_transcript_has_not_appeared(self):
+        self.run_spawn(
+            {
+                "session_id": "019f0000-0000-7000-8000-000000000337",
+                "cwd": os.path.realpath(self.cwd),
+                "path": str(self.root / "rollout.jsonl"),
+            }
+        )
+        self.assertIn(
+            (
+                "tmux",
+                ["send-keys", "-t", "mc-main:Boss", "Enter"],
+            ),
+            self.events,
         )
 
     def test_fresh_codex_allows_90_seconds_for_session_capture_by_default(self):

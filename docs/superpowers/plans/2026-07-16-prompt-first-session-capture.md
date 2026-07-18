@@ -136,6 +136,9 @@ try:
         raise SessionError('session_process_not_ready')
     if not tmux_send_message(target, startup_message):
         raise SessionError('session_process_not_ready')
+    time.sleep(float(os.environ.get('MYPEOPLE_INITIAL_SUBMIT_RETRY_SEC', '0.5')))
+    if snapshot_codex_sessions(capture_home) == capture_before:
+        run_tmux(['send-keys', '-t', target, 'Enter'], check=False)
     discovered = discover_codex_session(capture_home, cwd, capture_before, timeout=float(
         os.environ.get('MYPEOPLE_SESSION_CAPTURE_TIMEOUT_SEC', '90')
     ))

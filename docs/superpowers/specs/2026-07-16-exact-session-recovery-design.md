@@ -125,6 +125,8 @@ Before creating a Codex tmux window, `mp spawn`:
 3. records the existing session files and launch timestamp;
 4. starts the tmux window;
 5. waits for the composer and sends the role's bootstrap message exactly once;
+   if no transcript exists after a short render interval, it confirms the
+   already-pasted message with one additional Enter key;
 6. polls for a new `session_meta` record created after the snapshot;
 7. requires its real `cwd` to equal the agent's resolved cwd;
 8. persists the UUID in status and roster;
@@ -136,8 +138,10 @@ while startup discovery still owns the profile capture lock. Boss, Nightwatch,
 owner workers, and fresh provider handoffs use their existing doctrine,
 TaskSpec, or sanitized handoff prompt. Temporary or otherwise unclassified
 workers receive one bounded generic readiness prompt so they also establish a
-recoverable session. The message must not be sent a second time after roster
-persistence.
+recoverable session. The message text must not be pasted a second time after
+roster persistence. The conditional Enter retry carries no content and
+prevents Codex TUI startup transitions from leaving the first prompt sitting
+unsubmitted in the composer.
 
 If the composer never becomes ready or the bootstrap message cannot be
 submitted, startup records a typed unavailable state and does not claim exact
