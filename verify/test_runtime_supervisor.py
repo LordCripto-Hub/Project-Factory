@@ -29,5 +29,6 @@ assert '[[ -e "$policy_path" ]]' in supervisor
 assert 'mktemp "$ROOT/run/.routing-policy.XXXXXX"' in supervisor
 assert 'install -m 0600 "$ROOT/examples/routing-policy.example.json"' in supervisor
 assert 'mv -n "$policy_tmp" "$policy_path"' in supervisor
+assert "printf '%s\\n' +" not in supervisor
 
 print("PASS single foreground runtime supervisor contract")

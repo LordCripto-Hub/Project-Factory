@@ -27,7 +27,7 @@ bootstrap_routing_policy() {
   [[ -e "$policy_path" ]]
 }
 
-bootstrap_routing_policy || printf '%s\n' +  'warning: routing policy bootstrap failed; automatic owner routing is unavailable' >&2
+bootstrap_routing_policy || printf '%s\n' 'warning: routing policy bootstrap failed; automatic owner routing is unavailable' >&2
 
 if [[ "${MYPEOPLE_TAILSCALE_ENABLED:-0}" == "1" ]]; then
   mkdir -p "$ROOT/run/tailscale-state"
