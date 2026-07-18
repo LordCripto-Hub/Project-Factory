@@ -81,6 +81,30 @@ without claiming conversation continuity. Task ownership, ProjectProfile,
 TaskSpec, role, Git workspace, and evidence remain outside the provider process
 and survive either path.
 
+## Zero-token adaptive owner routing
+
+New Codex owner workers may omit --model. Boss then classifies the compiled
+TaskSpec with deterministic local rules and selects the least expensive allowed
+tier: Luna for economy work, Terra for normal implementation, and Sol only for
+explicit critical signals. The routing step makes no provider call and records
+aiUsage: none.
+
+Each project policy defines allowed models, the maximum automatic tier, attempt
+limits, and escalation limits. Hints can raise classification or impose a
+ceiling, but they cannot downgrade stronger task signals. If the exact
+justified tier is unavailable, routing chooses the cheapest allowed tier above
+it within the ceiling and never silently downgrades. Manual model requests pass through the same
+allowlist and ceilings and fail closed instead of being silently substituted.
+Every ProjectProfile slug must have an explicit matching project entry in the
+private policy; startup never auto-authorizes new projects or overwrites an
+operator policy.
+The canonical routing receipt is private, SHA-256-bound to the roster, and
+summarized once in the Priorities task comments.
+
+Exact revive preserves that receipt and model. The current release calculates
+the next eligible tier for bounded typed failures but intentionally leaves
+cross-model process replacement and HUD controls to a separate gated phase.
+
 ## Durable Docker state
 
 MyPeople uses a pinned local image plus eight named volumes:
@@ -189,6 +213,7 @@ contract.
 ## Documentation
 
 - [User manual](docs/USER-MANUAL.md)
+- [Adaptive routing live canary](docs/ADAPTIVE-ROUTING-LIVE-CANARY.md)
 - [Minimal architecture](docs/MINIMAL-ARCHITECTURE.md)
 - [Upstream MyPeople implementation review](docs/UPSTREAM-MYPEOPLE-REVIEW.md)
 

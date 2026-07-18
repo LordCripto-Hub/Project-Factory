@@ -31,6 +31,13 @@ from project_publisher import (
     get_approval,
     publish as publish_project,
 )
+from task_routing import (
+    RoutingError,
+    canonical_decision_bytes,
+    route_task,
+    validate_policy as validate_routing_policy,
+    write_decision,
+)
 from provider_launch import pause as pause_provider_launch
 from provider_launch import resume as resume_provider_launch
 from provider_launch import status as provider_launch_status
@@ -208,6 +215,7 @@ def resolve_owner_task_context(taskspec_path, requested_cwd):
         raise TaskSpecError("working_directory_mismatch")
     return {
         "cwd": cwd,
+        "document": document,
         "taskspec_sha256": hashlib.sha256(raw).hexdigest(),
     }
 
@@ -554,6 +562,120 @@ def resolve_owner_runtime(ns, receipt_record=None):
     }
     return taskspec_path, taskspec_context, worker_contract
 
+
+def load_routing_policy(path=None):
+    policy_path = pathlib.Path(
+        path
+        or os.environ.get(
+            "MYPEOPLE_ROUTING_POLICY_PATH",
+            os.path.join(ROOT, "run", "routing-policy.json"),
+        )
+    )
+    try:
+        value = json.loads(policy_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise RoutingError("routing_policy_missing") from error
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RoutingError("routing_policy_invalid") from error
+    return validate_routing_policy(value)
+
+
+def prepare_owner_routing(
+    ns,
+    taskspec_context,
+    profile_id,
+    receipt_record=None,
+):
+    if not ns.owner_task or ns.backend != "codex":
+        return None, "", ""
+    if receipt_record is not None:
+        path = str(receipt_record.get("routing_path") or "")
+        digest = str(receipt_record.get("routing_sha256") or "")
+        if not path and not digest:
+            return None, "", ""
+        if not path or not digest:
+            raise SystemExit("routing_receipt_mismatch")
+        validate_record_receipt(
+            receipt_record,
+            "routing_path",
+            "routing_sha256",
+            "routing_receipt_mismatch",
+        )
+        try:
+            raw = pathlib.Path(path).read_bytes()
+            decision = json.loads(raw.decode("utf-8"))
+            canonical = canonical_decision_bytes(decision)
+        except (
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            RoutingError,
+        ) as error:
+            raise SystemExit("routing_receipt_mismatch") from error
+        if (
+            canonical != raw
+            or decision.get("taskId") != ns.owner_task
+            or decision.get("providerProfile") != profile_id
+            or decision.get("model") != receipt_record.get("model")
+        ):
+            raise SystemExit("routing_receipt_mismatch")
+        return decision, path, digest
+
+    policy = load_routing_policy()
+    decision = route_task(
+        taskspec_context.get("document"),
+        policy,
+        profile_id,
+        requested_model=ns.model,
+    )
+    decisions_dir = os.environ.get(
+        "MYPEOPLE_ROUTING_DECISIONS_DIR",
+        os.path.join(ROOT, "run", "routing-decisions"),
+    )
+    path, digest = write_decision(decisions_dir, decision)
+    return decision, path, digest
+
+
+def ensure_routing_comment(task_id, decision, digest):
+    marker = f"[routing:{digest[:12]}]"
+    todo_base = (
+        os.environ.get("MYPEOPLE_TODO_URL")
+        or os.environ.get("TODO_URL")
+        or f"http://127.0.0.1:{ENV.get('TODO_PORT', '9933')}"
+    )
+    board = http_json(
+        "/todo/board",
+        base=todo_base,
+        token=ENV.get("QUEUE_SECRET", ""),
+    )
+    task = (board.get("tasks") or {}).get(task_id) or {}
+    comments = task.get("comments") or []
+    if any(
+        marker in str(comment.get("body") or "")
+        for comment in comments
+        if isinstance(comment, dict)
+    ):
+        return False
+    reasons = ",".join(decision.get("reasonCodes") or [])
+    body = (
+        f"{marker} class={decision['taskClass']} risk={decision['risk']} "
+        f"tier={decision['tier']} model={decision['model']} "
+        f"selection={decision['selection']} reasons={reasons} "
+        f"aiUsage={decision['aiUsage']}"
+    )
+    http_json(
+        "/todo/comment",
+        "POST",
+        {
+            "task_id": task_id,
+            "by": os.environ.get("AGENT_ID", "").strip() or "Boss",
+            "body": body,
+        },
+        base=todo_base,
+        token=ENV.get("QUEUE_SECRET", ""),
+    )
+    return True
+
 def startup_message_for(ns, tab, initial_message=""):
     if str(initial_message or "").strip():
         return str(initial_message)
@@ -598,7 +720,13 @@ def spawn(
     if ns.owner_task and ns.temporary: raise SystemExit("--owner-task and --temporary are mutually exclusive")
     aid = full_agent_id(ns.agent_id); host, session, tab = parse_agent_id(aid)
     if host != ENV.get("HOST_ID"):
-        model = ns.model if ns.model is not None else ("" if ns.master else DEFAULT_ENG_MODEL)
+        model = ns.model if ns.model is not None else (
+            ""
+            if ns.master
+            else None
+            if ns.owner_task and ns.backend == "codex"
+            else DEFAULT_ENG_MODEL
+        )
         payload={"backend":ns.backend,"cwd":ns.cwd,"boss":raw_boss,"is_master":ns.master,"model":model,
                  "owner_task_id":ns.owner_task or "","temporary":ns.temporary}
         result=http_json("/task/submit","POST",{"type":"spawn","target_agent":aid,"payload":payload})
@@ -628,15 +756,47 @@ def spawn(
             if boss:
                 notify_agent(boss, message)
             raise SystemExit(message) from error
-    model = ns.model if ns.model is not None else (None if ns.master else DEFAULT_ENG_MODEL)
+    fresh_owner_route = bool(
+        ns.owner_task
+        and ns.backend == "codex"
+        and receipt_record is None
+    )
+    model = ns.model if ns.model is not None else (
+        None if ns.master or fresh_owner_route else DEFAULT_ENG_MODEL
+    )
     model, profile_id, provider_home = resolve_provider_runtime(
         aid,
         ns.backend,
         ns.master,
         tab,
         model,
-        ns.model is not None,
+        ns.model is not None or fresh_owner_route,
     )
+    routing_decision = None
+    routing_path = ""
+    routing_sha256 = ""
+    if ns.owner_task:
+        try:
+            (
+                routing_decision,
+                routing_path,
+                routing_sha256,
+            ) = prepare_owner_routing(
+                ns,
+                taskspec_context,
+                profile_id,
+                receipt_record=receipt_record,
+            )
+        except RoutingError as error:
+            message = (
+                f"[routing] task {ns.owner_task} blocked: {error.code}. "
+                "Fix the routing policy or task limits and retry."
+            )
+            if boss:
+                notify_agent(boss, message)
+            raise SystemExit(error.code) from error
+        if routing_decision is not None:
+            model = routing_decision["model"]
     aid, host, session, tab, cwd, boss, args = _build_launch_args(
         aid,
         taskspec_context.get("cwd") if ns.owner_task else ns.cwd,
@@ -823,6 +983,14 @@ def spawn(
         rec["role_contract_path"] = worker_contract["path"]
         rec["role_contract_sha256"] = worker_contract["sha256"]
         rec["role_contract_version"] = worker_contract["version"]
+    if routing_decision is not None:
+        rec["routing_path"] = routing_path
+        rec["routing_sha256"] = routing_sha256
+        rec["routing_tier"] = routing_decision["tier"]
+        rec["routing_selection"] = routing_decision["selection"]
+        rec["routing_reason_codes"] = routing_decision["reasonCodes"]
+        rec["routing_max_attempts"] = routing_decision["maxAttempts"]
+        rec["routing_max_escalations"] = routing_decision["maxEscalations"]
     rec["provider_profile"] = profile_id
     if ns.master: rec["summary"]="autonomous plan approve queue mp verify fire-and-forget"
     if tab=="Nightwatch": rec["summary"]="nightwatch ceo-equivalent approve whatsapp never-done"
@@ -835,6 +1003,18 @@ def spawn(
             raise RuntimeError("resume_process_failed")
     update_roster(rec); write_status(aid,"starting",rec.get("summary",""),boss_id=boss,backend=ns.backend)
     queue_register(rec); recorder(session,tab)
+    if fresh_owner_route and routing_decision is not None:
+        try:
+            ensure_routing_comment(
+                ns.owner_task,
+                routing_decision,
+                routing_sha256,
+            )
+        except Exception:
+            print(
+                "warning: routing comment deferred",
+                file=sys.stderr,
+            )
     if created and resume_session:
         pass
     elif created and capture_enabled:
@@ -1180,7 +1360,10 @@ def reconcile(ns):
             })
             attempted.append(aid)
             try:
-                spawn(namespace_from_record(rec))
+                spawn(
+                    namespace_from_record(rec),
+                    receipt_record=rec,
+                )
             except BaseException:
                 exhausted=next_attempt>=BOOTSTRAP_MAX
                 update_roster({

@@ -8,6 +8,27 @@ export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 . "$HOME/.config/mypeople/queue.env"
 mkdir -p "$ROOT/run"
+
+bootstrap_routing_policy() {
+  local policy_path="$ROOT/run/routing-policy.json" policy_tmp=""
+  install -d -m 0700 "$ROOT/run/routing-decisions"
+  [[ -e "$policy_path" ]] && return 0
+  [[ -f "$ROOT/examples/routing-policy.example.json" ]] || return 1
+  policy_tmp=$(mktemp "$ROOT/run/.routing-policy.XXXXXX") || return 1
+  if ! install -m 0600 "$ROOT/examples/routing-policy.example.json" "$policy_tmp"; then
+    rm -f "$policy_tmp"
+    return 1
+  fi
+  if ! mv -n "$policy_tmp" "$policy_path"; then
+    rm -f "$policy_tmp"
+    return 1
+  fi
+  [[ ! -e "$policy_tmp" ]] || rm -f "$policy_tmp"
+  [[ -e "$policy_path" ]]
+}
+
+bootstrap_routing_policy || printf '%s\n' 'warning: routing policy bootstrap failed; automatic owner routing is unavailable' >&2
+
 if [[ "${MYPEOPLE_TAILSCALE_ENABLED:-0}" == "1" ]]; then
   mkdir -p "$ROOT/run/tailscale-state"
 fi

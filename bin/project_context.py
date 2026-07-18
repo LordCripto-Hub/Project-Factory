@@ -409,6 +409,26 @@ def _task_string(value, code: str) -> str:
     return value
 
 
+def _routing_hints(value) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TaskSpecError("invalid_routing_hints")
+    allowed = {
+        "taskClass": {"simple", "implementation", "critical"},
+        "risk": {"low", "medium", "high"},
+        "maxTier": {"economy", "standard", "strong"},
+    }
+    if not set(value).issubset(allowed):
+        raise TaskSpecError("invalid_routing_hints")
+    result = {}
+    for key, item in value.items():
+        if not isinstance(item, str) or item not in allowed[key]:
+            raise TaskSpecError("invalid_routing_hints")
+        result[key] = item
+    return result
+
+
 def _task_spec_chars(value: dict) -> int:
     return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
@@ -448,6 +468,7 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
         "allowedActions": profile["allowedActions"],
         "forbiddenActions": profile["forbiddenActions"],
         "evidencePolicy": evidence_policy,
+        "routingHints": _routing_hints(task.get("routingHints")),
         "memoryQuestion": question,
         "memoryClaims": [],
         "memoryStatus": "not_requested" if not question else "disabled",

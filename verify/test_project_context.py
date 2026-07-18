@@ -211,6 +211,48 @@ class TaskSpecContract(unittest.TestCase):
         self.assertEqual(result["verificationCommands"], ["python3 verify/critical.py"])
         self.assertEqual(result["acceptanceCriteria"], "Critical verification passes")
 
+    def test_task_spec_compiles_valid_routing_hints(self):
+        result = project_context.compile_task_spec(
+            self.task(
+                routingHints={
+                    "taskClass": "implementation",
+                    "risk": "medium",
+                    "maxTier": "standard",
+                }
+            ),
+            profile(),
+        )
+        self.assertEqual(
+            result["routingHints"],
+            {
+                "taskClass": "implementation",
+                "risk": "medium",
+                "maxTier": "standard",
+            },
+        )
+
+    def test_task_spec_defaults_routing_hints_to_empty_object(self):
+        result = project_context.compile_task_spec(self.task(), profile())
+        self.assertEqual(result["routingHints"], {})
+
+    def test_task_spec_rejects_invalid_routing_hints(self):
+        invalid = (
+            "strong",
+            {"unknown": "value"},
+            {"taskClass": "large"},
+            {"risk": "extreme"},
+            {"maxTier": "premium"},
+        )
+        for hints in invalid:
+            with self.subTest(hints=hints), self.assertRaisesRegex(
+                project_context.TaskSpecError,
+                "invalid_routing_hints",
+            ):
+                project_context.compile_task_spec(
+                    self.task(routingHints=hints),
+                    profile(),
+                )
+
     def test_invalid_task_contracts_fail_closed(self):
         invalid = (
             self.task(id=""),

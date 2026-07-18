@@ -156,13 +156,54 @@ Profile switching currently uses PowerShell. HUD controls for global and per-age
 Boss normally creates workers. For an advanced owner-task test:
 
 ```powershell
-docker exec mypeople /home/mp/mypeople/bin/mp spawn main:Worker-1 --backend codex --model gpt-5.6-luna --boss main:Boss --owner-task CARD_ID
+docker exec mypeople /home/mp/mypeople/bin/mp spawn main:Worker-1 --backend codex --boss main:Boss --owner-task CARD_ID
 ```
 
 Omit `--cwd` for the normal path. The owner worker uses the TaskSpec-owned
 working directory from its ProjectProfile. An explicit `--cwd` is accepted only
 when it resolves to that exact directory; a mismatch fails before tmux
-creation. Keep the explicit Codex backend and model while Claude is disabled.
+creation. Keep the explicit Codex backend while Claude is disabled.
+
+### Automatic owner-task model routing
+
+When --model is omitted for an owner task, Boss classifies the compiled
+TaskSpec locally and chooses the least expensive policy-compliant tier:
+
+- economy: gpt-5.6-luna for simple, documentation, translation, and
+  ambiguous work;
+- standard: gpt-5.6-terra for implementation, bug fixes, APIs, databases,
+  Docker, and integrations;
+- strong: gpt-5.6-sol for explicit security, authentication, production,
+  payment, data-loss, rollback, or architecture-critical signals.
+
+The classifier is deterministic and makes no provider call, so the routing
+decision itself consumes zero model tokens and records aiUsage: none.
+Optional TaskSpec routing hints may constrain class, risk, and maximum tier but
+cannot downgrade stronger text or structural signals and cannot bypass project
+policy. Required evidence with multiple verification commands can raise risk by
+at most one tier. If the exact justified tier is unavailable, Boss selects the
+least expensive allowed tier above it within the effective ceiling; it never
+silently downgrades. An explicit --model is treated as a manual
+request and is rejected rather than silently substituted when its model or tier
+is not allowed.
+
+The private policy is stored at
+/home/mp/mypeople/run/routing-policy.json; a custom location may be supplied
+with MYPEOPLE_ROUTING_POLICY_PATH. Runtime startup creates the default policy
+only when the file is absent and never overwrites operator configuration.
+Every ProjectProfile slug must have an explicit matching project entry in that
+private policy. MyPeople never auto-authorizes a newly added project.
+Canonical decisions live under run/routing-decisions, are mode 0600, and
+are bound to the roster by SHA-256. Priorities receives one idempotent comment
+showing class, risk, tier, model, selection, and reason codes.
+
+Exact revive validates and reuses the original routing receipt and model; it
+does not classify again or spend an escalation. This phase can calculate one
+eligible next tier for typed implementation failures within attempt/escalation
+ceilings, but it does not kill or switch the worker automatically.
+
+For the operator procedure, expected live signals, and safe failure handling,
+see [Adaptive Routing Live Canary](ADAPTIVE-ROUTING-LIVE-CANARY.md).
 
 ## One-click Windows startup
 
@@ -444,6 +485,9 @@ never recorded.
   `mypeople-todos` volume. An explicit `EXPORT_REPO` may override it for an
   operator-controlled external target.
 - Preserved migration containers, images, backups, and restore-test volumes require an explicit cleanup review; startup never removes them.
+- Adaptive routing currently controls new Codex owner workers only. Automatic
+  cross-model replacement, hybrid providers, per-agent account controls, and
+  HUD model buttons remain separate gated work.
 
 ## Technical verification
 
@@ -454,6 +498,8 @@ docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeop
 docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_codex_boss_doctrine.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_boss_supervisor_backend.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_codex_message_submit.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_task_routing.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_adaptive_owner_routing.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_project_workspace.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_project_publisher.py
 ```
@@ -562,7 +608,7 @@ receives the text Windows types into the focused control.
 ## Recommended next stage
 
 1. Add deliberate Boss stop, reconcile, revive, model, and provider-profile controls to Priorities.
-2. Add adaptive, cost-bounded worker model selection without changing task ownership.
+2. Connect bounded routing escalation to an explicit lossless worker-switch command.
 3. Bind local services safely and protect the writable terminal.
 4. Evaluate a JSON-to-SQLite board migration with a tested JSON rollback path.
 5. Activate read-only Cloudflare recall for one real ProjectProfile through a separate security-gated cycle.

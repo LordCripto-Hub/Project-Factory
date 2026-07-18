@@ -36,6 +36,13 @@ class WorkerHandoffContract(unittest.TestCase):
         self.mp = load_runtime(
             os.environ.get("MYPEOPLE_MP_BIN", str(ROOT / "bin" / "mp"))
         )
+        self.mp.prepare_owner_routing = (
+            lambda _ns, _context, _profile, receipt_record=None: (
+                None,
+                "",
+                "",
+            )
+        )
 
     def write_taskspec(self, directory):
         path = Path(directory) / "task.json"
