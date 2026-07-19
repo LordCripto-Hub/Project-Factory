@@ -108,6 +108,18 @@ class CodexDoctrineContract(unittest.TestCase):
         self.mp.run_tmux = lambda *_args, **_kwargs: Result("OpenAI Codex v0.144.3\n> ")
         self.assertTrue(self.mp.wait_for_composer("mc-main:Boss", timeout=0.1))
 
+    def test_wait_for_composer_recognizes_resumed_codex_status_bar(self):
+        pane = (
+            "\u203a Use /skills to list available skills\n\n"
+            "  gpt-5.6-luna default \u00b7 ~/mypeople/run/nightwatch\n"
+        )
+        self.mp.run_tmux = lambda *_args, **_kwargs: Result(pane)
+        self.assertTrue(
+            self.mp.wait_for_composer(
+                "mc-nightwatch:Nightwatch", timeout=0.1
+            )
+        )
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(CodexDoctrineContract)
