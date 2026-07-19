@@ -1449,8 +1449,11 @@ def verify_forward_escalation(original, candidate, roster_before):
         other_id = before.get("agent_id")
         if other_id == original["agent_id"]:
             continue
-        if by_id.get(other_id) != before or not window_exists(
-            tmux_target(other_id)
+        requires_window = (
+            before.get("state") == "alive" and not before.get("retired")
+        )
+        if by_id.get(other_id) != before or (
+            requires_window and not window_exists(tmux_target(other_id))
         ):
             raise RuntimeError("routing_unrelated_worker_changed")
     return current
@@ -1489,8 +1492,11 @@ def verify_restored_escalation(original, roster_before):
         other_id = before.get("agent_id")
         if other_id == original["agent_id"]:
             continue
-        if by_id.get(other_id) != before or not window_exists(
-            tmux_target(other_id)
+        requires_window = (
+            before.get("state") == "alive" and not before.get("retired")
+        )
+        if by_id.get(other_id) != before or (
+            requires_window and not window_exists(tmux_target(other_id))
         ):
             raise RuntimeError("routing_unrelated_worker_changed")
     return current

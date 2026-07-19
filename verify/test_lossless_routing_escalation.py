@@ -160,6 +160,7 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
         }
         self.events = []
         self.messages = []
+        self.missing_windows = set()
         self.fail_forward_verify = False
         self.fail_rollback = False
         self.mutate_on_lock = False
@@ -289,7 +290,11 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
             ),
             mock.patch.object(self.mp, "spawn", side_effect=self.spawn),
             mock.patch.object(self.mp, "run_tmux", side_effect=self.run_tmux),
-            mock.patch.object(self.mp, "window_exists", return_value=True),
+            mock.patch.object(
+                self.mp,
+                "window_exists",
+                side_effect=lambda target: target not in self.missing_windows,
+            ),
             mock.patch.object(
                 self.mp,
                 "tmux_send_message",
@@ -358,6 +363,43 @@ class LosslessRoutingEscalationContract(unittest.TestCase):
                 ("kill-session", "-t", "rec-Worker-1"),
             ],
         )
+
+    def test_dead_historical_roster_entry_needs_no_tmux_window(self):
+        retired = {
+            "agent_id": "node-1/main:Retired-1",
+            "session": "main",
+            "tab": "Retired-1",
+            "backend": "codex",
+            "model": "gpt-5.6-luna",
+            "state": "dead",
+            "retired": True,
+        }
+        self.roster[retired["agent_id"]] = copy.deepcopy(retired)
+        self.missing_windows.add("mc-main:Retired-1")
+
+        result = self.execute()
+
+        self.assertEqual(result["phase"], "committed")
+        self.assertEqual(self.roster[retired["agent_id"]], retired)
+
+    def test_dead_historical_entry_does_not_break_exact_rollback(self):
+        retired = {
+            "agent_id": "node-1/main:Retired-1",
+            "session": "main",
+            "tab": "Retired-1",
+            "backend": "codex",
+            "model": "gpt-5.6-luna",
+            "state": "dead",
+            "retired": True,
+        }
+        self.roster[retired["agent_id"]] = copy.deepcopy(retired)
+        self.missing_windows.add("mc-main:Retired-1")
+        self.fail_forward_verify = True
+
+        result = self.execute()
+
+        self.assertEqual(result["phase"], "rolled_back")
+        self.assertEqual(self.roster[retired["agent_id"]], retired)
 
     def test_continuation_is_fixed_submitted_once_and_handoff_is_private(self):
         self.execute()
