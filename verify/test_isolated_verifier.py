@@ -14,6 +14,17 @@ class IsolatedVerifierContract(unittest.TestCase):
     def read(self, relative: str) -> str:
         return (ROOT / relative).read_text(encoding="utf-8")
 
+    def test_lossless_escalation_contracts_are_in_the_full_suite(self):
+        suite = self.read("verify/run-suite.sh")
+        for name in (
+            "test_provider_shared_primitives.py",
+            "test_routing_escalation.py",
+            "test_routing_escalation_cli.py",
+            "test_queue_routing_escalation.py",
+            "test_lossless_routing_escalation.py",
+        ):
+            self.assertIn(name, suite)
+
     def test_public_shell_entrypoint_only_orchestrates_disposable_compose(self):
         text = self.read("verify/verify.sh")
         self.assertIn("compose.isolated.yml", text)

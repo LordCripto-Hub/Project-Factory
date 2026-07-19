@@ -91,6 +91,18 @@ class DurableControlQueueContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not retryable"):
             self.queue.retry_task("task-1", str(self.path), timestamp=5.0)
 
+    def test_routing_escalation_is_an_accepted_durable_task_type(self):
+        row = {
+            "task_id": "escalate-1",
+            "type": "routing_escalate",
+            "target_agent": "node-1/main:Worker-1",
+            "payload": {"request_id": "a" * 32},
+            "status": "queued",
+            "created_at": 1.0,
+        }
+        self.assertIn("routing_escalate", self.queue.TASK_TYPES)
+        self.assertTrue(self.queue._valid_task("escalate-1", row))
+
     def test_operator_cli_exposes_status_and_explicit_retry(self):
         cli = (ROOT / "bin" / "mp").read_text(encoding="utf-8")
         self.assertIn('sub.add_parser("queue-retry")', cli)
