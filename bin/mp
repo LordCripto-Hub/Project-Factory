@@ -1228,7 +1228,6 @@ def escalate(ns):
             request.get("agentId") != aid
             or request.get("taskId") != record.get("owner_task_id")
             or request.get("bossId") != record.get("boss_id")
-            or request.get("routingSha256") != record.get("routing_sha256")
         ):
             raise SystemExit("escalation_request_invalid")
     else:

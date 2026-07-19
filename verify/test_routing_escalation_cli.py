@@ -231,6 +231,36 @@ class RoutingEscalationCliContract(unittest.TestCase):
             )
         self.assertEqual(self.executions[-1][1]["requestId"], request["requestId"])
 
+    def test_terminal_request_replay_accepts_advanced_routing_receipt(self):
+        patches = self.patches()
+        with mock.patch.dict(os.environ, {"AGENT_ID": self.boss}), \
+                patches[0], patches[1], patches[2], patches[3]:
+            self.mp.escalate(self.direct_namespace())
+        request = self.executions[-1][1]
+        self.mp.write_escalation_request_state(
+            self.mp.routing_escalations_root(), request, "committed"
+        )
+        advanced = b'{"advanced":true}\n'
+        Path(self.record["routing_path"]).write_bytes(advanced)
+        self.record["routing_sha256"] = hashlib.sha256(advanced).hexdigest()
+        self.executions.clear()
+
+        patches = self.patches()
+        with mock.patch.dict(os.environ, {"AGENT_ID": ""}), \
+                patches[0], patches[1], patches[2], patches[3]:
+            self.mp.escalate(
+                self.direct_namespace(
+                    request_id=request["requestId"],
+                    failure=None,
+                    summary=None,
+                    proof=[],
+                )
+            )
+
+        self.assertEqual(
+            self.executions[-1][1]["requestId"], request["requestId"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
