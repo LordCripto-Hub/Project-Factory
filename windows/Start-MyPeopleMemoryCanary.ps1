@@ -114,7 +114,7 @@ try {
     & docker volume create $volumeName *> $null
     Invoke-DockerWithSecretInput -Secret $token -Arguments @(
         'run','--rm','-i','--user','0:0','-v',"${volumeName}:/secrets",$Image,
-        'sh','-c','"umask 077; cat > /secrets/MYPEOPLE_MEMORY_CANARY_TOKEN; chown 1000:1000 /secrets/MYPEOPLE_MEMORY_CANARY_TOKEN"'
+        'sh','-c','"umask 077; tr -cd 0-9a-f > /secrets/MYPEOPLE_MEMORY_CANARY_TOKEN; test $(wc -c < /secrets/MYPEOPLE_MEMORY_CANARY_TOKEN) -eq 64; chown 1000:1000 /secrets/MYPEOPLE_MEMORY_CANARY_TOKEN"'
     )
 
     $env:MYPEOPLE_MEMORY_CANARY_IMAGE = $Image
@@ -128,7 +128,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare the ephemeral canary secret directory.' }
     Invoke-DockerWithSecretInput -Secret $token -Arguments @(
         'exec','-i',$Container,'sh','-c',
-        ('"umask 077; cat > {0}"' -f $secretPath)
+        ('"umask 077; tr -cd 0-9a-f > {0}; test $(wc -c < {0}) -eq 64"' -f $secretPath)
     )
 
     $deadline = (Get-Date).AddSeconds(60)
