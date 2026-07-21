@@ -3,6 +3,11 @@ from __future__ import annotations
 import cgi, copy, hashlib, http.client, http.cookies, http.server, io, json, mimetypes, os, pathlib, re, secrets, shutil, subprocess, threading, time
 import urllib.parse, urllib.request
 from mpcommon import *
+from memory_canary import (
+    MemoryCanaryError,
+    load_control as load_memory_canary_control,
+    receipt_projection as memory_canary_receipt_projection,
+)
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
@@ -257,6 +262,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_bytes(open(path,"rb").read(),200,mimetypes.guess_type(path)[0] or "application/octet-stream",head=head)
         if p=="/todo/board":
             b=load_board();o=copy.deepcopy(b);o["displayOrder"]=ordered_ids(b);o["boardPath"]=BOARD_PATH;o["projectSlugs"]=available_project_slugs();return self.json(o,head=head)
+        if p=="/todo/memory-canary":
+            task_id=urllib.parse.parse_qs(u.query).get("task_id",[""])[0]
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",task_id):
+                return self.json({"ok":False,"error":"invalid_task_id"},400,head=head)
+            try:
+                runtime_dir=os.path.realpath(os.path.join(ROOT,"run"))
+                control=load_memory_canary_control(runtime_dir)
+                attempt=memory_canary_receipt_projection(runtime_dir,task_id)
+            except MemoryCanaryError as error:
+                return self.json({"ok":False,"error":error.code},400,head=head)
+            return self.json({
+                "ok":True,
+                "control":{
+                    "enabled":control["enabled"],
+                    "allowedProjects":control["allowedProjects"],
+                    "revision":control["revision"],
+                },
+                "attempt":attempt,
+            },head=head)
         if p in ("/todo/attach","/todo/terminal","/terminal"):
             aid=urllib.parse.parse_qs(u.query).get("agent",[""])[0]
             try:

@@ -14,8 +14,11 @@ from mpcommon import *
 from memory_canary import (
     MemoryCanaryError,
     append_receipt as append_memory_canary_receipt,
+    complete_attempt as complete_memory_canary_attempt,
     compile_attempt as compile_memory_canary_attempt,
+    latest_receipt as latest_memory_canary_receipt,
     load_control as load_memory_canary_control,
+    provider_usage_snapshot as memory_canary_usage_snapshot,
     set_control as set_memory_canary_control,
 )
 from provider_profiles import (
@@ -562,6 +565,12 @@ def resolve_owner_runtime(ns, receipt_record=None):
         else:
             taskspec_path = compile_owner_task_spec(ns.owner_task)
         taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
+        receipt = latest_memory_canary_receipt(
+            os.path.realpath(os.path.join(ROOT, "run")),
+            ns.owner_task,
+        )
+        if isinstance(receipt, dict) and receipt.get("eventType") == "start":
+            taskspec_context["memory_canary_attempt_id"] = receipt.get("attemptId")
         return taskspec_path, taskspec_context, materialize_worker_contract()
     if receipt_record.get("owner_task_id") != ns.owner_task:
         raise SystemExit("taskspec_receipt_mismatch")
@@ -992,6 +1001,15 @@ def spawn(
                     resume_state="available",
                     last_recovery_error="",
                 )
+                if taskspec_context.get("memory_canary_attempt_id"):
+                    session_identity["memory_usage_path"] = discovered["path"]
+                    session_identity["memory_usage_before"] = (
+                        memory_canary_usage_snapshot(
+                            discovered["path"],
+                            "codex",
+                            discovered["session_id"],
+                        )
+                    )
             except SessionError as error:
                 session_identity.update(
                     session_id="",
@@ -1016,6 +1034,11 @@ def spawn(
     if taskspec_path:
         rec["taskspec_path"] = taskspec_path
         rec["taskspec_sha256"] = taskspec_context["taskspec_sha256"]
+        if taskspec_context.get("memory_canary_attempt_id"):
+            rec["memory_canary_attempt_id"] = taskspec_context[
+                "memory_canary_attempt_id"
+            ]
+            rec["memory_usage_before"] = {}
     if worker_contract:
         rec["role_contract_path"] = worker_contract["path"]
         rec["role_contract_sha256"] = worker_contract["sha256"]
@@ -1104,6 +1127,30 @@ def complete(ns):
     for url in urls:http_json("/todo/proof","POST",{"task_id":task_id,"kind":"link","url":url,"by":actor})
     for file_path in files:http_multipart("/todo/proof",{"task_id":task_id,"by":actor},file_path)
     http_json("/todo/status","POST",{"task_id":task_id,"state":"review","verified":False,"by":actor})
+    runtime_record=next((row for row in load_roster() if row.get("agent_id")==actor),{})
+    attempt_id=str(runtime_record.get("memory_canary_attempt_id") or "")
+    if attempt_id:
+        try:
+            usage_after=runtime_record.get("memory_usage_after") or {}
+            if not usage_after and runtime_record.get("memory_usage_path"):
+                usage_after=memory_canary_usage_snapshot(
+                    runtime_record["memory_usage_path"],
+                    runtime_record.get("backend"),
+                    runtime_record.get("session_id"),
+                )
+            complete_memory_canary_attempt(
+                os.path.realpath(os.path.join(ROOT,"run")),
+                attempt_id=attempt_id,
+                task_id=task_id,
+                runtime_record=runtime_record,
+                outcome="review",
+                evidence_count=len(evidence),
+                usage_before=runtime_record.get("memory_usage_before") or {},
+                usage_after=usage_after,
+                completed_at=time.time(),
+            )
+        except MemoryCanaryError as error:
+            print(f"warning: memory canary completion telemetry failed: {error.code}",file=sys.stderr)
     write_status(actor,"idle",summary,activity_event="worker_handoff")
     notify_agent(boss,f"[worker handoff] {task_id} is ready for review from {actor}: {summary}")
     print(f"{task_id} -> review")
@@ -1147,6 +1194,7 @@ def namespace_from_record(rec):
         model=rec.get("model") or None,
         owner_task=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else None,
         temporary=rec.get("lifecycle")=="temporary",
+        without_memory=False,
     )
 
 def validate_record_receipt(rec,path_field,digest_field,error_code):

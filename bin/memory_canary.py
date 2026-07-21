@@ -228,6 +228,7 @@ def compile_attempt(
     metadata = _memory_metadata(candidate)
     receipt = {
         "schemaVersion": 1,
+        "eventType": "start",
         "attemptId": secrets.token_hex(12),
         "taskId": str(task.get("id") or ""),
         "projectSlug": str(task.get("projectSlug") or ""),
@@ -340,3 +341,226 @@ def latest_receipt(runtime_dir, task_id):
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise MemoryCanaryError("canary_receipt_invalid") from error
     return latest
+
+
+def _usage_counter(snapshot, field):
+    if not isinstance(snapshot, dict):
+        return None
+    usage = snapshot.get("usage")
+    value = usage.get(field) if isinstance(usage, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def provider_usage_delta(before, after):
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return "not_measured"
+    provider = str(before.get("provider") or "").strip()
+    session_id = str(before.get("sessionId") or "").strip()
+    if (
+        not provider
+        or provider != str(after.get("provider") or "").strip()
+        or not session_id
+        or session_id != str(after.get("sessionId") or "").strip()
+    ):
+        return "not_measured"
+    result = {}
+    for field in ("inputTokens", "outputTokens"):
+        left = _usage_counter(before, field)
+        right = _usage_counter(after, field)
+        if left is None or right is None or right < left:
+            return "not_measured"
+        result[field] = right - left
+    return result
+
+
+def provider_usage_snapshot(path, provider, session_id):
+    provider = str(provider or "").strip()
+    session_id = str(session_id or "").strip()
+    candidate = Path(path)
+    if provider != "codex" or not session_id or candidate.is_symlink():
+        return {}
+    try:
+        if not candidate.is_file() or candidate.stat().st_size > 32 * 1024 * 1024:
+            return {}
+        last = None
+        with candidate.open("r", encoding="utf-8") as stream:
+            first = json.loads(stream.readline())
+            payload = first.get("payload") if isinstance(first, dict) else None
+            if (
+                first.get("type") != "session_meta"
+                or not isinstance(payload, dict)
+                or str(payload.get("id") or payload.get("session_id") or "") != session_id
+            ):
+                return {}
+            for line in stream:
+                event = json.loads(line)
+                event_payload = event.get("payload") if isinstance(event, dict) else None
+                if (
+                    event.get("type") != "event_msg"
+                    or not isinstance(event_payload, dict)
+                    or event_payload.get("type") != "token_count"
+                ):
+                    continue
+                info = event_payload.get("info")
+                total = info.get("total_token_usage") if isinstance(info, dict) else None
+                if not isinstance(total, dict):
+                    continue
+                input_tokens = total.get("input_tokens")
+                output_tokens = total.get("output_tokens")
+                if (
+                    isinstance(input_tokens, bool)
+                    or not isinstance(input_tokens, int)
+                    or input_tokens < 0
+                    or isinstance(output_tokens, bool)
+                    or not isinstance(output_tokens, int)
+                    or output_tokens < 0
+                ):
+                    continue
+                last = {
+                    "provider": provider,
+                    "sessionId": session_id,
+                    "usage": {
+                        "inputTokens": input_tokens,
+                        "outputTokens": output_tokens,
+                    },
+                }
+        return last or {}
+    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+        return {}
+
+
+def _attempt_start(runtime_dir, attempt_id, task_id):
+    path = Path(runtime_dir).resolve() / RECEIPT_NAME
+    if not path.exists() or path.is_symlink():
+        raise MemoryCanaryError("canary_receipt_invalid")
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                value = json.loads(line)
+                if (
+                    isinstance(value, dict)
+                    and value.get("eventType") == "start"
+                    and value.get("attemptId") == attempt_id
+                    and value.get("taskId") == task_id
+                ):
+                    return value
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise MemoryCanaryError("canary_receipt_invalid") from error
+    raise MemoryCanaryError("canary_attempt_missing")
+
+
+def _bounded_label(value, code, maximum=128):
+    clean = str(value or "").strip()
+    if (
+        not clean
+        or len(clean) > maximum
+        or any(ord(character) < 32 or ord(character) == 127 for character in clean)
+    ):
+        raise MemoryCanaryError(code)
+    return clean
+
+
+def complete_attempt(
+    runtime_dir,
+    *,
+    attempt_id,
+    task_id,
+    runtime_record,
+    outcome,
+    evidence_count,
+    usage_before,
+    usage_after,
+    completed_at,
+):
+    attempt_id = _bounded_label(attempt_id, "canary_attempt_invalid")
+    task_id = _bounded_label(task_id, "canary_task_invalid")
+    if not isinstance(runtime_record, dict):
+        raise MemoryCanaryError("canary_runtime_invalid")
+    start = _attempt_start(runtime_dir, attempt_id, task_id)
+    try:
+        completed = float(completed_at)
+        started = float(start["startedAt"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise MemoryCanaryError("canary_timing_invalid") from error
+    if not math.isfinite(completed) or not math.isfinite(started) or completed < started:
+        raise MemoryCanaryError("canary_timing_invalid")
+    if isinstance(evidence_count, bool) or not isinstance(evidence_count, int) or evidence_count < 0:
+        raise MemoryCanaryError("canary_evidence_invalid")
+    retry_count = runtime_record.get("recovery_attempts", 0)
+    if isinstance(retry_count, bool) or not isinstance(retry_count, int) or retry_count < 0:
+        retry_count = 0
+    backend = _bounded_label(
+        runtime_record.get("backend"), "canary_backend_invalid", maximum=32
+    )
+    event = {
+        "schemaVersion": 1,
+        "eventType": "completion",
+        "attemptId": attempt_id,
+        "taskId": task_id,
+        "completedAt": completed,
+        "durationMilliseconds": round((completed - started) * 1000),
+        "outcome": _bounded_label(outcome, "canary_outcome_invalid", maximum=32),
+        "evidenceCount": evidence_count,
+        "retryCount": retry_count,
+        "backend": backend,
+        "model": _bounded_label(
+            runtime_record.get("model") or "unavailable",
+            "canary_model_invalid",
+        ),
+        "providerProfile": _bounded_label(
+            runtime_record.get("provider_profile") or "unavailable",
+            "canary_profile_invalid",
+        ),
+        "sessionAlias": session_alias(backend, runtime_record.get("session_id")),
+        "providerUsage": provider_usage_delta(usage_before, usage_after),
+    }
+    append_receipt(runtime_dir, event)
+    return event
+
+
+def receipt_projection(runtime_dir, task_id):
+    path = Path(runtime_dir).resolve() / RECEIPT_NAME
+    if not path.exists():
+        return None
+    if path.is_symlink():
+        raise MemoryCanaryError("canary_receipt_invalid")
+    task_id = _bounded_label(task_id, "canary_task_invalid")
+    starts = {}
+    completions = {}
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                value = json.loads(line)
+                if not isinstance(value, dict) or value.get("taskId") != task_id:
+                    continue
+                attempt_id = str(value.get("attemptId") or "")
+                if value.get("eventType") == "start":
+                    starts[attempt_id] = value
+                elif value.get("eventType") == "completion":
+                    completions[attempt_id] = value
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise MemoryCanaryError("canary_receipt_invalid") from error
+    if not starts:
+        return None
+    start = max(starts.values(), key=lambda row: float(row.get("startedAt") or 0))
+    completion = completions.get(start["attemptId"])
+    allowed_start = {
+        "attemptId", "taskId", "projectSlug", "controlRevision",
+        "profileRevision", "memoryStatus", "returnedClaimCount",
+        "embeddedClaimCount", "retrievalLatencyMs", "baselineCharacters",
+        "candidateCharacters", "memoryDeltaCharacters",
+        "memoryDeltaTokensEstimated", "memoryProviderUsage", "startedAt",
+    }
+    projection = {key: start[key] for key in allowed_start if key in start}
+    if completion:
+        allowed_completion = {
+            "completedAt", "durationMilliseconds", "outcome", "evidenceCount",
+            "retryCount", "backend", "model", "providerProfile",
+            "sessionAlias", "providerUsage",
+        }
+        projection.update(
+            {key: completion[key] for key in allowed_completion if key in completion}
+        )
+    return projection
