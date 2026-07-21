@@ -26,6 +26,13 @@ def validate_context_question(value):
     if len(value)>500:raise ValueError("context_question_too_long")
     return value
 
+def validate_memory_canary(value,project_slug,context_question):
+    if not isinstance(value,bool):raise ValueError("invalid_memory_canary")
+    if not value:return False
+    if project_slug!="project-factory":raise ValueError("memory_canary_requires_project_factory")
+    if not context_question:raise ValueError("memory_canary_requires_question")
+    return True
+
 def available_project_slugs():
     directory=pathlib.Path(PROJECT_PROFILES_DIR)
     if not directory.is_dir():return []
@@ -43,7 +50,7 @@ def blank_board():return default_board()
 def owner_event(action,agent_id="",previous="",by="system"):
     return {"id":secrets.token_hex(6),"action":action,"kind":action,"agent_id":agent_id,"previous":previous,"by":by,"ts":time.time()}
 def normalize_task(t):
-    defaults={"text":"","state":"needs_brainstorm","assignee":"","doneCondition":"","projectSlug":"","contextQuestion":"","evidencePolicy":"optional","workToDone":False,"comments":[],"proofs":[],"unread":0,"verified":False,"pingsToBoss":0,"pinned":False,"pinRank":None,"test":False,"ownerHistory":[],"ownerNeedsReplacement":False,"updated":time.time()}
+    defaults={"text":"","state":"needs_brainstorm","assignee":"","doneCondition":"","projectSlug":"","contextQuestion":"","memoryCanary":False,"evidencePolicy":"optional","workToDone":False,"comments":[],"proofs":[],"unread":0,"verified":False,"pingsToBoss":0,"pinned":False,"pinRank":None,"test":False,"ownerHistory":[],"ownerNeedsReplacement":False,"updated":time.time()}
     for k,v in defaults.items():
         if k not in t or t[k] is None:t[k]=copy.deepcopy(v)
     if t.get("evidencePolicy") not in ("required","optional"):t["evidencePolicy"]="optional"
@@ -298,6 +305,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def update(self,kind,d):
         op=d.get("op")
         if any(k in d for k in ("parent","dependsOn","hardGate")) or op=="reorder":return self.json({"ok":False,"error":"unsupported_removed_feature"},400)
+        if "memoryCanary" in d and kind not in ("browser","machine"):return self.json({"ok":False,"error":"memory_canary_control_forbidden"},403)
         if kind=="nightwatch" and op=="add":
             token=d.get("token","");item=TOKENS.get(token)
             if not item or item["used"] or item["expires"]<time.time() or item["text"]!=d.get("text",""):return self.json({"ok":False,"error":"nightwatch_cannot_create"},403)
@@ -315,7 +323,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 title=str(d.get("text","")).strip();is_test=bool(d.get("test"));policy=d.get("evidencePolicy","optional" if is_test else "required")
                 if not title:return self.json({"ok":False,"error":"text_required"},400)
                 if policy not in ("required","optional"):return self.json({"ok":False,"error":"invalid_evidence_policy"},400)
-                tid=secrets.token_hex(8);t=normalize_task({"id":tid,"text":title,"state":"needs_brainstorm","projectSlug":project_slug,"contextQuestion":context_question,"evidencePolicy":policy,"test":is_test,"created":time.time(),"updated":time.time()});b["tasks"][tid]=t;b["order"].insert(0,tid)
+                try:memory_canary=validate_memory_canary(d.get("memoryCanary",False),project_slug,context_question)
+                except ValueError as e:return self.json({"ok":False,"error":str(e)},400)
+                tid=secrets.token_hex(8);t=normalize_task({"id":tid,"text":title,"state":"needs_brainstorm","projectSlug":project_slug,"contextQuestion":context_question,"memoryCanary":memory_canary,"evidencePolicy":policy,"test":is_test,"created":time.time(),"updated":time.time()});b["tasks"][tid]=t;b["order"].insert(0,tid)
                 if not t["test"]:fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": added",d.get("by",d.get("actor","CEO")))
             elif tid not in b["tasks"]:return self.json({"ok":False,"error":"unknown_task"},404)
             elif op=="del":b["tasks"].pop(tid);b["order"]=[x for x in b["order"] if x!=tid]
@@ -334,11 +344,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 verified=transition_verified(old,desired,d.get("verified"),t.get("verified",False))
                 probe={**t,"evidencePolicy":policy};err=done_transition_error(probe,desired,verified)
                 if err:return self.json({"ok":False,"error":err},409)
+                next_project=project_slug if project_slug is not None else t.get("projectSlug","")
+                next_question=context_question if context_question is not None else t.get("contextQuestion","")
+                next_memory=d.get("memoryCanary",t.get("memoryCanary",False))
+                try:next_memory=validate_memory_canary(next_memory,next_project,next_question)
+                except ValueError as e:return self.json({"ok":False,"error":str(e)},400)
                 t["state"]=desired;t["evidencePolicy"]=policy
                 for k in ("text","doneCondition","workToDone"):
                     if k in d:t[k]=d[k]
                 if project_slug is not None:t["projectSlug"]=project_slug
                 if context_question is not None:t["contextQuestion"]=context_question
+                t["memoryCanary"]=next_memory
                 t["verified"]=verified
                 t["updated"]=time.time();self.close_reopen(t,old,desired,d.get("by",d.get("actor","")))
                 if old!=desired and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {desired}",d.get("by",d.get("actor","")))
