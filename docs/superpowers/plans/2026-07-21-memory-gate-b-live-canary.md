@@ -20,7 +20,7 @@
 - Modify `memory-gateway/memory-gateway.mjs`: accept HTTP only when it exactly matches the process-provided canary URL.
 - Create `experiments/memory-gate-b/docker/compose.live-canary.yml`: run the sidecar on an internal-only network with the locked dataset.
 - Create `experiments/memory-gate-b/docker/live-canary-entrypoint.sh`: fail-closed sidecar entrypoint and health receipt.
-- Modify `experiments/memory-gate-b/docker/taskspec-memory-server.mjs`: parameterize bind host/port while preserving isolated-fixture defaults.
+- Modify `experiments/memory-gate-b/docker/taskspec-memory-server.mjs`: parameterize bind host/port/protocol while preserving isolated HTTPS defaults and permitting HTTP only for the marked internal live canary.
 - Create `windows/Start-MyPeopleMemoryCanary.ps1`: bounded sidecar/network/token activation and cleanup.
 - Create focused tests under `verify/` and register them in `verify/run-suite.sh`.
 - Modify `README.md` and `docs/USER-MANUAL.md`: document opt-in, metrics, limitation, and rollback.
@@ -393,13 +393,21 @@ Use environment values with closed defaults:
 ```javascript
 const host = process.env.MYPEOPLE_GATE_B_HOST || '127.0.0.1';
 const port = Number(process.env.MYPEOPLE_GATE_B_PORT || '18443');
-if (!['127.0.0.1', '0.0.0.0'].includes(host) || !Number.isInteger(port)) {
+const liveCanary = process.env.MYPEOPLE_GATE_B_LIVE_CANARY === '1';
+if (
+  !Number.isInteger(port) ||
+  (!liveCanary && host !== '127.0.0.1') ||
+  (liveCanary && host !== '0.0.0.0')
+) {
   throw new Error('gate_b_configuration_invalid');
 }
 ```
 
-The live entrypoint binds `0.0.0.0` only on the internal Docker network and
-uses the same locked recall command and server-side bounds.
+Import both Node HTTP and HTTPS server constructors. The isolated fixture keeps
+its generated TLS key/certificate and HTTPS listener. The live entrypoint sets
+the explicit marker, binds a plain HTTP listener to `0.0.0.0` only on the
+internal Docker network, and refuses TLS paths in that mode. Both modes use the
+same bearer check, locked recall command, and server-side bounds.
 
 - [ ] **Step 4: Permit only the exact internal canary URL**
 
@@ -590,16 +598,18 @@ candidate:
 powershell -NoProfile -ExecutionPolicy Bypass -File windows\Upgrade-MyPeopleDockerImage.ps1 -CandidateImage $candidateImage
 ```
 
-Expected: the launcher preserves board and stable-roster hashes, rehydrates
-provider sessions, records rollback evidence, and returns exit 0. If it fails,
-stop and use its own rollback evidence; do not copy files into the live
-container manually.
+Expected: before mutation the launcher creates its protected timestamped backup
+under `%LOCALAPPDATA%\MyPeople\backups\docker-upgrade`; it then preserves
+board and stable-roster hashes, rehydrates provider sessions, records rollback
+evidence, and returns exit 0. If it fails, stop and use its own rollback
+evidence; do not copy files into the live container manually.
 
-- [ ] **Step 5: Back up only changed runtime paths and durable metadata**
+- [ ] **Step 5: Verify the transactional backup**
 
-Create a timestamped backup under `C:\tmp` containing hashes and the files that
-will be replaced. Do not copy provider credentials, transcripts, recordings,
-or private TaskSpec contents into Git.
+Read the upgrade receipt and confirm the protected backup exists, its manifest
+hashes validate, and it excludes provider credentials, transcripts, recordings,
+and private TaskSpec contents. Do not create a second ad hoc backup or copy any
+private backup material into Git.
 
 - [ ] **Step 6: Activate the local sidecar and one synthetic card**
 
