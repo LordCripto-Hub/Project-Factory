@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import secrets
 import time
 
 
@@ -19,6 +20,8 @@ CONTROL_FIELDS = {
     "updatedAt",
 }
 ALLOWED_PROJECT = "project-factory"
+RECEIPT_NAME = "memory-canary-events.jsonl"
+MAX_RECEIPT_BYTES = 16_384
 DEFAULT_CONTROL = {
     "schemaVersion": 1,
     "enabled": False,
@@ -156,3 +159,184 @@ def assert_task_allowed(task, control):
         raise MemoryCanaryError("canary_project_denied")
     if not str(task.get("contextQuestion") or "").strip():
         raise MemoryCanaryError("canary_question_required")
+
+
+def canonical_char_count(document):
+    return len(
+        json.dumps(
+            document,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def session_alias(backend, session_id):
+    clean = str(session_id or "").strip()
+    return f"{backend}:{clean[-8:]}" if clean else "unavailable"
+
+
+def _memory_metadata(spec):
+    metadata = getattr(spec, "memory_metadata", {})
+    claims = spec.get("memoryClaims") if isinstance(spec, dict) else []
+    count = len(claims) if isinstance(claims, list) else 0
+    return {
+        "returnedClaimCount": metadata.get("returnedClaimCount", count),
+        "embeddedClaimCount": metadata.get("embeddedClaimCount", count),
+        "memoryProviderUsage": metadata.get("aiUsage", "not_measured"),
+    }
+
+
+def compile_attempt(
+    *,
+    task,
+    profile,
+    control,
+    compile_spec,
+    recall,
+    bypass=False,
+    now=time.time,
+):
+    if not isinstance(task, dict) or not isinstance(profile, dict):
+        raise MemoryCanaryError("canary_contract_invalid")
+    requested = task.get("memoryCanary") is True
+    if requested and not bypass:
+        assert_task_allowed(task, control)
+    baseline_profile = copy.deepcopy(profile)
+    memory = baseline_profile.get("memory")
+    if not isinstance(memory, dict):
+        raise MemoryCanaryError("canary_contract_invalid")
+    memory["enabled"] = False
+    baseline = compile_spec(
+        task,
+        baseline_profile,
+        recall=lambda _request: (_ for _ in ()).throw(
+            MemoryCanaryError("canary_baseline_recall_forbidden")
+        ),
+        now=now,
+    )
+    if bypass or not requested:
+        candidate = baseline
+        status = "rolled_back" if bypass else "not_requested"
+    else:
+        candidate = compile_spec(task, profile, recall=recall, now=now)
+        status = candidate.get("memoryStatus", "error")
+    baseline_chars = canonical_char_count(baseline)
+    candidate_chars = canonical_char_count(candidate)
+    delta = max(0, candidate_chars - baseline_chars)
+    metadata = _memory_metadata(candidate)
+    receipt = {
+        "schemaVersion": 1,
+        "attemptId": secrets.token_hex(12),
+        "taskId": str(task.get("id") or ""),
+        "projectSlug": str(task.get("projectSlug") or ""),
+        "controlRevision": control.get("revision") if isinstance(control, dict) else None,
+        "profileRevision": profile.get("revision"),
+        "memoryStatus": status,
+        "returnedClaimCount": (
+            metadata["returnedClaimCount"] if requested and not bypass else 0
+        ),
+        "embeddedClaimCount": (
+            metadata["embeddedClaimCount"] if requested and not bypass else 0
+        ),
+        "retrievalLatencyMs": "not_measured",
+        "baselineCharacters": baseline_chars,
+        "candidateCharacters": candidate_chars,
+        "memoryDeltaCharacters": delta,
+        "memoryDeltaTokensEstimated": (delta + 3) // 4,
+        "memoryProviderUsage": (
+            metadata["memoryProviderUsage"]
+            if requested and not bypass
+            else "not_measured"
+        ),
+        "startedAt": now(),
+        "outcome": "pending",
+    }
+    return {"baseline": baseline, "candidate": candidate, "receipt": receipt}
+
+
+def _receipt_has_forbidden_content(value):
+    forbidden = {
+        "question",
+        "contextquestion",
+        "memoryclaims",
+        "claimtext",
+        "content",
+        "token",
+        "secret",
+        "credential",
+        "transcript",
+        "reasoning",
+    }
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).replace("_", "").lower()
+            if normalized in forbidden or any(
+                word in normalized
+                for word in ("password", "apikey", "authorization")
+            ):
+                return True
+            if _receipt_has_forbidden_content(child):
+                return True
+    elif isinstance(value, list):
+        return any(_receipt_has_forbidden_content(child) for child in value)
+    return False
+
+
+def append_receipt(runtime_dir, event):
+    if (
+        not isinstance(event, dict)
+        or not str(event.get("attemptId") or "").strip()
+        or not str(event.get("taskId") or "").strip()
+        or _receipt_has_forbidden_content(event)
+    ):
+        raise MemoryCanaryError("canary_receipt_content_forbidden")
+    try:
+        encoded = (
+            json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise MemoryCanaryError("canary_receipt_invalid") from error
+    if len(encoded) > MAX_RECEIPT_BYTES:
+        raise MemoryCanaryError("canary_receipt_invalid")
+    root = Path(runtime_dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / RECEIPT_NAME
+    if path.is_symlink():
+        raise MemoryCanaryError("canary_receipt_invalid")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(os.fspath(path), flags, 0o600)
+        with os.fdopen(descriptor, "ab") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(path, 0o600)
+    except OSError as error:
+        raise MemoryCanaryError("canary_receipt_write_failed") from error
+
+
+def latest_receipt(runtime_dir, task_id):
+    path = Path(runtime_dir).resolve() / RECEIPT_NAME
+    if not path.exists():
+        return None
+    if path.is_symlink():
+        raise MemoryCanaryError("canary_receipt_invalid")
+    task_id = str(task_id or "").strip()
+    latest = None
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                if len(line.encode("utf-8")) > MAX_RECEIPT_BYTES:
+                    raise MemoryCanaryError("canary_receipt_invalid")
+                value = json.loads(line)
+                if isinstance(value, dict) and value.get("taskId") == task_id:
+                    latest = value
+    except MemoryCanaryError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise MemoryCanaryError("canary_receipt_invalid") from error
+    return latest

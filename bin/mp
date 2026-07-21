@@ -13,6 +13,8 @@ from agent_session import (
 from mpcommon import *
 from memory_canary import (
     MemoryCanaryError,
+    append_receipt as append_memory_canary_receipt,
+    compile_attempt as compile_memory_canary_attempt,
     load_control as load_memory_canary_control,
     set_control as set_memory_canary_control,
 )
@@ -65,7 +67,7 @@ def record_taskspec_event(event):
     os.chmod(events_path, 0o600)
 
 
-def compile_owner_task_spec(task_id):
+def compile_owner_task_spec(task_id, *, bypass_memory=False):
     started = time.monotonic()
     slug = ""
     profile_revision = None
@@ -92,18 +94,38 @@ def compile_owner_task_spec(task_id):
         )
         profile = load_profile(profiles_dir, slug)
         profile_revision = profile.get("revision")
+        canary_requested = task.get("memoryCanary") is True
+        if bypass_memory and not canary_requested:
+            raise TaskSpecError("canary_not_requested")
         if (
             str(task.get("contextQuestion") or "").strip()
             and profile.get("memory", {}).get("enabled") is True
         ):
             requested_claim_count = profile.get("limits", {}).get("memoryTopK", 0)
-        spec = compile_task_spec(task, profile)
+        if canary_requested:
+            runtime_dir = os.path.realpath(os.path.join(ROOT, "run"))
+            control = load_memory_canary_control(runtime_dir)
+            try:
+                attempt = compile_memory_canary_attempt(
+                    task=task,
+                    profile=profile,
+                    control=control,
+                    compile_spec=compile_task_spec,
+                    recall=None,
+                    bypass=bypass_memory,
+                )
+                spec = attempt["candidate"]
+                append_memory_canary_receipt(runtime_dir, attempt["receipt"])
+            except MemoryCanaryError as error:
+                raise TaskSpecError(error.code) from error
+        else:
+            spec = compile_task_spec(task, profile)
         taskspecs_dir = os.path.realpath(
             ENV.get("TASKSPECS_DIR", os.path.join(ROOT, "run", "taskspecs"))
         )
         stage = "write"
         taskspec_path = write_task_spec(taskspecs_dir, task_id, spec)
-    except (ProfileError, TaskSpecError) as error:
+    except (ProfileError, TaskSpecError, MemoryCanaryError) as error:
         code = error.code
         record_taskspec_event({
             "taskId": task_id,
@@ -119,7 +141,7 @@ def compile_owner_task_spec(task_id):
             "responseCharacters": 0,
             "aiUsage": "not_measured",
         })
-        if isinstance(error, ProfileError):
+        if isinstance(error, (ProfileError, MemoryCanaryError)):
             raise TaskSpecError(code) from error
         raise
     except (RuntimeError, OSError, json.JSONDecodeError) as error:
@@ -532,7 +554,13 @@ def resolve_owner_runtime(ns, receipt_record=None):
     if not ns.owner_task:
         return "", {}, None
     if receipt_record is None:
-        taskspec_path = compile_owner_task_spec(ns.owner_task)
+        if getattr(ns, "without_memory", False):
+            taskspec_path = compile_owner_task_spec(
+                ns.owner_task,
+                bypass_memory=True,
+            )
+        else:
+            taskspec_path = compile_owner_task_spec(ns.owner_task)
         taskspec_context = resolve_owner_task_context(taskspec_path, ns.cwd)
         return taskspec_path, taskspec_context, materialize_worker_contract()
     if receipt_record.get("owner_task_id") != ns.owner_task:
@@ -723,6 +751,8 @@ def spawn(
     if raw_boss is not None and not raw_boss.strip(): raise SystemExit("empty --boss is invalid; omit --boss for a top-level agent")
     if (ns.owner_task or ns.temporary) and raw_boss is None: raise SystemExit("--owner-task/--temporary require --boss")
     if ns.owner_task and ns.temporary: raise SystemExit("--owner-task and --temporary are mutually exclusive")
+    if getattr(ns, "without_memory", False) and not ns.owner_task:
+        raise SystemExit("--without-memory requires --owner-task")
     aid = full_agent_id(ns.agent_id); host, session, tab = parse_agent_id(aid)
     if host != ENV.get("HOST_ID"):
         model = ns.model if ns.model is not None else (
@@ -733,7 +763,8 @@ def spawn(
             else DEFAULT_ENG_MODEL
         )
         payload={"backend":ns.backend,"cwd":ns.cwd,"boss":raw_boss,"is_master":ns.master,"model":model,
-                 "owner_task_id":ns.owner_task or "","temporary":ns.temporary}
+                 "owner_task_id":ns.owner_task or "","temporary":ns.temporary,
+                 "without_memory":bool(getattr(ns,"without_memory",False))}
         result=http_json("/task/submit","POST",{"type":"spawn","target_agent":aid,"payload":payload})
         print(result["task_id"]); return
     boss = full_agent_id(raw_boss) if raw_boss is not None else ""
@@ -976,6 +1007,7 @@ def spawn(
     if ns.master:audit += ["--master"]
     if model:audit += ["--model",model]
     if ns.owner_task:audit += ["--owner-task",ns.owner_task]
+    if getattr(ns,"without_memory",False):audit += ["--without-memory"]
     if ns.temporary:audit += ["--temporary"]
     rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"state":"alive",
          "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
@@ -1496,7 +1528,7 @@ def memory_canary_command(ns):
 
 def parser():
     p=argparse.ArgumentParser(prog="mp"); sub=p.add_subparsers(dest="verb",required=True)
-    q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="claude",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.set_defaults(fn=spawn)
+    q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="claude",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.add_argument("--without-memory",action="store_true");q.set_defaults(fn=spawn)
     q=sub.add_parser("send");q.add_argument("agent_id");q.add_argument("message",nargs="+");q.set_defaults(fn=send)
     q=sub.add_parser("complete");q.add_argument("summary",nargs="+");q.add_argument("--proof",action="append",default=[]);q.add_argument("--proof-file",action="append",default=[]);q.add_argument("--proof-url",action="append",default=[]);q.set_defaults(fn=complete)
     q=sub.add_parser("peek");q.add_argument("agent_id");q.set_defaults(fn=peek)

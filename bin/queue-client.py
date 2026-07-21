@@ -99,6 +99,7 @@ def execute(task):
             model=DEFAULT_ENG_MODEL
         if model:argv += ["--model",model]
         if p.get("owner_task_id"):argv += ["--owner-task",p["owner_task_id"]]
+        if p.get("without_memory"):argv += ["--without-memory"]
         elif p.get("temporary"):argv += ["--temporary"]
         x=subprocess.run(argv,capture_output=True,text=True,timeout=60);return x.returncode==0,x.stdout+x.stderr
     return False,"unknown type"
