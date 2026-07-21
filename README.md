@@ -217,6 +217,12 @@ contract.
 - [Minimal architecture](docs/MINIMAL-ARCHITECTURE.md)
 - [Upstream MyPeople implementation review](docs/UPSTREAM-MYPEOPLE-REVIEW.md)
 
+## Experimental memory evaluation
+
+[`experiments/memory-gate-b/`](experiments/memory-gate-b/) contains the
+provider-neutral, read-only TaskSpec memory Gate B. It is reproducible evidence
+and is not installed or enabled by default.
+
 ## Safe full verification
 
 The full suite runs only in a disposable, credential-free container. It never

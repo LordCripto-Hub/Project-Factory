@@ -1,0 +1,123 @@
+{
+  "actual_provider_tokens": "not_measured",
+  "cases": {
+    "baseline": {
+      "claim_count": 0,
+      "claims": [],
+      "estimated_tokens": 177,
+      "estimated_tokens_formula": "ceil(canonical_json_characters/4)",
+      "memory_metrics": {
+        "aiUsage": "not_measured",
+        "embeddedClaimCount": 0,
+        "requestedClaimCount": 0,
+        "responseCharacters": 0,
+        "returnedClaimCount": 0
+      },
+      "memory_status": "disabled",
+      "task_spec_chars": 707
+    },
+    "irrelevant": {
+      "claim_count": 0,
+      "claims": [],
+      "estimated_tokens": 167,
+      "estimated_tokens_formula": "ceil(canonical_json_characters/4)",
+      "memory_metrics": {
+        "aiUsage": "not_measured",
+        "embeddedClaimCount": 0,
+        "requestedClaimCount": 3,
+        "responseCharacters": 0,
+        "returnedClaimCount": 0
+      },
+      "memory_status": "ok",
+      "task_spec_chars": 665
+    },
+    "no_question": {
+      "claim_count": 0,
+      "claims": [],
+      "estimated_tokens": 164,
+      "estimated_tokens_formula": "ceil(canonical_json_characters/4)",
+      "memory_metrics": {
+        "aiUsage": "not_measured",
+        "embeddedClaimCount": 0,
+        "requestedClaimCount": 0,
+        "responseCharacters": 0,
+        "returnedClaimCount": 0
+      },
+      "memory_status": "not_requested",
+      "task_spec_chars": 654
+    },
+    "relevant": {
+      "claim_count": 3,
+      "claims": [
+        {
+          "content": "64927751185b Document bounded external memory MCP pilot",
+          "id": "commit-64927751185b",
+          "projectSlug": "project-factory",
+          "sourceType": "commit",
+          "sourceUri": "git+repo://LordCripto-Hub/Project-Factory@64927751185b16fefdca9254a1dc2d7653ff6614#commit",
+          "status": "canonical"
+        },
+        {
+          "content": "5456b099a43a feat: require explicit handoffs for provider changes",
+          "id": "commit-5456b099a43a",
+          "projectSlug": "project-factory",
+          "sourceType": "commit",
+          "sourceUri": "git+repo://LordCripto-Hub/Project-Factory@5456b099a43aa42551902b7439447f73d1430845#commit",
+          "status": "canonical"
+        },
+        {
+          "content": "docs/superpowers/specs/2026-07-14-bounded-memory-mcp-pilot-design.md changed by 64927751185b",
+          "id": "file-64927751185b-001",
+          "projectSlug": "project-factory",
+          "sourceType": "file_change",
+          "sourceUri": "git+repo://LordCripto-Hub/Project-Factory@64927751185b16fefdca9254a1dc2d7653ff6614#path=docs/superpowers/specs/2026-07-14-bounded-memory-mcp-pilot-design.md",
+          "status": "canonical"
+        }
+      ],
+      "estimated_tokens": 413,
+      "estimated_tokens_formula": "ceil(canonical_json_characters/4)",
+      "memory_metrics": {
+        "aiUsage": "not_measured",
+        "embeddedClaimCount": 3,
+        "requestedClaimCount": 3,
+        "responseCharacters": 212,
+        "returnedClaimCount": 3
+      },
+      "memory_status": "ok",
+      "task_spec_chars": 1649
+    }
+  },
+  "compiler_contract": {
+    "context_chars": 6000,
+    "gateway": "image://mypeople/memory-gateway/memory-gateway.mjs",
+    "hops": 0,
+    "module": "image://mypeople/bin/project_context.py",
+    "server_url": "https://127.0.0.1:18443/mcp",
+    "top_k": 3
+  },
+  "dataset": {
+    "name": "project-factory-history-80dce6f86632",
+    "repo_slug": "LordCripto-Hub/Project-Factory",
+    "source_sha": "80dce6f866329b79061bb1ed6b0594f9fdf2dd45"
+  },
+  "gateway_request_count": 2,
+  "logical_digest": "3b86e98ba0769df51bff21cb4fb63a8b52982d2526f828a20d566f47647c6277",
+  "memory_delta": {
+    "characters": 942,
+    "estimated_tokens": 236
+  },
+  "promotion_gates": {
+    "context_budget": true,
+    "irrelevant_empty": true,
+    "irrelevant_single_recall": true,
+    "local_contract_preserved": true,
+    "no_question_no_recall": true,
+    "no_question_status": true,
+    "provider_tokens_not_measured": true,
+    "relevant_bounded_claims": true,
+    "relevant_gold_hit": true,
+    "relevant_grounded": true,
+    "relevant_single_recall": true
+  },
+  "schema_version": 1
+}
