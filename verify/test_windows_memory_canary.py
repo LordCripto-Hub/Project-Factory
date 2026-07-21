@@ -15,13 +15,31 @@ class WindowsMemoryCanaryContract(unittest.TestCase):
             "docker compose",
             "docker network connect",
             "docker network disconnect",
-            "/run/mypeople-secrets/MYPEOPLE_MEMORY_CANARY_TOKEN",
+            "/run/mypeople-secrets",
             "finally",
+            "Set-ComposeParseDefaults",
+            "memory-canary-cleanup-only",
+            "Memory Gate B cleanup incomplete:",
+            "$failures.Add('runtime-control')",
+            "$failures.Add('project-profile')",
+            "$failures.Add('main-container-token')",
+            "$failures.Add('network-disconnect')",
+            "$failures.Add('compose-resources')",
+            "RandomNumberGenerator]::Create()",
+            ".GetBytes($tokenBytes)",
+            "[BitConverter]::ToString($tokenBytes)",
+            "'--user','0:0'",
+            "chown 1000:1000",
+            "docker exec --user 0:0",
+            "mkdir -p $secretDirectory",
         ):
             self.assertIn(marker, text)
         self.assertNotIn("Write-Output $token", text)
         self.assertNotIn("Write-Host $token", text)
         self.assertNotIn("docker restart mypeople", text)
+        self.assertNotIn("RandomNumberGenerator]::Fill", text)
+        self.assertNotIn("[Convert]::ToHexString", text)
+        self.assertNotIn("finally { Write-Output 'Memory Gate B canary disabled.' }", text)
 
 
 if __name__ == "__main__":

@@ -92,10 +92,10 @@ class PublicRepositoryContract(unittest.TestCase):
         )
         self.assertIn("Test-MyPeopleMemoryPilot.ps1", manual)
         self.assertIn("disposable agent-free container", manual)
-        self.assertIn("Persistent memory activation is blocked", manual)
+        self.assertIn("Hosted persistent-memory activation remains blocked", manual)
         self.assertIn("same Linux user", manual)
 
-    def test_memory_gate_b_is_provider_neutral_and_not_activated(self):
+    def test_memory_gate_b_is_provider_neutral_and_opt_in_only(self):
         readme_path = ROOT / "experiments" / "memory-gate-b" / "README.md"
         self.assertTrue(readme_path.is_file(), readme_path)
         readme = readme_path.read_text(encoding="utf-8")
@@ -103,8 +103,24 @@ class PublicRepositoryContract(unittest.TestCase):
         root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("provider-neutral", readme)
         self.assertIn("not installed or enabled", root_readme)
-        self.assertIn("not production memory", normalized)
+        self.assertIn("not general production memory", normalized)
         self.assertIn("not dependencies of this experiment", normalized)
+
+    def test_local_canary_operation_and_limits_are_public(self):
+        root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(encoding="utf-8")
+        combined = " ".join((root_readme + "\n" + manual).split())
+        for marker in (
+            "Start-MyPeopleMemoryCanary.ps1 -Action Enable",
+            "Start-MyPeopleMemoryCanary.ps1 -Action Status",
+            "Start-MyPeopleMemoryCanary.ps1 -Action Disable",
+            "Use Memory Gate B canary for this task",
+            "Retry without memory",
+            "not a private-memory",
+            "does not contact Cloudflare",
+            "not statistical proof",
+        ):
+            self.assertIn(marker, combined)
 
     def test_launcher_degraded_mode_is_public(self):
         for path in (ROOT / "README.md", ROOT / "docs" / "USER-MANUAL.md"):

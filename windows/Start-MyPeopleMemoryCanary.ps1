@@ -12,9 +12,22 @@ $ErrorActionPreference = 'Stop'
 $projectName = 'memory-gate-b-live-canary'
 $networkName = 'mypeople-memory-canary-internal'
 $volumeName = 'mypeople-memory-canary-secret'
-$secretPath = '/run/mypeople-secrets/MYPEOPLE_MEMORY_CANARY_TOKEN'
+$secretDirectory = '/run/mypeople-secrets'
+$secretPath = "$secretDirectory/MYPEOPLE_MEMORY_CANARY_TOKEN"
 $serverUrl = 'http://memory-gate-b:18443/mcp'
 $composePath = Join-Path $PSScriptRoot '..\experiments\memory-gate-b\docker\compose.live-canary.yml'
+
+function Set-ComposeParseDefaults {
+    if ([string]::IsNullOrWhiteSpace($env:MYPEOPLE_MEMORY_CANARY_IMAGE)) {
+        $env:MYPEOPLE_MEMORY_CANARY_IMAGE = 'memory-canary-cleanup-only'
+    }
+    if ([string]::IsNullOrWhiteSpace($env:MYPEOPLE_MEMORY_CANARY_SOURCE)) {
+        $env:MYPEOPLE_MEMORY_CANARY_SOURCE = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\experiments\memory-gate-b'))
+    }
+    if ([string]::IsNullOrWhiteSpace($env:MYPEOPLE_MEMORY_CANARY_DATASET)) {
+        $env:MYPEOPLE_MEMORY_CANARY_DATASET = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632'))
+    }
+}
 
 function Invoke-DockerWithSecretInput {
     param([Parameter(Mandatory)][string[]]$Arguments, [Parameter(Mandatory)][string]$Secret)
@@ -38,20 +51,42 @@ function Invoke-DockerWithSecretInput {
 }
 
 function Disable-Canary {
-    & docker exec $Container /home/mp/mypeople/bin/mp memory-canary disable *> $null
-    & docker exec $Container /home/mp/mypeople/bin/memory-profile disable --project project-factory *> $null
-    & docker exec $Container sh -c "rm -f $secretPath" *> $null
-    & docker network disconnect $networkName $Container *> $null
-    & docker compose --project-name $projectName -f $composePath down --volumes *> $null
+    Set-ComposeParseDefaults
+    $failures = [Collections.Generic.List[string]]::new()
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & docker inspect $Container *> $null
+        $containerExists = $LASTEXITCODE -eq 0
+        if ($containerExists) {
+            & docker exec $Container /home/mp/mypeople/bin/mp memory-canary disable *> $null
+            if ($LASTEXITCODE -ne 0) { $failures.Add('runtime-control') }
+            $profileOutput = (& docker exec $Container /home/mp/mypeople/bin/memory-profile disable --project project-factory 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0 -and $profileOutput -notmatch 'profile_not_found') { $failures.Add('project-profile') }
+            & docker exec --user 0:0 $Container sh -c "rm -rf $secretDirectory" *> $null
+            if ($LASTEXITCODE -ne 0) { $failures.Add('main-container-token') }
+            $networkOutput = (& docker network disconnect $networkName $Container 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0 -and $networkOutput -notmatch 'not connected|not found|No such') { $failures.Add('network-disconnect') }
+        }
+        & docker compose --project-name $projectName -f $composePath down --volumes *> $null
+        if ($LASTEXITCODE -ne 0) { $failures.Add('compose-resources') }
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($failures.Count -gt 0) {
+        throw "Memory Gate B cleanup incomplete: $($failures -join ', ')."
+    }
 }
 
 if ($Action -eq 'Status') {
+    Set-ComposeParseDefaults
     & docker inspect $Container --format '{{.State.Status}}'
     & docker compose --project-name $projectName -f $composePath ps
     exit $LASTEXITCODE
 }
 if ($Action -eq 'Disable') {
-    try { Disable-Canary } finally { Write-Output 'Memory Gate B canary disabled.' }
+    Disable-Canary
+    Write-Output 'Memory Gate B canary disabled.'
     exit 0
 }
 
@@ -71,12 +106,13 @@ try {
     }
     if ([string]::IsNullOrWhiteSpace($Image)) { throw 'Image is required.' }
 
-    [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
-    $token = [Convert]::ToHexString($tokenBytes).ToLowerInvariant()
+    $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $random.GetBytes($tokenBytes) } finally { $random.Dispose() }
+    $token = [BitConverter]::ToString($tokenBytes).Replace('-', '').ToLowerInvariant()
     & docker volume create $volumeName *> $null
     Invoke-DockerWithSecretInput -Secret $token -Arguments @(
-        'run','--rm','-i','-v',"${volumeName}:/secrets",$Image,
-        'sh','-c','"umask 077; cat > /secrets/MYPEOPLE_MEMORY_CANARY_TOKEN"'
+        'run','--rm','-i','--user','0:0','-v',"${volumeName}:/secrets",$Image,
+        'sh','-c','"umask 077; cat > /secrets/MYPEOPLE_MEMORY_CANARY_TOKEN; chown 1000:1000 /secrets/MYPEOPLE_MEMORY_CANARY_TOKEN"'
     )
 
     $env:MYPEOPLE_MEMORY_CANARY_IMAGE = $Image
@@ -86,6 +122,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Unable to start the memory canary sidecar.' }
     & docker network connect $networkName $Container
     if ($LASTEXITCODE -ne 0) { throw 'Unable to connect MyPeople to the internal canary network.' }
+    & docker exec --user 0:0 $Container sh -c "umask 077; mkdir -p $secretDirectory; chown 1000:1000 $secretDirectory; chmod 700 $secretDirectory"
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare the ephemeral canary secret directory.' }
     Invoke-DockerWithSecretInput -Secret $token -Arguments @(
         'exec','-i',$Container,'sh','-c',
         ('"umask 077; cat > {0}"' -f $secretPath)

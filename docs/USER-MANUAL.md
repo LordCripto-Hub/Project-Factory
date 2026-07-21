@@ -297,7 +297,9 @@ Compose file alone.
 
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Preserved containers, images, backups, and restore-test volumes are cleaned only in a separate human-approved operation.
 
-Cloudflare memory remains disabled until the Docker migration, restore drill, desktop-launcher recovery, and rollback rehearsal all pass.
+Cloudflare memory remains disabled. After the Docker migration, restore drill,
+desktop-launcher recovery, and rollback rehearsal pass, an operator may run the
+separate local one-card canary documented below; normal startup never enables it.
 
 ### Safe image upgrades after migration
 
@@ -477,7 +479,8 @@ never recorded.
 - The transient queue is lost when its process restarts.
 - Legacy roster records without a captured provider session ID cannot use exact
   resume; replace them only through an explicit operator-controlled handoff.
-- ProjectProfile and TaskSpec are available, but external memory remains disabled until the Phase B security and deployment gate.
+- ProjectProfile and TaskSpec are available. Hosted external memory remains
+  disabled; only the explicit local, public-dataset canary is supported.
 - Standard ports are bound to `127.0.0.1`; port 7681 remains the explicitly writable local terminal.
 - The complete verifier creates temporary cards only inside its disposable, portless container and never targets the live board.
 - The board Git exporter may quarantine small snapshots during heavy test churn; review them before treating the exporter as backup.
@@ -554,7 +557,7 @@ mp complete "Fixed the terminal popup" --proof "python verify/test_priorities_te
 
 MyPeople is the execution plane, not another memory system. Each task receives one compiled `TaskSpec`. External durable knowledge and targeted recall may contribute to that packet, but they are not queried automatically alongside complete Codex history. See [Minimal Architecture](MINIMAL-ARCHITECTURE.md).
 
-## Synthetic memory activation and security boundary
+## Synthetic hosted-memory fixture and security boundary
 
 The Cloudflare MCP pilot is available only as a one-shot synthetic E2E. It
 uses the fixed endpoint
@@ -562,7 +565,7 @@ uses the fixed endpoint
 `recall`, returns at most three provenance-complete claims, fixes graph hops
 at zero, and never writes project memory.
 
-Persistent memory activation is blocked. Boss, engineers, and services
+Hosted persistent-memory activation remains blocked. Boss, engineers, and services
 currently share the same Linux user inside the main container, so a token
 placed there would not be isolated from workers. The permanent design requires
 a separate credential broker identity before real project data or a live
@@ -611,7 +614,7 @@ receives the text Windows types into the focused control.
 2. Connect bounded routing escalation to an explicit lossless worker-switch command.
 3. Bind local services safely and protect the writable terminal.
 4. Evaluate a JSON-to-SQLite board migration with a tested JSON rollback path.
-5. Activate read-only Cloudflare recall for one real ProjectProfile through a separate security-gated cycle.
+5. Measure repeated local canaries before considering any separate, security-gated hosted-memory experiment.
 
 ## Bounded external memory pilot
 
@@ -639,4 +642,56 @@ tail -n 20 run/taskspec-events.jsonl | jq .
 
 The event log contains metadata only: task/project identifiers, profile revision, memory status, requested, returned, and embedded claim counts, timing, response characters, and `aiUsage` as measured or `not_measured`. It does not contain questions, claims, tokens, or server URLs.
 
-Phase A does not deploy Cloudflare, write external memory, enable a live profile, import real data, or expose MCP tools directly to Boss/engineers. Those actions require the separate Phase B approval and security gate.
+Phase A does not deploy Cloudflare, write external memory, import private data,
+or expose MCP tools directly to Boss/engineers. Hosted activation still requires
+a separate approval and security gate.
+
+## Active local Memory Gate B canary
+
+The active canary is a reversible local experiment for one opted-in Project
+Factory card. It reads the public dataset locked to source SHA
+`80dce6f866329b79061bb1ed6b0594f9fdf2dd45`, runs in a read-only sidecar on an
+internal Docker network, publishes no port, and provides no write tool. It does
+not contact Cloudflare.
+
+From a clean reviewed checkout, enable it with the exact candidate image that
+passed isolated verification:
+
+```powershell
+$source = (Resolve-Path .\experiments\memory-gate-b).Path
+$dataset = (Resolve-Path .\experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632).Path
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Enable -MemorySource $source -Dataset $dataset -Image <reviewed-local-image>
+```
+
+Inspect the state without changing it:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Status
+docker exec mypeople /home/mp/mypeople/bin/mp memory-canary status
+```
+
+Open Priorities and edit exactly one card. Set **Project** to
+`project-factory`, add a **Context question**, select **Use Memory Gate B canary
+for this task**, and save. Its compact Memory Gate B strip then provides:
+
+- **Run** to dispatch the existing card through Boss and normal worker routing;
+- **Assess** to record `useful`, `neutral`, `harmful`, or `not demonstrated`
+  plus a short rationale;
+- **Retry without memory** to recompile the same card without claims;
+- **Disable canary** to close the global runtime gate immediately.
+
+The strip and receipt distinguish estimated TaskSpec token delta from measured
+provider tokens. If the provider cannot be attributed to the same session, the
+value is `not measured`; MyPeople never invents it.
+
+For complete cleanup, including the sidecar, internal network attachment,
+ephemeral token file, and secret volume, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
+```
+
+This does not restart MyPeople. The shared `mp` Linux identity is not a
+private-memory boundary, so this canary is restricted to the public dataset.
+One successful card is operational rollback evidence, not statistical proof
+that memory improves quality, coordination, duration, or total token cost.
