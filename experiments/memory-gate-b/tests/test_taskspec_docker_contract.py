@@ -11,7 +11,9 @@ ENTRYPOINT = ROOT / "docker" / "taskspec-memory-entrypoint.sh"
 class TaskSpecDockerContractTests(unittest.TestCase):
     def test_server_is_https_authenticated_and_recall_only(self):
         source = SERVER.read_text(encoding="utf-8")
-        self.assertIn("createServer({key, cert}, app)", source)
+        self.assertIn("createHttpsServer({key, cert}, app)", source)
+        self.assertIn("createHttpServer(app)", source)
+        self.assertIn("MYPEOPLE_GATE_B_LIVE_CANARY", source)
         self.assertIn("127.0.0.1", source)
         self.assertIn("registerTool('recall'", source)
         self.assertIn("Bearer", source)

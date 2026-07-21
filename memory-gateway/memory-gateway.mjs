@@ -49,7 +49,12 @@ export function validateInput(value, {allowHttpLoopback = false} = {}) {
   }
   if (url.username || url.password || url.search || url.hash) invalid();
   const loopback = url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
-  if (url.protocol !== 'https:' && !(allowHttpLoopback && loopback)) invalid();
+  const internalCanary = (
+    request.serverUrl === 'http://memory-gate-b:18443/mcp' &&
+    process.env.MYPEOPLE_MEMORY_CANARY_URL === request.serverUrl &&
+    request.projectSlug === 'project-factory'
+  );
+  if (url.protocol !== 'https:' && !(allowHttpLoopback && loopback) && !internalCanary) invalid();
   if (!PROJECT_SLUG.test(request.projectSlug || '') || request.projectSlug.length > 64) invalid();
   if (typeof request.question !== 'string') invalid();
   request.question = request.question.trim();

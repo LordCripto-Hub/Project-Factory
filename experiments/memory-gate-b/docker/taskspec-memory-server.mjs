@@ -2,7 +2,8 @@
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {appendFileSync, readFileSync, writeFileSync} from 'node:fs';
-import {createServer} from 'node:https';
+import {createServer as createHttpServer} from 'node:http';
+import {createServer as createHttpsServer} from 'node:https';
 
 import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {StreamableHTTPServerTransport} from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -10,15 +11,19 @@ import {createMcpExpressApp} from '@modelcontextprotocol/sdk/server/express.js';
 import * as z from 'zod/v4';
 
 
-const host = '127.0.0.1';
-const port = 18443;
-const token = process.env.MYPEOPLE_MEMORY_TOKEN;
-const key = readFileSync(process.env.MYPEOPLE_GATE_B_TLS_KEY);
-const cert = readFileSync(process.env.MYPEOPLE_GATE_B_TLS_CERT);
+const host = process.env.MYPEOPLE_GATE_B_HOST || '127.0.0.1';
+const port = Number(process.env.MYPEOPLE_GATE_B_PORT || '18443');
+const liveCanary = process.env.MYPEOPLE_GATE_B_LIVE_CANARY === '1';
+const tokenPath = process.env.MYPEOPLE_GATE_B_TOKEN_FILE;
+const token = (process.env.MYPEOPLE_MEMORY_TOKEN || (tokenPath ? readFileSync(tokenPath, 'utf8') : '')).trim();
 const ledgerPath = process.env.MYPEOPLE_GATE_B_LEDGER;
 const readyPath = process.env.MYPEOPLE_GATE_B_READY;
 
-if (!token || !ledgerPath || !readyPath) {
+if (
+  !token || !ledgerPath || !readyPath || !Number.isInteger(port) ||
+  (!liveCanary && host !== '127.0.0.1') ||
+  (liveCanary && host !== '0.0.0.0')
+) {
   throw new Error('gate_b_configuration_invalid');
 }
 
@@ -63,7 +68,10 @@ function runRecall(argumentsValue) {
   });
 }
 
-const app = createMcpExpressApp();
+const app = createMcpExpressApp({
+  host,
+  allowedHosts: liveCanary ? ['memory-gate-b'] : ['127.0.0.1', 'localhost'],
+});
 app.use((request, response, next) => {
   if (request.headers.authorization !== `Bearer ${token}`) {
     response.status(401).json({error: 'unauthorized'});
@@ -115,11 +123,21 @@ app.post('/mcp', async (request, response) => {
 });
 
 writeFileSync(ledgerPath, '', {encoding: 'utf8', mode: 0o600});
-const server = createServer({key, cert}, app);
+let server;
+if (liveCanary) {
+  if (process.env.MYPEOPLE_GATE_B_TLS_KEY || process.env.MYPEOPLE_GATE_B_TLS_CERT) {
+    throw new Error('gate_b_configuration_invalid');
+  }
+  server = createHttpServer(app);
+} else {
+  const key = readFileSync(process.env.MYPEOPLE_GATE_B_TLS_KEY);
+  const cert = readFileSync(process.env.MYPEOPLE_GATE_B_TLS_CERT);
+  server = createHttpsServer({key, cert}, app);
+}
 server.listen(port, host, () => {
   writeFileSync(
     readyPath,
-    JSON.stringify({url: `https://${host}:${port}/mcp`}) + '\n',
+    JSON.stringify({url: `${liveCanary ? 'http' : 'https'}://${host}:${port}/mcp`}) + '\n',
     {encoding: 'utf8', mode: 0o600},
   );
 });

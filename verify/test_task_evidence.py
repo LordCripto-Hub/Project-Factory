@@ -128,6 +128,39 @@ class TaskEvidenceContract(unittest.TestCase):
         self.assertEqual(ns.proof_file, ["screen.png"])
         self.assertEqual(ns.proof_url, ["https://example.test/result"])
 
+    def test_mp_complete_attributes_canary_without_inventing_usage(self):
+        captured = []
+        self.mp.http_json = lambda *_args, **_kwargs: {"ok": True}
+        self.mp.notify_agent = lambda *_args, **_kwargs: None
+        self.mp.write_status = lambda *_args, **_kwargs: None
+        self.mp.load_roster = lambda: [{
+            "agent_id": "verify-host/main:eng-1",
+            "memory_canary_attempt_id": "attempt-1",
+            "backend": "codex",
+            "session_id": "session-1234567890",
+            "model": "gpt-5.6-luna",
+            "provider_profile": "shared",
+        }]
+        self.mp.complete_memory_canary_attempt = (
+            lambda *_args, **kwargs: captured.append(kwargs) or {}
+        )
+        env = {
+            "AGENT_ID": "verify-host/main:eng-1",
+            "OWNER_TASK_ID": "task-1",
+            "BOSS_ID": "verify-host/main:Boss",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            self.mp.complete(argparse.Namespace(
+                summary=["Done"],
+                proof=["tests pass"],
+                proof_file=[],
+                proof_url=[],
+            ))
+        self.assertEqual(captured[0]["attempt_id"], "attempt-1")
+        self.assertEqual(captured[0]["evidence_count"], 1)
+        self.assertEqual(captured[0]["usage_before"], {})
+        self.assertEqual(captured[0]["usage_after"], {})
+
     def test_browser_journey_waits_for_the_current_upload_success_status(self):
         priorities = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
         journey = (ROOT / "verify" / "browser_journeys.js").read_text(encoding="utf-8")

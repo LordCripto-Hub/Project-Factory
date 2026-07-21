@@ -45,6 +45,28 @@ test('accepts only the bounded recall contract', () => {
   ]) assert.throws(() => validateInput(bad));
 });
 
+test('accepts only the exact explicitly activated internal canary URL', () => {
+  const previous = process.env.MYPEOPLE_MEMORY_CANARY_URL;
+  process.env.MYPEOPLE_MEMORY_CANARY_URL = 'http://memory-gate-b:18443/mcp';
+  try {
+    const canary = {
+      ...input,
+      serverUrl: process.env.MYPEOPLE_MEMORY_CANARY_URL,
+      projectSlug: 'project-factory',
+    };
+    assert.equal(validateInput(canary).serverUrl, canary.serverUrl);
+    for (const bad of [
+      {...canary, projectSlug: 'other'},
+      {...canary, serverUrl: 'http://memory-gate-b:18444/mcp'},
+      {...canary, serverUrl: 'http://127.0.0.1:18443/mcp'},
+      {...canary, serverUrl: canary.serverUrl + '?x=1'},
+    ]) assert.throws(() => validateInput(bad));
+  } finally {
+    if (previous === undefined) delete process.env.MYPEOPLE_MEMORY_CANARY_URL;
+    else process.env.MYPEOPLE_MEMORY_CANARY_URL = previous;
+  }
+});
+
 test('rejects missing provenance and cross-project claims', () => {
   assert.throws(() => normalizeClaims([{id: '1', projectSlug: 'mypeople', content: 'x'}], input));
   assert.throws(() => normalizeClaims([{...claim, projectSlug: 'other'}], input));

@@ -56,6 +56,7 @@ class TaskProjectFieldsContract(unittest.TestCase):
         self.server.normalize_task(task)
         self.assertEqual(task["projectSlug"], "")
         self.assertEqual(task["contextQuestion"], "")
+        self.assertIs(task["memoryCanary"], False)
 
     def test_project_slug_contract(self):
         self.assertEqual(self.server.validate_project_slug("my-project"), "my-project")
@@ -113,12 +114,105 @@ class TaskProjectFieldsContract(unittest.TestCase):
         self.assertEqual(task["projectSlug"], "mypeople")
         self.assertEqual(task["contextQuestion"], "Which constraint applies?")
 
+    def test_memory_canary_requires_the_project_factory_contract(self):
+        with self.assertRaisesRegex(
+            ValueError, "memory_canary_requires_project_factory"
+        ):
+            self.server.validate_memory_canary(True, "other", "Question?")
+        with self.assertRaisesRegex(ValueError, "memory_canary_requires_question"):
+            self.server.validate_memory_canary(True, "project-factory", "")
+        with self.assertRaisesRegex(ValueError, "invalid_memory_canary"):
+            self.server.validate_memory_canary("true", "project-factory", "Question?")
+        self.assertTrue(
+            self.server.validate_memory_canary(
+                True,
+                "project-factory",
+                "Which verified constraint applies?",
+            )
+        )
+        self.assertFalse(self.server.validate_memory_canary(False, "", ""))
+
+    def test_memory_canary_update_is_explicit_preserved_and_privileged(self):
+        board = self.server.default_board()
+        board["tasks"]["task-1"] = self.server.normalize_task({
+            "id": "task-1",
+            "text": "Canary",
+            "projectSlug": "project-factory",
+            "contextQuestion": "Which verified constraint applies?",
+            "memoryCanary": True,
+        })
+        board["order"] = ["task-1"]
+        self.server.save_board(board, allow_shrink=True)
+
+        class Response:
+            def json(self, body, status=200):
+                return status, body
+            def close_reopen(self, *_args):
+                return None
+
+        status, _ = self.server.Handler.update(
+            Response(),
+            "browser",
+            {"op": "set", "id": "task-1", "text": "Changed"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(
+            self.server.load_board()["tasks"]["task-1"]["memoryCanary"]
+        )
+
+        status, body = self.server.Handler.update(
+            Response(),
+            "nightwatch",
+            {"op": "set", "id": "task-1", "memoryCanary": False},
+        )
+        self.assertEqual((status, body["error"]), (403, "memory_canary_control_forbidden"))
+
+        status, _ = self.server.Handler.update(
+            Response(),
+            "machine",
+            {"op": "set", "id": "task-1", "memoryCanary": False},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(
+            self.server.load_board()["tasks"]["task-1"]["memoryCanary"]
+        )
+
+    def test_memory_canary_validates_the_combined_final_card(self):
+        board = self.server.default_board()
+        board["tasks"]["task-1"] = self.server.normalize_task({
+            "id": "task-1",
+            "text": "Canary",
+            "projectSlug": "project-factory",
+            "contextQuestion": "Question?",
+            "memoryCanary": True,
+        })
+        board["order"] = ["task-1"]
+        self.server.save_board(board, allow_shrink=True)
+
+        class Response:
+            def json(self, body, status=200):
+                return status, body
+            def close_reopen(self, *_args):
+                return None
+
+        status, body = self.server.Handler.update(
+            Response(),
+            "browser",
+            {"op": "set", "id": "task-1", "projectSlug": "other"},
+        )
+        self.assertEqual((status, body["error"]), (
+            400,
+            "memory_canary_requires_project_factory",
+        ))
+
     def test_priorities_exposes_project_and_context_controls(self):
         html = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
         for marker in (
             "projectSlug",
             "projectSlugs",
             "contextQuestion",
+            "memoryCanary",
+            "Use Memory Gate B canary for this task",
             "Project",
             "Context question",
         ):

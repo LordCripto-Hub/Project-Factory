@@ -136,7 +136,9 @@ The live transaction retains the old container as `mypeople-pre-volumes-<timesta
 
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Cleanup of preserved containers, images, backups, or restore-test volumes is a separate human-approved operation.
 
-Cloudflare memory remains disabled during this migration. Its first real profile is a separate, bounded, read-only activation cycle after backup, restore, launcher recovery, and rollback are verified.
+Cloudflare memory remains disabled during this migration. A separate, local,
+read-only one-card canary may be enabled explicitly after backup, restore,
+launcher recovery, and rollback are verified; it is never part of normal startup.
 
 ### Upgrade an existing volume-backed deployment
 
@@ -222,6 +224,33 @@ contract.
 [`experiments/memory-gate-b/`](experiments/memory-gate-b/) contains the
 provider-neutral, read-only TaskSpec memory Gate B. It is reproducible evidence
 and is not installed or enabled by default.
+
+### Opt-in local Memory Gate B canary
+
+The reviewed local canary uses the public, SHA-locked Project Factory history
+dataset and an internal, portless Docker sidecar. It is disabled by default and
+does not activate Cloudflare or any hosted memory provider.
+
+```powershell
+$source = (Resolve-Path .\experiments\memory-gate-b).Path
+$dataset = (Resolve-Path .\experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632).Path
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Enable -MemorySource $source -Dataset $dataset -Image <reviewed-local-image>
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Status
+```
+
+In Priorities, edit one Project Factory card, set a bounded **Context
+question**, select **Use Memory Gate B canary for this task**, save it, and use
+**Run**. Record `useful`, `neutral`, `harmful`, or `not demonstrated` with the
+**Assess** control. **Retry without memory** recompiles the same card without
+claims. Disable and remove the sidecar, internal network, and ephemeral token:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
+```
+
+The shared `mp` Linux identity is a governance boundary, not a private-memory
+isolation boundary. Use only the public dataset. One canary is operational
+evidence, not statistical proof of better task quality or lower token cost.
 
 ## Safe full verification
 

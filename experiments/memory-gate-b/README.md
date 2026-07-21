@@ -35,13 +35,29 @@ python -m unittest discover -s experiments\memory-gate-b\tests -v
 
 ## Runtime Boundary
 
-This directory is not imported by `install.sh`, the default Compose deployment,
-the Windows launcher, or the runtime supervisor. It is evaluation evidence, not
-production memory. Cloudflare and other hosted providers are optional future
-adapters to the same recall contract, not dependencies of this experiment.
+This directory is not activated by `install.sh`, the default Compose deployment,
+the normal Windows launcher, or the runtime supervisor. The explicitly invoked
+`Start-MyPeopleMemoryCanary.ps1` launcher may mount it read-only for one local
+canary. This is not general production memory. Cloudflare and other hosted
+providers are inactive and are not dependencies of this experiment.
+
+The dataset is public. Because Boss and workers share the `mp` Linux identity,
+the canary is not a private-memory isolation boundary and must not receive
+private project material. One canary proves bounded activation and rollback;
+it does not provide statistical evidence of improved quality or token cost.
 
 ## Promotion
 
 Promotion requires a separate approved design, controlled live canaries,
 measured task-quality improvement, honest token/cost attribution, secure
 project isolation, and rollback evidence.
+
+## Active Live Canary
+
+The first active live canary passed with bounded retrieval, normal Codex owner
+routing, evidence, and complete rollback. See
+[`artifacts/live-canary-report.md`](artifacts/live-canary-report.md) and
+[`artifacts/live-canary-receipt.json`](artifacts/live-canary-receipt.json).
+
+This single useful result validates activation and reversibility. It does not
+replace the controlled multi-task comparison required for promotion.
