@@ -5,20 +5,20 @@
     "dataset_name":  "project-factory-history-80dce6f86632",
     "source_sha":  "80dce6f866329b79061bb1ed6b0594f9fdf2dd45",
     "logical_digest":  "3b86e98ba0769df51bff21cb4fb63a8b52982d2526f828a20d566f47647c6277",
-    "started_utc":  "2026-07-21T19:18:49.8076261Z",
-    "finished_utc":  "2026-07-21T19:18:54.6401877Z",
-    "elapsed_seconds":  4.766,
+    "started_utc":  "2026-07-21T20:16:46.8496974Z",
+    "finished_utc":  "2026-07-21T20:16:52.7905376Z",
+    "elapsed_seconds":  5.849,
     "exit_code":  0,
     "cleanup_verified":  true,
     "live_mypeople_before":  {
                                  "id":  "41d3d7e34ef516c3577df5e032ab95ebc14f5a3043707c41dee1fcde23a4eeb7",
-                                 "started_at":  "2026-07-21T19:15:21.936718976Z",
+                                 "started_at":  "2026-07-21T20:16:27.60829604Z",
                                  "restart_count":  0,
                                  "running":  true
                              },
     "live_mypeople_after":  {
                                 "id":  "41d3d7e34ef516c3577df5e032ab95ebc14f5a3043707c41dee1fcde23a4eeb7",
-                                "started_at":  "2026-07-21T19:15:21.936718976Z",
+                                "started_at":  "2026-07-21T20:16:27.60829604Z",
                                 "restart_count":  0,
                                 "running":  true
                             },

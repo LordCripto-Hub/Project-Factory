@@ -16,6 +16,11 @@ LOCK = EXPERIMENT / "docker" / "history-hybrid.dataset-lock.json"
 
 
 class MemoryGateBExperimentContract(unittest.TestCase):
+    def test_standard_isolated_suite_registers_the_fast_contract(self):
+        suite = (ROOT / "verify" / "run-suite.sh").read_text(encoding="utf-8")
+        invocation = 'python3 "$VERIFY/test_memory_gate_b_experiment.py"'
+        self.assertEqual(suite.count(invocation), 1)
+
     def test_required_package_surfaces_exist(self):
         required = (
             EXPERIMENT / "README.md",
