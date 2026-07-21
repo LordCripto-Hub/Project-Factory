@@ -68,7 +68,10 @@ function runRecall(argumentsValue) {
   });
 }
 
-const app = createMcpExpressApp();
+const app = createMcpExpressApp({
+  host,
+  allowedHosts: liveCanary ? ['memory-gate-b'] : ['127.0.0.1', 'localhost'],
+});
 app.use((request, response, next) => {
   if (request.headers.authorization !== `Bearer ${token}`) {
     response.status(401).json({error: 'unauthorized'});

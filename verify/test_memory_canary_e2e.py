@@ -155,7 +155,7 @@ class MemoryCanaryE2E(unittest.TestCase):
     def test_launcher_cleanup_removes_sidecar_network_and_token(self):
         launcher = (ROOT / "windows" / "Start-MyPeopleMemoryCanary.ps1").read_text(encoding="utf-8")
         disable = launcher[launcher.index("function Disable-Canary"):launcher.index("if ($Action -eq 'Status')")]
-        for marker in ("memory-canary disable", "memory-profile disable", "rm -rf $secretDirectory", "docker network disconnect", "down --volumes"):
+        for marker in ("memory-canary disable", "memory-profile disable", "rm -f $secretDirectory/MYPEOPLE_MEMORY_TOKEN", "docker network disconnect", "down --volumes"):
             self.assertIn(marker, disable)
 
     def test_real_disposable_docker_lifecycle_when_requested(self):
@@ -187,12 +187,14 @@ class MemoryCanaryE2E(unittest.TestCase):
             run(base + ["-Action", "Enable", "-MemorySource", str(source), "-Dataset", str(dataset), "-Image", image, "-Container", container])
             status = run(base + ["-Action", "Status", "-Container", container])
             self.assertIn("running", status.stdout.lower())
-            self.assertEqual(run(["docker", "exec", container, "test", "-s", "/run/mypeople-secrets/MYPEOPLE_MEMORY_CANARY_TOKEN"], check=False).returncode, 0)
+            self.assertEqual(run(["docker", "exec", container, "test", "-s", "/run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN"], check=False).returncode, 0)
+            token_size = run(["docker", "exec", container, "wc", "-c", "/run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN"])
+            self.assertEqual(token_size.stdout.split()[0], "64")
             run(base + ["-Action", "Disable", "-Container", container])
             self.assertNotEqual(run(["docker", "inspect", "memory-gate-b-live-canary-memory-gate-b-1"], check=False).returncode, 0)
             self.assertNotEqual(run(["docker", "network", "inspect", "mypeople-memory-canary-internal"], check=False).returncode, 0)
             self.assertNotEqual(run(["docker", "volume", "inspect", "mypeople-memory-canary-secret"], check=False).returncode, 0)
-            self.assertNotEqual(run(["docker", "exec", container, "test", "-e", "/run/mypeople-secrets/MYPEOPLE_MEMORY_CANARY_TOKEN"], check=False).returncode, 0)
+            self.assertNotEqual(run(["docker", "exec", container, "test", "-e", "/run/mypeople-secrets/MYPEOPLE_MEMORY_TOKEN"], check=False).returncode, 0)
         finally:
             run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(launcher), "-Action", "Disable", "-Container", container], check=False)
             run(["docker", "rm", "-f", container], check=False)

@@ -28,6 +28,8 @@ class WindowsMemoryCanaryContract(unittest.TestCase):
             "RandomNumberGenerator]::Create()",
             ".GetBytes($tokenBytes)",
             "[BitConverter]::ToString($tokenBytes)",
+            "[Text.Encoding]::ASCII.GetBytes($Secret)",
+            "StandardInput.BaseStream.Write($secretBytes, 0, $secretBytes.Length)",
             "'--user','0:0'",
             "chown 1000:1000",
             "docker exec --user 0:0",
@@ -40,6 +42,9 @@ class WindowsMemoryCanaryContract(unittest.TestCase):
         self.assertNotIn("RandomNumberGenerator]::Fill", text)
         self.assertNotIn("[Convert]::ToHexString", text)
         self.assertNotIn("finally { Write-Output 'Memory Gate B canary disabled.' }", text)
+        self.assertIn('$secretPath = "$secretDirectory/MYPEOPLE_MEMORY_TOKEN"', text)
+        self.assertIn('rm -f $secretDirectory/MYPEOPLE_MEMORY_TOKEN $secretDirectory/MYPEOPLE_MEMORY_CANARY_TOKEN', text)
+        self.assertNotIn('rm -rf $secretDirectory', text)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,9 @@ class MemoryCanarySidecarContract(unittest.TestCase):
         self.assertIn("MYPEOPLE_GATE_B_LIVE_CANARY", text)
         self.assertIn("host !== '0.0.0.0'", text)
         self.assertIn("host !== '127.0.0.1'", text)
+        self.assertIn("createMcpExpressApp({", text)
+        self.assertIn("  host,", text)
+        self.assertIn("allowedHosts: liveCanary ? ['memory-gate-b']", text)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ $projectName = 'memory-gate-b-live-canary'
 $networkName = 'mypeople-memory-canary-internal'
 $volumeName = 'mypeople-memory-canary-secret'
 $secretDirectory = '/run/mypeople-secrets'
-$secretPath = "$secretDirectory/MYPEOPLE_MEMORY_CANARY_TOKEN"
+$secretPath = "$secretDirectory/MYPEOPLE_MEMORY_TOKEN"
 $serverUrl = 'http://memory-gate-b:18443/mcp'
 $composePath = Join-Path $PSScriptRoot '..\experiments\memory-gate-b\docker\compose.live-canary.yml'
 
@@ -42,8 +42,10 @@ function Invoke-DockerWithSecretInput {
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     if (-not $process.Start()) { throw 'Unable to start Docker secret injection.' }
-    $process.StandardInput.Write($Secret)
-    $process.StandardInput.Close()
+    $secretBytes = [Text.Encoding]::ASCII.GetBytes($Secret)
+    $process.StandardInput.BaseStream.Write($secretBytes, 0, $secretBytes.Length)
+    $process.StandardInput.BaseStream.Flush()
+    $process.StandardInput.BaseStream.Close()
     $process.StandardOutput.ReadToEnd() | Out-Null
     $errorText = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
@@ -63,7 +65,7 @@ function Disable-Canary {
             if ($LASTEXITCODE -ne 0) { $failures.Add('runtime-control') }
             $profileOutput = (& docker exec $Container /home/mp/mypeople/bin/memory-profile disable --project project-factory 2>&1 | Out-String)
             if ($LASTEXITCODE -ne 0 -and $profileOutput -notmatch 'profile_not_found') { $failures.Add('project-profile') }
-            & docker exec --user 0:0 $Container sh -c "rm -rf $secretDirectory" *> $null
+            & docker exec --user 0:0 $Container sh -c "rm -f $secretDirectory/MYPEOPLE_MEMORY_TOKEN $secretDirectory/MYPEOPLE_MEMORY_CANARY_TOKEN" *> $null
             if ($LASTEXITCODE -ne 0) { $failures.Add('main-container-token') }
             $networkOutput = (& docker network disconnect $networkName $Container 2>&1 | Out-String)
             if ($LASTEXITCODE -ne 0 -and $networkOutput -notmatch 'not connected|not found|No such') { $failures.Add('network-disconnect') }
