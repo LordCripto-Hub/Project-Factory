@@ -1,0 +1,48 @@
+services:
+  memory-gate-b:
+    image: ${MYPEOPLE_MEMORY_CANARY_IMAGE:?set MYPEOPLE_MEMORY_CANARY_IMAGE}
+    user: mp
+    init: true
+    read_only: true
+    entrypoint: ["/bin/bash", "/workspace/docker/live-canary-entrypoint.sh"]
+    environment:
+      MYPEOPLE_GATE_B_LIVE_CANARY: "1"
+      MYPEOPLE_GATE_B_HOST: "0.0.0.0"
+      MYPEOPLE_GATE_B_PORT: "18443"
+      PYTHONDONTWRITEBYTECODE: "1"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    tmpfs:
+      - /run:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700
+    volumes:
+      - type: bind
+        source: ${MYPEOPLE_MEMORY_CANARY_SOURCE:?set source}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${MYPEOPLE_MEMORY_CANARY_DATASET:?set dataset}
+        target: /project-factory-history-80dce6f86632
+        read_only: true
+      - type: volume
+        source: memory-canary-secret
+        target: /run/secrets
+        read_only: true
+    networks:
+      - memory-canary-internal
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/memory-canary-ready.json"]
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+volumes:
+  memory-canary-secret:
+    name: mypeople-memory-canary-secret
+
+networks:
+  memory-canary-internal:
+    name: mypeople-memory-canary-internal
+    internal: true
