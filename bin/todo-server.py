@@ -5,8 +5,11 @@ import urllib.parse, urllib.request
 from mpcommon import *
 from memory_canary import (
     MemoryCanaryError,
+    append_receipt as append_memory_canary_receipt,
+    latest_receipt as latest_memory_canary_receipt,
     load_control as load_memory_canary_control,
     receipt_projection as memory_canary_receipt_projection,
+    set_control as set_memory_canary_control,
 )
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
@@ -37,6 +40,15 @@ def validate_memory_canary(value,project_slug,context_question):
     if project_slug!="project-factory":raise ValueError("memory_canary_requires_project_factory")
     if not context_question:raise ValueError("memory_canary_requires_question")
     return True
+
+def validate_canary_assessment(assessment,rationale):
+    assessment=str(assessment or "").strip()
+    if assessment not in {"useful","neutral","harmful","not_demonstrated"}:
+        raise ValueError("invalid_canary_assessment")
+    rationale=re.sub(r"[\x00-\x1f\x7f]+"," ",str(rationale or "")).strip()
+    if not rationale or len(rationale)>500:
+        raise ValueError("invalid_canary_rationale")
+    return assessment,rationale
 
 def available_project_slugs():
     directory=pathlib.Path(PROJECT_PROFILES_DIR)
@@ -319,6 +331,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         guard=self.nw_guard(kind,body)
         if guard:return self.json(guard[1],guard[0])
         if p=="/todo/update":return self.update(kind,body)
+        if p=="/todo/memory-canary":return self.memory_canary(kind,body)
         if p=="/todo/comment":return self.comment(kind,body)
         if p=="/todo/status":return self.status(kind,body)
         if p=="/todo/proof":return self.proof(kind,body,raw)
@@ -326,6 +339,61 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p=="/nightwatch/inbound":return self.inbound(kind,body)
         if p=="/nightwatch/outbound":return self.outbound(kind,body)
         self.json({"error":"not_found"},404)
+    def memory_canary(self,kind,d):
+        if kind not in ("browser","machine"):
+            return self.json({"ok":False,"error":"memory_canary_control_forbidden"},403)
+        op=str(d.get("op") or "")
+        runtime_dir=os.path.realpath(os.path.join(ROOT,"run"))
+        if op=="disable":
+            try:control=set_memory_canary_control(runtime_dir,enabled=False)
+            except MemoryCanaryError as error:
+                return self.json({"ok":False,"error":error.code},400)
+            return self.json({"ok":True,"control":{
+                "enabled":control["enabled"],
+                "allowedProjects":control["allowedProjects"],
+                "revision":control["revision"],
+            }})
+        task_id=str(d.get("taskId") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",task_id):
+            return self.json({"ok":False,"error":"invalid_task_id"},400)
+        task=(load_board().get("tasks") or {}).get(task_id)
+        if not isinstance(task,dict) or task.get("memoryCanary") is not True:
+            return self.json({"ok":False,"error":"memory_canary_task_required"},400)
+        if op in ("run","retry_without_memory"):
+            suffix=" --without-memory" if op=="retry_without_memory" else ""
+            instruction=(
+                f"[memory canary:{op}] Dispatch the existing card through normal "
+                f"Codex owner routing. Use mp spawn <agent_id> --backend codex "
+                f"--boss {BOSS_FULL} --owner-task {task_id}{suffix}. Do not create "
+                "or replace the card."
+            )
+            if mp_send(BOSS_FULL,instruction,label="MEMORY_CANARY") != 0:
+                return self.json({"ok":False,"error":"boss_unavailable"},502)
+            return self.json({"ok":True,"operation":op,"taskId":task_id})
+        if op=="assess":
+            try:
+                assessment,rationale=validate_canary_assessment(
+                    d.get("assessment"),d.get("rationale")
+                )
+                receipt=latest_memory_canary_receipt(runtime_dir,task_id)
+                if not isinstance(receipt,dict):
+                    raise MemoryCanaryError("canary_attempt_missing")
+                append_memory_canary_receipt(runtime_dir,{
+                    "schemaVersion":1,
+                    "eventType":"assessment",
+                    "attemptId":receipt["attemptId"],
+                    "taskId":task_id,
+                    "assessment":assessment,
+                    "rationale":rationale,
+                    "assessedAt":time.time(),
+                })
+            except ValueError as error:
+                return self.json({"ok":False,"error":str(error)},400)
+            except (KeyError,MemoryCanaryError) as error:
+                code=getattr(error,"code","canary_attempt_missing")
+                return self.json({"ok":False,"error":code},400)
+            return self.json({"ok":True,"assessment":assessment})
+        return self.json({"ok":False,"error":"invalid_memory_canary_operation"},400)
     def update(self,kind,d):
         op=d.get("op")
         if any(k in d for k in ("parent","dependsOn","hardGate")) or op=="reorder":return self.json({"ok":False,"error":"unsupported_removed_feature"},400)

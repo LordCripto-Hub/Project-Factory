@@ -216,11 +216,25 @@ def compile_attempt(
         ),
         now=now,
     )
+    retrieval_latency = "not_measured"
     if bypass or not requested:
         candidate = baseline
         status = "rolled_back" if bypass else "not_requested"
     else:
-        candidate = compile_spec(task, profile, recall=recall, now=now)
+        def measured_recall(request):
+            nonlocal retrieval_latency
+            started = time.monotonic()
+            try:
+                return recall(request) if recall is not None else None
+            finally:
+                retrieval_latency = round((time.monotonic() - started) * 1000)
+
+        candidate = compile_spec(
+            task,
+            profile,
+            recall=measured_recall if recall is not None else None,
+            now=now,
+        )
         status = candidate.get("memoryStatus", "error")
     baseline_chars = canonical_char_count(baseline)
     candidate_chars = canonical_char_count(candidate)
@@ -241,7 +255,7 @@ def compile_attempt(
         "embeddedClaimCount": (
             metadata["embeddedClaimCount"] if requested and not bypass else 0
         ),
-        "retrievalLatencyMs": "not_measured",
+        "retrievalLatencyMs": retrieval_latency,
         "baselineCharacters": baseline_chars,
         "candidateCharacters": candidate_chars,
         "memoryDeltaCharacters": delta,

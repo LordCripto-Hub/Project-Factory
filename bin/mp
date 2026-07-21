@@ -30,6 +30,7 @@ from provider_profiles import (
 from project_context import (
     ProfileError,
     TaskSpecError,
+    call_memory_gateway,
     compile_task_spec,
     load_profile,
     write_task_spec,
@@ -114,7 +115,11 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
                     profile=profile,
                     control=control,
                     compile_spec=compile_task_spec,
-                    recall=None,
+                    recall=lambda request: call_memory_gateway(
+                        profile,
+                        request["question"],
+                        max_chars=request["maxChars"],
+                    ),
                     bypass=bypass_memory,
                 )
                 spec = attempt["candidate"]
