@@ -13,6 +13,8 @@ PUBLIC_FILES = [
     ROOT / "docs" / "ADAPTIVE-ROUTING-LIVE-CANARY.md",
     ROOT / "experiments" / "memory-gate-b" / "README.md",
     ROOT / "experiments" / "memory-gate-b" / "artifacts" / "taskspec-memory-report.md",
+    ROOT / "experiments" / "memory-gate-b" / "artifacts" / "live-canary-report.md",
+    ROOT / "experiments" / "memory-gate-b" / "artifacts" / "live-canary-receipt.json",
     ROOT / "windows" / "Start-MyPeople.ps1",
     ROOT / "windows" / "Install-MyPeopleShortcut.ps1",
 ]

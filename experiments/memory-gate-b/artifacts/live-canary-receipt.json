@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "experiment": "memory-gate-b-active-live-canary",
+  "result": "passed",
+  "assessment": "useful",
+  "startedAt": "2026-07-21T23:24:21Z",
+  "completedAt": "2026-07-21T23:25:23Z",
+  "software": {
+    "liveRuntimeCommit": "f337762d05a59c9255fcb3f1b6b5632585ddb34e",
+    "canaryCommit": "04108d4ae9d09204a1f801fb1c8a210af2451db2",
+    "canaryBaseImageCommit": "a5c812ca7904ecab9733eb239760703ffde94260",
+    "liveRuntimeImage": "sha256:6d1f5f1d8fad8bc17e5d7b3646626a901911385fbcfeb0b376b9f99892d0dc10",
+    "canaryImage": "sha256:9ffe2423f779dc164e994bdf898e23127ec9feaaac2fba17d0eccbbd7d17c67b",
+    "datasetSourceCommit": "80dce6f866329b79061bb1ed6b0594f9fdf2dd45"
+  },
+  "task": {
+    "kind": "synthetic-public-canary",
+    "sameCardPreserved": true,
+    "projectSlug": "project-factory",
+    "workerAlias": "worker-canary-01",
+    "backend": "codex",
+    "model": "gpt-5.6-luna",
+    "outcome": "review",
+    "evidenceCount": 1,
+    "retryCountAfterSuccessfulCompilation": 0
+  },
+  "memory": {
+    "status": "ok",
+    "requestedClaimCount": 3,
+    "returnedClaimCount": 3,
+    "embeddedClaimCount": 3,
+    "retrievalLatencyMilliseconds": 837,
+    "contextDeltaCharacters": 822,
+    "contextDeltaTokensEstimated": 206,
+    "providerUsage": "not_measured"
+  },
+  "verification": {
+    "requiredCommandsPassed": 2,
+    "focusedSuitesPassed": 2,
+    "focusedTestsPassed": 10,
+    "liveContainerRestartCount": 0,
+    "prioritiesHttpStatus": 200,
+    "hudHttpStatus": 200,
+    "syntheticTaskRemoved": true,
+    "workerRetired": true,
+    "sidecarRemoved": true,
+    "internalNetworkRemoved": true,
+    "secretVolumeRemoved": true,
+    "mainContainerTokenRemoved": true
+  },
+  "activationDefectsCorrected": [
+    "canonical-secret-filename-mismatch",
+    "internal-host-allowlist-mismatch",
+    "powershell-secret-byte-order-mark"
+  ],
+  "privacy": {
+    "rawQuestionPublished": false,
+    "rawClaimsPublished": false,
+    "accountIdentityPublished": false,
+    "localPathsPublished": false,
+    "secretsPublished": false
+  }
+}

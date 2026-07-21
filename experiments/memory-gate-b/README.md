@@ -51,3 +51,13 @@ it does not provide statistical evidence of improved quality or token cost.
 Promotion requires a separate approved design, controlled live canaries,
 measured task-quality improvement, honest token/cost attribution, secure
 project isolation, and rollback evidence.
+
+## Active Live Canary
+
+The first active live canary passed with bounded retrieval, normal Codex owner
+routing, evidence, and complete rollback. See
+[`artifacts/live-canary-report.md`](artifacts/live-canary-report.md) and
+[`artifacts/live-canary-receipt.json`](artifacts/live-canary-receipt.json).
+
+This single useful result validates activation and reversibility. It does not
+replace the controlled multi-task comparison required for promotion.
