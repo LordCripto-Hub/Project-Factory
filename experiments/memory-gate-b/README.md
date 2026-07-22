@@ -61,3 +61,39 @@ routing, evidence, and complete rollback. See
 
 This single useful result validates activation and reversibility. It does not
 replace the controlled multi-task comparison required for promotion.
+
+## Controlled Comparison
+
+The controlled comparison locks six public Project Factory history cases. All
+six are qualified offline; three aliases are then eligible for paired live
+baseline and memory arms in the approved counterbalanced order. The comparison
+uses one model for every arm and creates a fresh worker, card, and provider
+conversation each time.
+
+Run the offline qualification from the repository root:
+
+```powershell
+python experiments\memory-gate-b\scripts\run_memory_comparison_offline.py `
+  --dataset experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632 `
+  --cases experiments\memory-gate-b\comparison\cases.json `
+  --output comparison-offline.json
+```
+
+Two executions must have the same `logical_digest`, fixture hash, pass status,
+selected evidence identifiers, and escalation decisions. Whole-file hashes are
+expected to differ because retrieval latency is an actual observation. The
+committed report records one canonical observed run. Memory-context tokens are
+estimated, retrieval latency is actual, and provider tokens are
+`not_measured` unless the provider exposes attributable counters.
+
+### Stop conditions
+
+Do not begin paired execution if the dataset/source binding, fixture hash,
+logical digest, six-of-six result, Docker health, feature flag, project binding,
+or zero-resource preflight fails. During paired execution, stop on harmful
+output, wrong-project evidence, provider failure, timeout, score refusal,
+resource reuse, cleanup failure, or a container restart.
+
+Offline qualification demonstrates deterministic retrieval and scoring over a
+locked public fixture. It does not prove production benefit, lower provider
+cost, better Boss decisions, or improved real-agent coordination.

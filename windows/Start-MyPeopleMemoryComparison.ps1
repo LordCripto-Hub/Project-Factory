@@ -76,7 +76,7 @@ function Get-OfflineBinding {
     $receipt = Get-Content -LiteralPath $offlineReport -Raw | ConvertFrom-Json
     if ($receipt.dataset.source_sha -ne $sourceSha) { throw 'wrong_project' }
     if (-not $receipt.fixture_sha256 -or -not $receipt.logical_digest) { throw 'offline_receipt_invalid' }
-    if ($receipt.status -notin @('qualified','offline_qualified')) { throw 'offline_qualification_failed' }
+    if ($receipt.passed -ne $true) { throw 'offline_qualification_failed' }
     [pscustomobject]@{
         fixture_sha256 = [string]$receipt.fixture_sha256
         offline_digest = [string]$receipt.logical_digest
