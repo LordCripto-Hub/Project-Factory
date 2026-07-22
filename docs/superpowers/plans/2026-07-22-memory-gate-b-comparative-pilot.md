@@ -198,10 +198,14 @@ The CLI accepts explicit dataset, fixture, and output paths. It must refuse the 
 python verify\test_memory_comparison_offline.py
 python experiments\memory-gate-b\scripts\run_memory_comparison_offline.py --dataset experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632 --cases experiments\memory-gate-b\comparison\cases.json --output C:\tmp\memory-comparison-offline-a.json
 python experiments\memory-gate-b\scripts\run_memory_comparison_offline.py --dataset experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632 --cases experiments\memory-gate-b\comparison\cases.json --output C:\tmp\memory-comparison-offline-b.json
-Get-FileHash C:\tmp\memory-comparison-offline-a.json,C:\tmp\memory-comparison-offline-b.json -Algorithm SHA256
+$a = Get-Content -Raw C:\tmp\memory-comparison-offline-a.json | ConvertFrom-Json
+$b = Get-Content -Raw C:\tmp\memory-comparison-offline-b.json | ConvertFrom-Json
+$a.logical_digest -eq $b.logical_digest
 ~~~
 
-Expected: tests pass and hashes match.
+Expected: tests pass and logical digests match. The complete receipt hashes may differ
+because retrieval latency is an actual measurement and is intentionally excluded from
+the deterministic logical digest.
 
 **Step 4: Commit**
 
