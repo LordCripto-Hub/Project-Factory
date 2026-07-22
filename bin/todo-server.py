@@ -11,12 +11,14 @@ from memory_canary import (
     receipt_projection as memory_canary_receipt_projection,
     set_control as set_memory_canary_control,
 )
+import memory_comparison as memory_comparison_runtime
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
 BOSS=ENV.get("BOSS_AGENT","main:Boss");BOSS_FULL=full_agent_id(BOSS);NW_AGENT=ENV.get("NIGHTWATCH_AGENT",f"{HOST_ID}/nightwatch:Nightwatch")
 BOARD_PATH=os.path.realpath(os.environ.get("BOARD_PATH",os.path.join(ROOT,"todos","board.v2.json")))
 PROJECT_PROFILES_DIR=os.path.realpath(ENV.get("PROJECT_PROFILES_DIR",os.path.join(ROOT,"run","project-profiles")))
+MEMORY_COMPARISON_RUNTIME_DIR=os.path.realpath(ENV.get("MEMORY_COMPARISON_RUNTIME_DIR",os.path.join(ROOT,"run")))
 TODOS_DIR=os.path.dirname(BOARD_PATH);PROOFS_DIR=os.path.join(TODOS_DIR,"proofs");INBOX_LOG=os.path.join(TODOS_DIR,"boss-inbox.log")
 os.makedirs(os.path.join(ROOT,"run"),exist_ok=True)
 SESSIONS=set();TOKENS={};START=time.time();STORE_LOCK=threading.RLock()
@@ -357,6 +359,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if guard:return self.json(guard[1],guard[0])
         if p=="/todo/update":return self.update(kind,body)
         if p=="/todo/memory-canary":return self.memory_canary(kind,body)
+        if p=="/todo/memory-comparison":return self.memory_comparison(kind,body,self.client_address[0])
         if p=="/todo/comment":return self.comment(kind,body)
         if p=="/todo/status":return self.status(kind,body)
         if p=="/todo/proof":return self.proof(kind,body,raw)
@@ -364,6 +367,87 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p=="/nightwatch/inbound":return self.inbound(kind,body)
         if p=="/nightwatch/outbound":return self.outbound(kind,body)
         self.json({"error":"not_found"},404)
+    def memory_comparison(self,kind,d,client_host=None):
+        if not MEMORY_COMPARISON_ENABLED:
+            return self.json({"ok":False,"error":"memory_comparison_disabled"},403)
+        if kind!="machine":
+            return self.json({"ok":False,"error":"memory_comparison_internal_only"},403)
+        if str(client_host or "") not in {"127.0.0.1","::1","::ffff:127.0.0.1"}:
+            return self.json({"ok":False,"error":"memory_comparison_localhost_only"},403)
+        if not isinstance(d,dict):
+            return self.json({"ok":False,"error":"invalid_memory_comparison_request"},400)
+        op=str(d.get("op") or "")
+        schemas={
+            "initialize":({"op","run_id","cases","fixture_sha256","offline_digest"},{"op","run_id","cases","fixture_sha256","offline_digest"}),
+            "status":({"op","run_id"},{"op","run_id"}),
+            "abort":({"op","run_id","code"},{"op","run_id"}),
+            "start_arm":({"op","run_id","case_alias","arm","worker_id","card_id","conversation_id"},{"op","run_id","case_alias","arm","worker_id","card_id","conversation_id"}),
+            "submit_result":({"op","run_id","case_alias","arm","result"},{"op","run_id","case_alias","arm","result"}),
+            "cleanup":({"op","run_id","evidence"},{"op","run_id","evidence"}),
+            "complete_pair":({"op","run_id","case_alias"},{"op","run_id","case_alias"}),
+            "complete_run":({"op","run_id"},{"op","run_id"}),
+            "summary":({"op","run_id"},{"op","run_id"}),
+        }
+        schema=schemas.get(op)
+        if not schema or not schema[1].issubset(d) or not set(d).issubset(schema[0]):
+            return self.json({"ok":False,"error":"invalid_memory_comparison_request"},400)
+        runtime_dir=MEMORY_COMPARISON_RUNTIME_DIR
+        try:
+            if op=="initialize":
+                memory_comparison_runtime.start_run(
+                    runtime_dir,run_id=d["run_id"],cases=d["cases"],
+                    fixture_sha256=d["fixture_sha256"],
+                )
+                memory_comparison_runtime.record_offline_qualification(
+                    runtime_dir,run_id=d["run_id"],
+                    logical_digest=d["offline_digest"],passed=True,
+                )
+            elif op=="start_arm":
+                task=(load_board().get("tasks") or {}).get(str(d["card_id"]))
+                marker=((task or {}).get("experiment") or {}).get("memory_comparison") or {}
+                if (
+                    not isinstance(task,dict)
+                    or task.get("test") is not True
+                    or marker.get("experiment_id")!=d["run_id"]
+                    or marker.get("case_alias")!=d["case_alias"]
+                    or marker.get("arm")!=d["arm"]
+                ):
+                    return self.json({"ok":False,"error":"memory_comparison_card_required"},400)
+                memory_comparison_runtime.start_arm(
+                    runtime_dir,run_id=d["run_id"],case_alias=d["case_alias"],
+                    arm=d["arm"],worker_id=d["worker_id"],card_id=d["card_id"],
+                    conversation_id=d["conversation_id"],
+                )
+            elif op=="submit_result":
+                memory_comparison_runtime.record_arm_result(
+                    runtime_dir,run_id=d["run_id"],case_alias=d["case_alias"],
+                    arm=d["arm"],result=d["result"],
+                )
+            elif op=="cleanup":
+                memory_comparison_runtime.record_cleanup(
+                    runtime_dir,run_id=d["run_id"],evidence=d["evidence"],
+                )
+            elif op=="complete_pair":
+                memory_comparison_runtime.complete_pair(
+                    runtime_dir,run_id=d["run_id"],case_alias=d["case_alias"],
+                )
+            elif op=="complete_run":
+                memory_comparison_runtime.complete_run(runtime_dir,run_id=d["run_id"])
+            elif op=="abort":
+                memory_comparison_runtime.abort_run(
+                    runtime_dir,run_id=d["run_id"],
+                    code=d.get("code","operator_abort"),
+                )
+            summary=memory_comparison_runtime.build_public_summary(runtime_dir,d["run_id"])
+        except memory_comparison_runtime.MemoryComparisonError as error:
+            status=404 if error.code=="run_not_found" else 409 if error.code in {
+                "run_exists","run_aborted","run_completed","arm_already_active",
+                "cleanup_required","arm_order_violation","resource_reuse",
+                "pair_completion_order","run_completion_order",
+            } else 400
+            return self.json({"ok":False,"error":error.code},status)
+        key="summary" if op=="summary" else "status"
+        return self.json({"ok":True,key:summary})
     def memory_canary(self,kind,d):
         if kind not in ("browser","machine"):
             return self.json({"ok":False,"error":"memory_canary_control_forbidden"},403)
