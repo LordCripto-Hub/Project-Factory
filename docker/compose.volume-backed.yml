@@ -18,6 +18,8 @@ services:
     init: true
     restart: unless-stopped
     command: ["/home/mp/mypeople/bin/runtime-supervisor.sh"]
+    environment:
+      MYPEOPLE_MEMORY_COMPARISON_ENABLED: ${MYPEOPLE_MEMORY_COMPARISON_ENABLED:-0}
     tmpfs:
       - /run/mypeople-secrets:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700
     ports:

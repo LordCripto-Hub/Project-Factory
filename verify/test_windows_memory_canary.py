@@ -19,6 +19,7 @@ class WindowsMemoryCanaryContract(unittest.TestCase):
             "finally",
             "Set-ComposeParseDefaults",
             "memory-canary-cleanup-only",
+            "project-factory-history-039a62988625",
             "Memory Gate B cleanup incomplete:",
             "$failures.Add('runtime-control')",
             "$failures.Add('project-profile')",

@@ -25,7 +25,7 @@ function Set-ComposeParseDefaults {
         $env:MYPEOPLE_MEMORY_CANARY_SOURCE = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\experiments\memory-gate-b'))
     }
     if ([string]::IsNullOrWhiteSpace($env:MYPEOPLE_MEMORY_CANARY_DATASET)) {
-        $env:MYPEOPLE_MEMORY_CANARY_DATASET = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632'))
+        $env:MYPEOPLE_MEMORY_CANARY_DATASET = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\experiments\memory-gate-b\datasets\project-factory-history-039a62988625'))
     }
 }
 
