@@ -13,10 +13,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $casesPath = Join-Path $projectRoot 'experiments\memory-gate-b\comparison\cases.json'
-$datasetPath = Join-Path $projectRoot 'experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632'
+$datasetPath = Join-Path $projectRoot 'experiments\memory-gate-b\datasets\project-factory-history-039a62988625'
+$lockPath = Join-Path $projectRoot 'experiments\memory-gate-b\docker\history-hybrid-039a62988625.dataset-lock.json'
 $questionsPath = Join-Path $datasetPath 'questions.jsonl'
-$offlineReport = Join-Path $projectRoot 'experiments\memory-gate-b\reports\comparison-offline-2026-07-22.json'
-$sourceSha = '80dce6f866329b79061bb1ed6b0594f9fdf2dd45'
+$offlineReport = Join-Path $projectRoot 'experiments\memory-gate-b\reports\comparison-offline-039a62988625.json'
+$sourceSha = '039a62988625369f3f86c055cd476b0080395daa'
 $model = 'gpt-5.6-luna'
 $schedule = @(
     @{ alias = 'cmp-exact-01'; arms = @('baseline','memory') },
@@ -103,8 +104,19 @@ function Assert-Preflight {
     # Exact live binding: git rev-parse HEAD in the durable project workspace.
     $workspace = Invoke-Docker -Arguments @('exec', $Container, 'git', '-C', '/home/mp/workspaces/project-factory', 'rev-parse', 'HEAD')
     if ($workspace.Output.Trim() -ne $sourceSha) { throw 'workspace_source_mismatch' }
+    # git status --porcelain: reject uncommitted project state before comparison.
+    $workspaceStatus = Invoke-Docker -Arguments @('exec', $Container, 'git', '-C', '/home/mp/workspaces/project-factory', 'status', '--porcelain')
+    if (-not [string]::IsNullOrWhiteSpace($workspaceStatus.Output)) { throw 'workspace_dirty' }
     $flag = Invoke-Docker -Arguments @('exec', $Container, 'sh', '-lc', 'test "$MYPEOPLE_MEMORY_COMPARISON_ENABLED" = 1') -AllowFailure
     if ($flag.ExitCode -ne 0) { throw 'MYPEOPLE_MEMORY_COMPARISON_ENABLED_required' }
+    $provider = Invoke-Docker -Arguments @('exec', $Container, 'codex', 'login', 'status') -AllowFailure
+    if ($provider.ExitCode -ne 0) { throw 'provider_unavailable' }
+    $resources = Invoke-Docker -Arguments @('exec', $Container, 'python3', '-c', 'import json,pathlib,sys; root=pathlib.Path("/home/mp/mypeople/run/memory-comparison/runs"); active=[] if not root.exists() else [p for p in root.glob("*/state.json") if json.loads(p.read_text()).get("status") not in {"completed","aborted"}]; sys.exit(1 if active else 0)') -AllowFailure
+    if ($resources.ExitCode -ne 0) { throw 'comparison_resources_present' }
+    $inbox = Invoke-Docker -Arguments @('exec', $Container, 'sh', '-lc', 'test ! -d /home/mp/mypeople/run/memory-comparison/inbox || test -z "$(find /home/mp/mypeople/run/memory-comparison/inbox -mindepth 1 -print -quit)"') -AllowFailure
+    if ($inbox.ExitCode -ne 0) { throw 'comparison_resources_present' }
+    $sidecar = Invoke-Docker -Arguments @('ps', '--filter', 'label=com.docker.compose.service=memory-gate-b', '--filter', 'health=healthy', '--format', '{{.ID}}') -AllowFailure
+    if ($sidecar.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($sidecar.Output)) { throw 'memory_sidecar_unavailable' }
     $binding = Get-OfflineBinding
     [pscustomobject]@{
         status = 'offline_qualified'
@@ -243,7 +255,7 @@ function Invoke-PairedRun {
 
 switch ($Action) {
     'Preflight' { Assert-Preflight | ConvertTo-Json -Compress }
-    'Offline' { & python (Join-Path $projectRoot 'experiments\memory-gate-b\scripts\run_memory_comparison_offline.py') --dataset $datasetPath --cases $casesPath }
+    'Offline' { & python (Join-Path $projectRoot 'experiments\memory-gate-b\scripts\run_memory_comparison_offline.py') --dataset $datasetPath --lock $lockPath --cases $casesPath }
     'Paired' { Invoke-PairedRun | ConvertTo-Json -Depth 12 -Compress }
     'Status' { if (-not $RunId) { throw 'run_id_required' }; (Invoke-Mp -Arguments @('memory-comparison','status',$RunId)).Output }
     'Cleanup' { Assert-LiveConfirmation; Stop-ComparisonRun -Code 'operator_cleanup'; '{"ok":true,"status":"cleanup_requested"}' }
