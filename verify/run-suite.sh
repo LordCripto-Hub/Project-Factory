@@ -28,6 +28,7 @@ fi
 mkdir -p "$VERIFY/videos" "$VERIFY/screenshots"
 python3 "$VERIFY/test_isolated_verifier.py"
 python3 "$VERIFY/test_memory_gate_b_experiment.py"
+python3 "$VERIFY/test_memory_comparison_e2e.py"
 python3 "$VERIFY/test_memory_canary_control.py"
 python3 "$VERIFY/test_memory_canary_runtime.py"
 python3 "$VERIFY/test_memory_canary_telemetry.py"

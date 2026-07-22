@@ -53,6 +53,8 @@ class MemoryGateBExperimentContract(unittest.TestCase):
         production += sorted((ROOT / "docker").rglob("*"))
         production += sorted((ROOT / "windows").rglob("*"))
         for path in production:
+            if path.name == "Start-MyPeopleMemoryComparison.ps1":
+                continue  # Explicit, dry-run-by-default operator surface; never a startup entrypoint.
             if path.is_file():
                 self.assertNotIn(
                     "experiments/memory-gate-b",
