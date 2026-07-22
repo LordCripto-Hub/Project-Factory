@@ -74,10 +74,21 @@ Run the offline qualification from the repository root:
 
 ```powershell
 python experiments\memory-gate-b\scripts\run_memory_comparison_offline.py `
-  --dataset experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632 `
+  --dataset experiments\memory-gate-b\datasets\project-factory-history-039a62988625 `
+  --lock experiments\memory-gate-b\docker\history-hybrid-039a62988625.dataset-lock.json `
   --cases experiments\memory-gate-b\comparison\cases.json `
   --output comparison-offline.json
 ```
+
+The current qualification is bound to Project Factory source SHA
+`039a62988625369f3f86c055cd476b0080395daa`. Generator v2 produced 292
+committed-history events and 100 grounded questions from its 52 non-merge
+ancestors. Two independent six-case runs passed with fixture, logical digest,
+evidence selections, and escalation decisions identical. The canonical public
+receipt is
+[`reports/comparison-offline-039a62988625.json`](reports/comparison-offline-039a62988625.json).
+The earlier SHA-bound dataset, lock, and receipt remain unchanged as historical
+evidence.
 
 Two executions must have the same `logical_digest`, fixture hash, pass status,
 selected evidence identifiers, and escalation decisions. Whole-file hashes are
@@ -100,9 +111,7 @@ cost, better Boss decisions, or improved real-agent coordination.
 
 ### Paired live status
 
-The paired live run is intentionally not recorded yet. Its preflight stopped
-before creating any synthetic card or worker because the durable Project
-Factory workspace no longer matched the dataset source commit. The typed stop
-reason is `workspace_source_mismatch`. A future run must either use a reviewed
-workspace pinned to the locked source or qualify a new locked dataset; it must
-not reuse these results against a different source revision.
+The earlier paired-live attempt stopped before creating any synthetic card or
+worker because the durable workspace no longer matched the old dataset source.
+That historical stop remains valid. A new current-SHA live run is not recorded
+until the updated disposable-Docker and exact-workspace preflight pass.

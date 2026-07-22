@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import re
 import unittest
@@ -10,8 +11,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT = ROOT / "experiments" / "memory-gate-b"
 README = EXPERIMENT / "README.md"
-OFFLINE = EXPERIMENT / "reports" / "comparison-offline-2026-07-22.json"
-QUESTIONS = EXPERIMENT / "datasets" / "project-factory-history-80dce6f86632" / "questions.jsonl"
+OFFLINE = EXPERIMENT / "reports" / "comparison-offline-039a62988625.json"
+OLD_OFFLINE = EXPERIMENT / "reports" / "comparison-offline-2026-07-22.json"
+QUESTIONS = EXPERIMENT / "datasets" / "project-factory-history-039a62988625" / "questions.jsonl"
+SOURCE_SHA = "039a62988625369f3f86c055cd476b0080395daa"
+OLD_OFFLINE_SHA256 = "e064add0142eb65566b379cbc252937cc80756836853df7c2caa91ca2d4eebbd"
 
 
 class MemoryComparisonPublicArtifacts(unittest.TestCase):
@@ -24,9 +28,15 @@ class MemoryComparisonPublicArtifacts(unittest.TestCase):
         self.assertEqual(report["metrics"]["provider_tokens"], "not_measured")
         self.assertEqual(report["metrics"]["memory_context_tokens"], "estimated")
         self.assertEqual(report["metrics"]["retrieval_latency"], "actual")
-        self.assertRegex(report["dataset"]["source_sha"], r"^[0-9a-f]{40}$")
+        self.assertEqual(report["dataset"]["source_sha"], SOURCE_SHA)
+        self.assertEqual(report["configuration"]["top_k"], 3)
+        self.assertEqual(report["aggregates"]["escalation_count"], 0)
         self.assertRegex(report["fixture_sha256"], r"^[0-9a-f]{64}$")
         self.assertRegex(report["logical_digest"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            hashlib.sha256(OLD_OFFLINE.read_bytes()).hexdigest(),
+            OLD_OFFLINE_SHA256,
+        )
 
     def test_public_artifacts_are_sanitized_and_do_not_duplicate_raw_gold_text(self):
         combined = README.read_text(encoding="utf-8") + "\n" + OFFLINE.read_text(encoding="utf-8")
