@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "directory": "project-factory-history-80dce6f86632",
+    "source_sha": "80dce6f866329b79061bb1ed6b0594f9fdf2dd45"
+  },
+  "cases": [
+    {
+      "alias": "cmp-exact-01",
+      "question_id": "hist-exact-005",
+      "class": "exact_constraint",
+      "live": true,
+      "arm_order": ["baseline", "memory"],
+      "required_decision_id": "report_exact_commit_subject",
+      "allowed_evidence_ids": ["commit-9442d213e84f"],
+      "rejected_evidence_ids": [],
+      "verification_command_ids": ["git_show_subject"]
+    },
+    {
+      "alias": "cmp-exact-02",
+      "question_id": "hist-exact-006",
+      "class": "exact_constraint",
+      "live": false,
+      "arm_order": [],
+      "required_decision_id": "report_exact_commit_subject",
+      "allowed_evidence_ids": ["commit-5e9fffc618e8"],
+      "rejected_evidence_ids": [],
+      "verification_command_ids": ["git_show_subject"]
+    },
+    {
+      "alias": "cmp-temporal-01",
+      "question_id": "hist-temporal-006",
+      "class": "temporal_continuation",
+      "live": true,
+      "arm_order": ["memory", "baseline"],
+      "required_decision_id": "continue_from_latest_change",
+      "allowed_evidence_ids": ["file-80dce6f86632-001"],
+      "rejected_evidence_ids": ["file-89b0709a2812-001"],
+      "verification_command_ids": ["git_log_path_latest"]
+    },
+    {
+      "alias": "cmp-temporal-02",
+      "question_id": "hist-temporal-004",
+      "class": "temporal_continuation",
+      "live": false,
+      "arm_order": [],
+      "required_decision_id": "continue_from_latest_change",
+      "allowed_evidence_ids": ["file-2329c9ce5780-001"],
+      "rejected_evidence_ids": ["file-0f90171133e7-001"],
+      "verification_command_ids": ["git_log_path_latest"]
+    },
+    {
+      "alias": "cmp-contradiction-01",
+      "question_id": "hist-contradiction-004",
+      "class": "contradiction_prevention",
+      "live": true,
+      "arm_order": ["baseline", "memory"],
+      "required_decision_id": "reject_superseded_change",
+      "allowed_evidence_ids": ["file-2329c9ce5780-001"],
+      "rejected_evidence_ids": ["file-0f90171133e7-001"],
+      "verification_command_ids": ["git_log_path_latest", "git_show_superseded_edge"]
+    },
+    {
+      "alias": "cmp-contradiction-02",
+      "question_id": "hist-contradiction-002",
+      "class": "contradiction_prevention",
+      "live": false,
+      "arm_order": [],
+      "required_decision_id": "reject_superseded_change",
+      "allowed_evidence_ids": ["file-35e308c44fc1-001"],
+      "rejected_evidence_ids": ["file-f77872418930-001"],
+      "verification_command_ids": ["git_log_path_latest", "git_show_superseded_edge"]
+    }
+  ]
+}
