@@ -13,8 +13,8 @@ from memory_bench.taskspec_memory import PROJECT_SLUG, recall_history_claims
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATASET = ROOT / "datasets" / "project-factory-history-80dce6f86632"
-LOCK = ROOT / "docker" / "history-hybrid.dataset-lock.json"
+DATASET = ROOT / "datasets" / "project-factory-history-039a62988625"
+LOCK = ROOT / "docker" / "history-hybrid-039a62988625.dataset-lock.json"
 
 
 class TaskSpecMemoryTests(unittest.TestCase):
@@ -92,6 +92,7 @@ class TaskSpecMemoryTests(unittest.TestCase):
                 }
             ),
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=True,
             env={**os.environ, "PYTHONPATH": str(ROOT / "src")},

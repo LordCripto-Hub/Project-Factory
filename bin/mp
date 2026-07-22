@@ -99,7 +99,13 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
         profile = load_profile(profiles_dir, slug)
         profile_revision = profile.get("revision")
         canary_requested = task.get("memoryCanary") is True
-        if bypass_memory and not canary_requested:
+        comparison = task.get("experiment", {}).get("memory_comparison", {})
+        comparison_baseline = (
+            ENV.get("MYPEOPLE_MEMORY_COMPARISON_ENABLED") == "1"
+            and isinstance(comparison, dict)
+            and comparison.get("arm") == "baseline"
+        )
+        if bypass_memory and not canary_requested and not comparison_baseline:
             raise TaskSpecError("canary_not_requested")
         if (
             str(task.get("contextQuestion") or "").strip()
@@ -127,7 +133,13 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
             except MemoryCanaryError as error:
                 raise TaskSpecError(error.code) from error
         else:
-            spec = compile_task_spec(task, profile)
+            compile_profile = profile
+            if comparison_baseline:
+                compile_profile = {
+                    **profile,
+                    "memory": {**profile.get("memory", {}), "enabled": False},
+                }
+            spec = compile_task_spec(task, compile_profile)
         taskspecs_dir = os.path.realpath(
             ENV.get("TASKSPECS_DIR", os.path.join(ROOT, "run", "taskspecs"))
         )
@@ -1579,6 +1591,50 @@ def memory_canary_command(ns):
         "revision":record["revision"],
     },sort_keys=True))
 
+def memory_comparison_command(ns):
+    action=ns.memory_comparison_action
+    payload={"op":action.replace("-","_"),"run_id":ns.run_id}
+    try:
+        if action=="init":
+            document=json.loads(pathlib.Path(ns.cases_file).read_text(encoding="utf-8"))
+            rows=document.get("cases") if isinstance(document,dict) else document
+            payload={
+                "op":"initialize","run_id":ns.run_id,
+                "cases":[{"alias":row["alias"],"arm_order":row["arm_order"]} for row in rows if row.get("live",True)],
+                "fixture_sha256":ns.fixture_sha,
+                "offline_digest":ns.offline_digest,
+            }
+        elif action=="abort":
+            payload["code"]=ns.code
+        elif action=="start-arm":
+            payload.update({
+                "case_alias":ns.case_alias,"arm":ns.arm,
+                "worker_id":ns.worker_id,"card_id":ns.card_id,
+                "conversation_id":ns.conversation_id,
+            })
+        elif action=="submit-result":
+            payload.update({
+                "case_alias":ns.case_alias,"arm":ns.arm,
+                "result":json.loads(pathlib.Path(ns.result_file).read_text(encoding="utf-8")),
+            })
+        elif action=="cleanup":
+            payload["evidence"]={
+                "worker_absent":ns.worker_absent,
+                "card_absent":ns.card_absent,
+                "conversation_retired":ns.conversation_retired,
+                "temp_artifacts_absent":ns.temp_artifacts_absent,
+            }
+        elif action=="complete-pair":
+            payload["case_alias"]=ns.case_alias
+        result=http_json(
+            "/todo/memory-comparison","POST",payload,
+            base=os.environ.get("MYPEOPLE_TODO_URL") or os.environ.get("TODO_URL") or f"http://127.0.0.1:{ENV.get('TODO_PORT','9933')}",
+            token=ENV.get("QUEUE_SECRET",""),
+        )
+    except (OSError,UnicodeError,json.JSONDecodeError,KeyError,TypeError,RuntimeError) as error:
+        raise SystemExit(str(error)) from error
+    print(json.dumps(result,ensure_ascii=False,sort_keys=True,separators=(",",":")))
+
 def parser():
     p=argparse.ArgumentParser(prog="mp"); sub=p.add_subparsers(dest="verb",required=True)
     q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="claude",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.add_argument("--without-memory",action="store_true");q.set_defaults(fn=spawn)
@@ -1607,6 +1663,18 @@ def parser():
     enable=canary_sub.add_parser("enable");enable.add_argument("--project",required=True)
     canary_sub.add_parser("disable")
     canary.set_defaults(fn=memory_canary_command)
+    comparison=sub.add_parser("memory-comparison")
+    comparison_sub=comparison.add_subparsers(dest="memory_comparison_action",required=True)
+    q=comparison_sub.add_parser("init");q.add_argument("run_id");q.add_argument("--cases-file",required=True);q.add_argument("--fixture-sha",required=True);q.add_argument("--offline-digest",required=True)
+    q=comparison_sub.add_parser("status");q.add_argument("run_id")
+    q=comparison_sub.add_parser("abort");q.add_argument("run_id");q.add_argument("--code",default="operator_abort")
+    q=comparison_sub.add_parser("start-arm");q.add_argument("run_id");q.add_argument("--case-alias",required=True);q.add_argument("--arm",required=True,choices=["baseline","memory"]);q.add_argument("--worker-id",required=True);q.add_argument("--card-id",required=True);q.add_argument("--conversation-id",required=True)
+    q=comparison_sub.add_parser("submit-result");q.add_argument("run_id");q.add_argument("--case-alias",required=True);q.add_argument("--arm",required=True,choices=["baseline","memory"]);q.add_argument("--result-file",required=True)
+    q=comparison_sub.add_parser("cleanup");q.add_argument("run_id");q.add_argument("--worker-absent",action="store_true",required=True);q.add_argument("--card-absent",action="store_true",required=True);q.add_argument("--conversation-retired",action="store_true",required=True);q.add_argument("--temp-artifacts-absent",action="store_true",required=True)
+    q=comparison_sub.add_parser("complete-pair");q.add_argument("run_id");q.add_argument("--case-alias",required=True)
+    q=comparison_sub.add_parser("complete-run");q.add_argument("run_id")
+    q=comparison_sub.add_parser("summary");q.add_argument("run_id")
+    comparison.set_defaults(fn=memory_comparison_command)
     return p
 
 def main(argv=None):

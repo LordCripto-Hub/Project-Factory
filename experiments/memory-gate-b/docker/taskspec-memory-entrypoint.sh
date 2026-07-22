@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly FINAL_DATASET_NAME="project-factory-history-80dce6f86632"
+readonly FINAL_DATASET_NAME="project-factory-history-039a62988625"
 server_pid=""
 
 fail() {
@@ -21,7 +21,7 @@ trap cleanup EXIT
 [[ "$(id -u)" != "0" ]] || fail "container must run as a non-root user"
 [[ "${MYPEOPLE_TASKSPEC_DATASET_NAME:-}" == "$FINAL_DATASET_NAME" ]] || fail "unexpected dataset name"
 [[ "${MYPEOPLE_MEMORY_ALLOW_HTTP:-0}" == "0" ]] || fail "HTTP memory override is forbidden"
-[[ -d /workspace && -d /project-factory-history-80dce6f86632 && -d /evidence ]] || fail "required mounts are missing"
+[[ -d /workspace && -d /project-factory-history-039a62988625 && -d /evidence ]] || fail "required mounts are missing"
 [[ -f /home/mp/mypeople/bin/project_context.py ]] || fail "image compiler missing"
 [[ -f /home/mp/mypeople/memory-gateway/memory-gateway.mjs ]] || fail "image gateway missing"
 [[ -d /home/mp/mypeople/memory-gateway/node_modules ]] || fail "image gateway dependencies missing"
@@ -35,8 +35,8 @@ if touch /workspace/.taskspec-memory-write-probe 2>/dev/null; then
   rm -f /workspace/.taskspec-memory-write-probe
   fail "source mount is writable"
 fi
-if touch /project-factory-history-80dce6f86632/.taskspec-memory-write-probe 2>/dev/null; then
-  rm -f /project-factory-history-80dce6f86632/.taskspec-memory-write-probe
+if touch /project-factory-history-039a62988625/.taskspec-memory-write-probe 2>/dev/null; then
+  rm -f /project-factory-history-039a62988625/.taskspec-memory-write-probe
   fail "dataset mount is writable"
 fi
 touch /evidence/.taskspec-memory-write-probe || fail "evidence mount is not writable"
@@ -73,8 +73,8 @@ done
 [[ -s "$MYPEOPLE_GATE_B_READY" ]] || fail "MCP fixture readiness timeout"
 
 PYTHONPATH=/workspace/src python3 /workspace/scripts/run_taskspec_memory_gate.py \
-  --dataset /project-factory-history-80dce6f86632 \
-  --lock /workspace/docker/history-hybrid.dataset-lock.json \
+  --dataset /project-factory-history-039a62988625 \
+  --lock /workspace/docker/history-hybrid-039a62988625.dataset-lock.json \
   --project-context /home/mp/mypeople/bin/project_context.py \
   --server-ready "$MYPEOPLE_GATE_B_READY" \
   --ledger "$MYPEOPLE_GATE_B_LEDGER" \

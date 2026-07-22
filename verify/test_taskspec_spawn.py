@@ -173,6 +173,43 @@ class TaskSpecSpawnContract(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "requires --owner-task"):
             self.mp.spawn(invalid)
 
+    def test_without_memory_accepts_only_an_enabled_comparison_baseline(self):
+        task = {
+            "id": "task-1",
+            "projectSlug": "project-factory",
+            "contextQuestion": "question",
+            "memoryCanary": False,
+            "experiment": {"memory_comparison": {"arm": "baseline"}},
+        }
+        self.mp.http_json = lambda *_args, **_kwargs: {"tasks": {"task-1": task}}
+        self.mp.load_profile = lambda *_args: {
+            "slug": "project-factory", "revision": 7,
+            "memory": {"enabled": True},
+        }
+        compiled_profiles = []
+        def compile_baseline(_task, profile):
+            compiled_profiles.append(profile)
+            return {
+                "workingDirectory": "/tmp",
+                "projectSlug": "project-factory",
+                "profileRevision": 7,
+                "memoryStatus": "disabled",
+                "memoryClaims": [],
+            }
+        self.mp.compile_task_spec = compile_baseline
+        self.mp.write_task_spec = lambda *_args: "/tmp/task-1.json"
+        self.mp.record_taskspec_event = lambda _event: None
+        self.mp.ENV["MYPEOPLE_MEMORY_COMPARISON_ENABLED"] = "1"
+
+        self.assertEqual(
+            self.mp.compile_owner_task_spec("task-1", bypass_memory=True),
+            "/tmp/task-1.json",
+        )
+        self.assertIs(compiled_profiles[0]["memory"]["enabled"], False)
+        task.pop("experiment")
+        with self.assertRaisesRegex(self.mp.TaskSpecError, "canary_not_requested"):
+            self.mp.compile_owner_task_spec("task-1", bypass_memory=True)
+
     def test_canary_receipt_is_durable_before_taskspec_write(self):
         order = []
         self.mp.http_json = lambda *_args, **_kwargs: {

@@ -61,3 +61,69 @@ routing, evidence, and complete rollback. See
 
 This single useful result validates activation and reversibility. It does not
 replace the controlled multi-task comparison required for promotion.
+
+## Controlled Comparison
+
+The controlled comparison locks six public Project Factory history cases. All
+six are qualified offline; three aliases are then eligible for paired live
+baseline and memory arms in the approved counterbalanced order. The comparison
+uses one model for every arm and creates a fresh worker, card, and provider
+conversation each time.
+
+Run the offline qualification from the repository root:
+
+```powershell
+python experiments\memory-gate-b\scripts\run_memory_comparison_offline.py `
+  --dataset experiments\memory-gate-b\datasets\project-factory-history-039a62988625 `
+  --lock experiments\memory-gate-b\docker\history-hybrid-039a62988625.dataset-lock.json `
+  --cases experiments\memory-gate-b\comparison\cases.json `
+  --output comparison-offline.json
+```
+
+The current qualification is bound to Project Factory source SHA
+`039a62988625369f3f86c055cd476b0080395daa`. Generator v2 produced 292
+committed-history events and 100 grounded questions from its 52 non-merge
+ancestors. Two independent six-case runs passed with fixture, logical digest,
+evidence selections, and escalation decisions identical. The canonical public
+receipt is
+[`reports/comparison-offline-039a62988625.json`](reports/comparison-offline-039a62988625.json).
+The earlier SHA-bound dataset, lock, and receipt remain unchanged as historical
+evidence.
+
+Two executions must have the same `logical_digest`, fixture hash, pass status,
+selected evidence identifiers, and escalation decisions. Whole-file hashes are
+expected to differ because retrieval latency is an actual observation. The
+committed report records one canonical observed run. Memory-context tokens are
+estimated, retrieval latency is actual, and provider tokens are
+`not_measured` unless the provider exposes attributable counters.
+
+### Stop conditions
+
+Do not begin paired execution if the dataset/source binding, fixture hash,
+logical digest, six-of-six result, Docker health, feature flag, project binding,
+or zero-resource preflight fails. During paired execution, stop on harmful
+output, wrong-project evidence, provider failure, timeout, score refusal,
+resource reuse, cleanup failure, or a container restart.
+
+Offline qualification demonstrates deterministic retrieval and scoring over a
+locked public fixture. It does not prove production benefit, lower provider
+cost, better Boss decisions, or improved real-agent coordination.
+
+### Paired live status
+
+The current-SHA preflight passed with the exact workspace SHA, locked fixture,
+offline digest, healthy sidecar, available provider, and unchanged restart
+count. Two infrastructure attempts then stopped during the first baseline,
+before any provider conversation or completed arm. The first exposed a missing
+process-environment allowlist entry and an invalid baseline TaskSpec path. The
+second exposed that the baseline compiler still followed the enabled project
+memory profile instead of enforcing the explicit no-memory arm.
+
+Both attempts have zero completed arms, zero scored outputs, zero harmful
+outputs, and no provider-token measurement. Their synthetic cards and temporary
+directories were removed and no comparison worker was retained. Runtime
+cleanup was verified complete. No selective arm was rerun. The live decision is therefore
+`not_promoted`: offline retrieval remains qualified, but production benefit is
+not demonstrated. A future live comparison requires a fresh reviewed run after
+the corrected harness passes disposable end-to-end verification; this report
+does not authorize automatic activation.

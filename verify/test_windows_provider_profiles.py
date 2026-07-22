@@ -76,6 +76,12 @@ class WindowsProviderProfileContract(unittest.TestCase):
         self.assertIn("[string]$TargetProfile", text)
         self.assertIn("'--profile'", text)
         self.assertIn("-TargetProfile $targetProfile", text)
+        self.assertIn("RedirectStandardOutput", text)
+        self.assertIn("RedirectStandardError", text)
+        self.assertIn("$null = $process.Handle", text)
+        self.assertIn("$process.WaitForExit()", text)
+        self.assertIn("$process.Refresh()", text)
+        self.assertIn("Provider session phase failed: ${Operation}:", text)
         self.assertNotRegex(text, r"(?m)\\\s*$")
 
     def test_status_script_reports_only_non_secret_metadata(self):
