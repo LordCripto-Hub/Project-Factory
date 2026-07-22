@@ -19,6 +19,7 @@ $questionsPath = Join-Path $datasetPath 'questions.jsonl'
 $offlineReport = Join-Path $projectRoot 'experiments\memory-gate-b\reports\comparison-offline-039a62988625.json'
 $sourceSha = '039a62988625369f3f86c055cd476b0080395daa'
 $model = 'gpt-5.6-luna'
+$bossId = 'node-1/main:Boss'
 $schedule = @(
     @{ alias = 'cmp-exact-01'; arms = @('baseline','memory') },
     @{ alias = 'cmp-temporal-01'; arms = @('memory','baseline') },
@@ -214,7 +215,8 @@ function Remove-ArmResources {
     Invoke-Mp -Arguments @('kill', $WorkerId, '--reason', 'operator-request') -AllowFailure | Out-Null
     Invoke-TodoMachine -Payload @{ 'op' = 'del'; id = $CardId } | Out-Null
     Invoke-Docker -Arguments @('exec', $Container, 'rm', '-rf', $RemoteDirectory) | Out-Null
-    $workerAbsent = (Invoke-Mp -Arguments @('peek', $WorkerId) -AllowFailure).ExitCode -ne 0
+    $workerTab = ($WorkerId -split ':', 2)[1]
+    $workerAbsent = (Invoke-Docker -Arguments @('exec',$Container,'tmux','has-session','-t',"mc-main:$workerTab") -AllowFailure).ExitCode -ne 0
     $cardAbsent = (Invoke-TodoMachine -Payload @{ 'op' = 'del'; id = $CardId }).error -eq 'unknown_task'
     $tempAbsent = (Invoke-Docker -Arguments @('exec', $Container, 'test', '!', '-e', $RemoteDirectory) -AllowFailure).ExitCode -eq 0
     if (-not ($workerAbsent -and $cardAbsent -and $tempAbsent)) { throw 'cleanup_verification_failed' }
@@ -228,6 +230,7 @@ function Stop-ComparisonRun {
     if ($WorkerId) { Invoke-Mp -Arguments @('kill',$WorkerId,'--reason','operator-request') -AllowFailure | Out-Null }
     if ($CardId) { Invoke-TodoMachine -Payload @{ 'op' = 'del'; id = $CardId } | Out-Null }
     if ($RemoteDirectory) { Invoke-Docker -Arguments @('exec',$Container,'rm','-rf',$RemoteDirectory) -AllowFailure | Out-Null }
+    if ($RunId) { Invoke-Docker -Arguments @('exec',$Container,'rm','-rf',"/home/mp/mypeople/run/memory-comparison/inbox/$RunId") -AllowFailure | Out-Null }
 }
 
 function Invoke-PairedRun {
@@ -237,7 +240,7 @@ function Invoke-PairedRun {
     foreach ($pair in $schedule) {
         foreach ($arm in $pair.arms) {
             $nonce = [guid]::NewGuid().ToString('N')
-            $workerId = "main:cmp-$nonce"
+            $workerId = "node-1/main:cmp-$nonce"
             $conversationId = "conversation-$nonce"
             $remoteDirectory = "/home/mp/mypeople/run/memory-comparison/inbox/$RunId/$($pair.alias)-$arm-$nonce"
             $cardId = ''
@@ -253,7 +256,7 @@ function Invoke-PairedRun {
                 $cardId = [string]$card.id
                 if (-not $cardId) { throw 'card_creation_failed' }
                 Invoke-Docker -Arguments @('exec',$Container,'mkdir','-p',$remoteDirectory) | Out-Null
-                $spawn = @('spawn',$workerId,'--backend','codex','--model',$model,'--boss','main:Boss','--owner-task',$cardId)
+                $spawn = @('spawn',$workerId,'--backend','codex','--model',$model,'--boss',$bossId,'--owner-task',$cardId)
                 if ($arm -eq 'baseline') { $spawn += '--without-memory' }
                 Invoke-Mp -Arguments $spawn | Out-Null # mp spawn --backend codex --owner-task --without-memory
                 Invoke-Mp -Arguments @('memory-comparison','start-arm',$RunId,'--case-alias',$pair.alias,'--arm',$arm,'--worker-id',$workerId,'--card-id',$cardId,'--conversation-id',$conversationId) | Out-Null
@@ -282,6 +285,7 @@ function Invoke-PairedRun {
         }
         Invoke-Mp -Arguments @('memory-comparison','complete-pair',$RunId,'--case-alias',$pair.alias) | Out-Null
     }
+    Invoke-Docker -Arguments @('exec',$Container,'rm','-rf',"/home/mp/mypeople/run/memory-comparison/inbox/$RunId") | Out-Null
     Invoke-Mp -Arguments @('memory-comparison','complete-run',$RunId) | Out-Null
     (Invoke-Mp -Arguments @('memory-comparison','summary',$RunId)).Output | ConvertFrom-Json
 }

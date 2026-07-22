@@ -70,6 +70,8 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
         self.assertIn("--owner-task", self.text)
         self.assertIn("--without-memory", self.text)
         self.assertIn("[guid]::NewGuid()", self.text)
+        self.assertIn('node-1/main:cmp-', self.text)
+        self.assertIn("$bossId = 'node-1/main:Boss'", self.text)
         self.assertIn("questions.jsonl", self.text)
         self.assertIn("question_id", self.text)
         self.assertIn(".query", self.text)
@@ -100,6 +102,8 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
             "card_absent",
             "conversation_retired",
             "temp_artifacts_absent",
+            "tmux','has-session",
+            'inbox/$RunId',
             "memory-comparison abort",
             "wrong_project",
             "provider_error",
