@@ -139,6 +139,8 @@ function Assert-Preflight {
     if ($flag.ExitCode -ne 0 -or $flag.Output.Trim() -ne '1') { throw 'MYPEOPLE_MEMORY_COMPARISON_ENABLED_required' }
     $provider = Invoke-Docker -Arguments @('exec', $Container, 'codex', 'login', 'status') -AllowFailure
     if ($provider.ExitCode -ne 0) { throw 'provider_unavailable' }
+    $boss = Invoke-Docker -Arguments @('exec', $Container, 'tmux', 'has-session', '-t', 'mc-main:Boss') -AllowFailure
+    if ($boss.ExitCode -ne 0) { throw 'boss_unavailable' }
     $resourceProbe = @'
 import json,pathlib,sys
 root=pathlib.Path("/home/mp/mypeople/run/memory-comparison/runs")

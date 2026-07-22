@@ -40,6 +40,7 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
             "git status --porcelain",
             "workspace_dirty",
             "provider_unavailable",
+            "boss_unavailable",
             "comparison_resources_present",
             "memory_sidecar_unavailable",
             "memory-comparison",
