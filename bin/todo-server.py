@@ -22,6 +22,11 @@ os.makedirs(os.path.join(ROOT,"run"),exist_ok=True)
 SESSIONS=set();TOKENS={};START=time.time();STORE_LOCK=threading.RLock()
 VALID_STATES={"needs_brainstorm","working","review","done","blocked","cancelled","recurring"};TERMINAL={"done","cancelled"}
 PROJECT_SLUG_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+MEMORY_COMPARISON_ENABLED=ENV.get("MYPEOPLE_MEMORY_COMPARISON_ENABLED","")=="1"
+MEMORY_COMPARISON_CASES={"cmp-exact-01","cmp-temporal-01","cmp-contradiction-01"}
+MEMORY_COMPARISON_ID_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+class MemoryComparisonAccessError(ValueError):pass
 
 def validate_project_slug(value,*,allow_empty=False):
     value=str(value or "").strip()
@@ -40,6 +45,26 @@ def validate_memory_canary(value,project_slug,context_question):
     if project_slug!="project-factory":raise ValueError("memory_canary_requires_project_factory")
     if not context_question:raise ValueError("memory_canary_requires_question")
     return True
+
+def validate_memory_comparison(value,kind,project_slug,context_question,memory_canary,is_test,*,now=None):
+    if value is None:return None
+    if not MEMORY_COMPARISON_ENABLED:raise MemoryComparisonAccessError("memory_comparison_disabled")
+    if kind!="machine":raise MemoryComparisonAccessError("memory_comparison_internal_only")
+    if not isinstance(value,dict) or set(value)!={"memory_comparison"}:raise ValueError("invalid_memory_comparison")
+    item=value.get("memory_comparison")
+    required={"experiment_id","case_alias","arm","cleanup_deadline"}
+    if not isinstance(item,dict) or set(item)!=required:raise ValueError("invalid_memory_comparison")
+    experiment_id=item.get("experiment_id");case_alias=item.get("case_alias");arm=item.get("arm");deadline=item.get("cleanup_deadline")
+    if not isinstance(experiment_id,str) or len(experiment_id)>64 or not MEMORY_COMPARISON_ID_RE.fullmatch(experiment_id):raise ValueError("invalid_memory_comparison_id")
+    if case_alias not in MEMORY_COMPARISON_CASES:raise ValueError("invalid_memory_comparison_case")
+    if arm not in {"baseline","memory"}:raise ValueError("invalid_memory_comparison_arm")
+    if project_slug!="project-factory":raise ValueError("memory_comparison_requires_project_factory")
+    if not context_question:raise ValueError("memory_comparison_requires_question")
+    if is_test is not True:raise ValueError("memory_comparison_requires_test_card")
+    if memory_canary is not (arm=="memory"):raise ValueError("memory_comparison_arm_mismatch")
+    current=time.time() if now is None else float(now)
+    if isinstance(deadline,bool) or not isinstance(deadline,(int,float)) or deadline<=current or deadline>current+3600:raise ValueError("invalid_memory_comparison_deadline")
+    return {"memory_comparison":{"experiment_id":experiment_id,"case_alias":case_alias,"arm":arm,"cleanup_deadline":float(deadline)}}
 
 def validate_canary_assessment(assessment,rationale):
     assessment=str(assessment or "").strip()
@@ -397,6 +422,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def update(self,kind,d):
         op=d.get("op")
         if any(k in d for k in ("parent","dependsOn","hardGate")) or op=="reorder":return self.json({"ok":False,"error":"unsupported_removed_feature"},400)
+        if "memoryComparison" in d:return self.json({"ok":False,"error":"invalid_memory_comparison"},400)
+        if "experiment" in d and op!="add":return self.json({"ok":False,"error":"memory_comparison_immutable"},400)
         if "memoryCanary" in d and kind not in ("browser","machine"):return self.json({"ok":False,"error":"memory_canary_control_forbidden"},403)
         if kind=="nightwatch" and op=="add":
             token=d.get("token","");item=TOKENS.get(token)
@@ -417,7 +444,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if policy not in ("required","optional"):return self.json({"ok":False,"error":"invalid_evidence_policy"},400)
                 try:memory_canary=validate_memory_canary(d.get("memoryCanary",False),project_slug,context_question)
                 except ValueError as e:return self.json({"ok":False,"error":str(e)},400)
-                tid=secrets.token_hex(8);t=normalize_task({"id":tid,"text":title,"state":"needs_brainstorm","projectSlug":project_slug,"contextQuestion":context_question,"memoryCanary":memory_canary,"evidencePolicy":policy,"test":is_test,"created":time.time(),"updated":time.time()});b["tasks"][tid]=t;b["order"].insert(0,tid)
+                try:experiment=validate_memory_comparison(d.get("experiment"),kind,project_slug,context_question,memory_canary,d.get("test"))
+                except MemoryComparisonAccessError as e:return self.json({"ok":False,"error":str(e)},403)
+                except ValueError as e:return self.json({"ok":False,"error":str(e)},400)
+                if experiment:
+                    marker=experiment["memory_comparison"];identity=(marker["experiment_id"],marker["case_alias"],marker["arm"])
+                    for existing in b["tasks"].values():
+                        prior=(existing.get("experiment") or {}).get("memory_comparison") or {}
+                        if (prior.get("experiment_id"),prior.get("case_alias"),prior.get("arm"))==identity:return self.json({"ok":False,"error":"duplicate_memory_comparison_card"},409)
+                tid=secrets.token_hex(8);payload={"id":tid,"text":title,"state":"needs_brainstorm","projectSlug":project_slug,"contextQuestion":context_question,"memoryCanary":memory_canary,"evidencePolicy":policy,"test":is_test,"created":time.time(),"updated":time.time()}
+                if experiment:payload["experiment"]=experiment
+                t=normalize_task(payload);b["tasks"][tid]=t;b["order"].insert(0,tid)
                 if not t["test"]:fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": added",d.get("by",d.get("actor","CEO")))
             elif tid not in b["tasks"]:return self.json({"ok":False,"error":"unknown_task"},404)
             elif op=="del":b["tasks"].pop(tid);b["order"]=[x for x in b["order"] if x!=tid]

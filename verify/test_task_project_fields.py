@@ -8,10 +8,20 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+
+if "fcntl" not in sys.modules:
+    fcntl = types.ModuleType("fcntl")
+    fcntl.LOCK_EX = 2
+    fcntl.LOCK_UN = 8
+    fcntl.flock = lambda *_args, **_kwargs: None
+    sys.modules["fcntl"] = fcntl
+if not hasattr(os, "uname"):
+    os.uname = lambda: types.SimpleNamespace(nodename="verify-host")
 
 
 def load_server(temp_dir: str):
