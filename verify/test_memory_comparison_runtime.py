@@ -49,6 +49,7 @@ def result(alias: str, arm: str, score: int = 100):
             "violations": [],
         },
         "metrics": {
+            "wall_time_ms": 250,
             "retrieval_latency_ms": 1.5 if arm == "memory" else "not_applicable",
             "memory_context_tokens_estimated": 18 if arm == "memory" else 0,
             "provider_tokens": "not_measured",

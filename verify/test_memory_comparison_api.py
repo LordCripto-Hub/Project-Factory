@@ -92,6 +92,7 @@ def score_result():
             "violations": [],
         },
         "metrics": {
+            "wall_time_ms": 250,
             "retrieval_latency_ms": "not_applicable",
             "memory_context_tokens_estimated": 0,
             "provider_tokens": "not_measured",

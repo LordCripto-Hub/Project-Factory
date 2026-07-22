@@ -33,6 +33,7 @@ SCORE_FIELDS = {
     "violations",
 }
 METRIC_FIELDS = {
+    "wall_time_ms",
     "retrieval_latency_ms",
     "memory_context_tokens_estimated",
     "provider_tokens",
@@ -304,6 +305,8 @@ def _validate_result(result, case_alias):
     if not isinstance(score, dict) or set(score) != SCORE_FIELDS or score.get("case_alias") != case_alias:
         raise MemoryComparisonError("result_invalid")
     if not isinstance(metrics, dict) or set(metrics) != METRIC_FIELDS:
+        raise MemoryComparisonError("result_invalid")
+    if isinstance(metrics.get("wall_time_ms"), bool) or not isinstance(metrics.get("wall_time_ms"), int) or metrics["wall_time_ms"] < 0:
         raise MemoryComparisonError("result_invalid")
     if isinstance(score.get("score"), bool) or not isinstance(score.get("score"), int) or not 0 <= score["score"] <= 100:
         raise MemoryComparisonError("result_invalid")
