@@ -338,21 +338,24 @@ def verify_roles(
     for expected in _selected(roster, selected_agent):
         agent_id = expected["agent_id"]
         current = actual.get(agent_id)
-        if current is None or current.get("state") != "alive":
-            failures.append(agent_id)
+        if current is None:
+            failures.append(f"{agent_id}:missing")
+            continue
+        if current.get("state") != "alive":
+            failures.append(f"{agent_id}:not_alive")
             continue
         if not window_exists(tmux_target(agent_id)):
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:window_missing")
             continue
         if target_backend and current.get("backend") != target_backend:
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:backend_mismatch")
             continue
         if not target_backend and current.get("backend") != expected.get("backend"):
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:backend_mismatch")
             continue
         expected_model = target_model or expected.get("model")
         if expected_model and current.get("model") != expected_model:
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:model_mismatch")
             continue
         if current.get("backend") == "codex":
             expected_profile = (
@@ -363,34 +366,39 @@ def verify_roles(
                 expected_profile
                 and current.get("provider_profile") != expected_profile
             ):
-                failures.append(agent_id)
+                failures.append(f"{agent_id}:profile_mismatch")
                 continue
         try:
             session_id = validate_session_id(current.get("session_id"))
         except SessionError:
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:session_invalid")
             continue
-        if (
-            current.get("resume_state") != "available"
-            or current.get("session_backend") != current.get("backend")
-            or current.get("session_profile")
-            != current.get("provider_profile", "")
-            or os.path.realpath(str(current.get("session_cwd") or ""))
-            != os.path.realpath(str(current.get("cwd") or ""))
-            or (
-                expected.get("session_id")
-                and session_id == expected.get("session_id")
-            )
+        if current.get("resume_state") != "available":
+            failures.append(f"{agent_id}:session_unavailable")
+            continue
+        if current.get("session_backend") != current.get("backend"):
+            failures.append(f"{agent_id}:session_backend_mismatch")
+            continue
+        if current.get("session_profile") != current.get("provider_profile", ""):
+            failures.append(f"{agent_id}:session_profile_mismatch")
+            continue
+        if os.path.realpath(str(current.get("session_cwd") or "")) != os.path.realpath(
+            str(current.get("cwd") or "")
         ):
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:session_cwd_mismatch")
+            continue
+        if expected.get("session_id") and session_id == expected.get("session_id"):
+            failures.append(f"{agent_id}:session_reused")
             continue
         if any(
             field in expected and current.get(field) != expected.get(field)
             for field in role_fields
         ):
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:role_receipt_mismatch")
     if failures:
-        raise RuntimeError("provider switch role verification failed")
+        raise RuntimeError(
+            "provider switch role verification failed: " + ",".join(failures)
+        )
 
 
 def rollback(transaction_dir: str) -> None:

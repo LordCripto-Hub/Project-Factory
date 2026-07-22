@@ -331,7 +331,10 @@ class ProviderSessionContract(unittest.TestCase):
         with mock.patch.object(module, "BINDINGS_PATH", str(bindings)), \
              mock.patch.object(module, "load_roster", return_value=wrong), \
              mock.patch.object(module, "window_exists", return_value=True):
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"node-1/main:Boss:model_mismatch",
+            ):
                 module.verify_roles(
                     expected,
                     target_backend="codex",
