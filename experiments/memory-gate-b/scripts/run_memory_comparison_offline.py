@@ -22,7 +22,7 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument(
         "--lock",
-        default=str(EXPERIMENT / "docker" / "history-hybrid.dataset-lock.json"),
+        default=str(EXPERIMENT / "docker" / "history-hybrid-039a62988625.dataset-lock.json"),
     )
     args = parser.parse_args()
     loaded = load_history_fixture(args.dataset, args.lock)

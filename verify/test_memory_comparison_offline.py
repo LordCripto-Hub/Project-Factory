@@ -8,8 +8,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT = ROOT / "experiments" / "memory-gate-b"
-DATASET = EXPERIMENT / "datasets" / "project-factory-history-80dce6f86632"
-LOCK = EXPERIMENT / "docker" / "history-hybrid.dataset-lock.json"
+DATASET = EXPERIMENT / "datasets" / "project-factory-history-039a62988625"
+LOCK = EXPERIMENT / "docker" / "history-hybrid-039a62988625.dataset-lock.json"
 CASES = EXPERIMENT / "comparison" / "cases.json"
 sys.path.insert(0, str(EXPERIMENT))
 sys.path.insert(0, str(EXPERIMENT / "src"))

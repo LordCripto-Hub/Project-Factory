@@ -11,8 +11,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT = ROOT / "experiments" / "memory-gate-b"
-DATASET = EXPERIMENT / "datasets" / "project-factory-history-80dce6f86632"
-LOCK = EXPERIMENT / "docker" / "history-hybrid.dataset-lock.json"
+DATASET = EXPERIMENT / "datasets" / "project-factory-history-039a62988625"
+LOCK = EXPERIMENT / "docker" / "history-hybrid-039a62988625.dataset-lock.json"
 
 
 class MemoryGateBExperimentContract(unittest.TestCase):
@@ -40,7 +40,7 @@ class MemoryGateBExperimentContract(unittest.TestCase):
         self.assertEqual(lock["dataset_dir"], DATASET.name)
         self.assertEqual(
             lock["source_sha"],
-            "80dce6f866329b79061bb1ed6b0594f9fdf2dd45",
+            "039a62988625369f3f86c055cd476b0080395daa",
         )
         self.assertNotIn("preliminary", json.dumps(lock).lower())
         for name, expected in lock["files"].items():
