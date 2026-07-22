@@ -1,63 +1,63 @@
 {
   "schema_version": 1,
   "dataset": {
-    "directory": "project-factory-history-80dce6f86632",
-    "source_sha": "80dce6f866329b79061bb1ed6b0594f9fdf2dd45"
+    "directory": "project-factory-history-039a62988625",
+    "source_sha": "039a62988625369f3f86c055cd476b0080395daa"
   },
   "cases": [
     {
       "alias": "cmp-exact-01",
-      "question_id": "hist-exact-005",
+      "question_id": "hist-exact-001",
       "class": "exact_constraint",
       "live": true,
       "arm_order": ["baseline", "memory"],
       "required_decision_id": "report_exact_commit_subject",
-      "allowed_evidence_ids": ["commit-9442d213e84f"],
+      "allowed_evidence_ids": ["commit-e35814538fe3"],
       "rejected_evidence_ids": [],
       "verification_command_ids": ["git_show_subject"]
     },
     {
       "alias": "cmp-exact-02",
-      "question_id": "hist-exact-006",
+      "question_id": "hist-exact-002",
       "class": "exact_constraint",
       "live": false,
       "arm_order": [],
       "required_decision_id": "report_exact_commit_subject",
-      "allowed_evidence_ids": ["commit-5e9fffc618e8"],
+      "allowed_evidence_ids": ["commit-3e465e99be82"],
       "rejected_evidence_ids": [],
       "verification_command_ids": ["git_show_subject"]
     },
     {
       "alias": "cmp-temporal-01",
-      "question_id": "hist-temporal-006",
+      "question_id": "hist-temporal-001",
       "class": "temporal_continuation",
       "live": true,
       "arm_order": ["memory", "baseline"],
       "required_decision_id": "continue_from_latest_change",
-      "allowed_evidence_ids": ["file-80dce6f86632-001"],
-      "rejected_evidence_ids": ["file-89b0709a2812-001"],
+      "allowed_evidence_ids": ["file-6ce82ee8be52-001"],
+      "rejected_evidence_ids": ["file-2b8e006f9893-001"],
       "verification_command_ids": ["git_log_path_latest"]
     },
     {
       "alias": "cmp-temporal-02",
-      "question_id": "hist-temporal-004",
+      "question_id": "hist-temporal-002",
       "class": "temporal_continuation",
       "live": false,
       "arm_order": [],
       "required_decision_id": "continue_from_latest_change",
-      "allowed_evidence_ids": ["file-2329c9ce5780-001"],
-      "rejected_evidence_ids": ["file-0f90171133e7-001"],
+      "allowed_evidence_ids": ["file-50a95cb9f6ea-001"],
+      "rejected_evidence_ids": ["file-e35814538fe3-007"],
       "verification_command_ids": ["git_log_path_latest"]
     },
     {
       "alias": "cmp-contradiction-01",
-      "question_id": "hist-contradiction-004",
+      "question_id": "hist-contradiction-001",
       "class": "contradiction_prevention",
       "live": true,
       "arm_order": ["baseline", "memory"],
       "required_decision_id": "reject_superseded_change",
-      "allowed_evidence_ids": ["file-2329c9ce5780-001"],
-      "rejected_evidence_ids": ["file-0f90171133e7-001"],
+      "allowed_evidence_ids": ["file-6ce82ee8be52-001"],
+      "rejected_evidence_ids": ["file-2b8e006f9893-001"],
       "verification_command_ids": ["git_log_path_latest", "git_show_superseded_edge"]
     },
     {
@@ -67,8 +67,8 @@
       "live": false,
       "arm_order": [],
       "required_decision_id": "reject_superseded_change",
-      "allowed_evidence_ids": ["file-35e308c44fc1-001"],
-      "rejected_evidence_ids": ["file-f77872418930-001"],
+      "allowed_evidence_ids": ["file-50a95cb9f6ea-001"],
+      "rejected_evidence_ids": ["file-e35814538fe3-007"],
       "verification_command_ids": ["git_log_path_latest", "git_show_superseded_edge"]
     }
   ]

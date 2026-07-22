@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT = ROOT / "experiments" / "memory-gate-b"
-DATASET = EXPERIMENT / "datasets" / "project-factory-history-80dce6f86632"
+DATASET = EXPERIMENT / "datasets" / "project-factory-history-039a62988625"
 CASES = EXPERIMENT / "comparison" / "cases.json"
 sys.path.insert(0, str(EXPERIMENT))
 
@@ -29,12 +29,12 @@ class MemoryComparisonScoringContract(unittest.TestCase):
     def setUpClass(cls):
         cls.case = next(case for case in load_cases(CASES, DATASET) if case.alias == "cmp-contradiction-01")
         cls.valid = {
-            "decision_id": "reject_superseded_change",
-            "selected_evidence_ids": ["file-2329c9ce5780-001"],
-            "rejected_evidence_ids": ["file-0f90171133e7-001"],
+            "decision_id": cls.case.required_decision_id,
+            "selected_evidence_ids": list(cls.case.allowed_evidence_ids),
+            "rejected_evidence_ids": list(cls.case.rejected_evidence_ids),
             "commands": [
-                {"command_id": "git_log_path_latest", "exit_code": 0},
-                {"command_id": "git_show_superseded_edge", "exit_code": 0},
+                {"command_id": command_id, "exit_code": 0}
+                for command_id in cls.case.verification_command_ids
             ],
             "conclusion": "The newer verified path change supersedes the earlier record.",
         }

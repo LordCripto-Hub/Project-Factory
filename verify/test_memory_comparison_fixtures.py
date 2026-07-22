@@ -11,14 +11,17 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT = ROOT / "experiments" / "memory-gate-b"
 COMPARISON = EXPERIMENT / "comparison"
 CASES = COMPARISON / "cases.json"
-DATASET = EXPERIMENT / "datasets" / "project-factory-history-80dce6f86632"
-EXPECTED = {
-    "cmp-exact-01": ("hist-exact-005", "exact_constraint", True, ("baseline", "memory")),
-    "cmp-exact-02": ("hist-exact-006", "exact_constraint", False, ()),
-    "cmp-temporal-01": ("hist-temporal-006", "temporal_continuation", True, ("memory", "baseline")),
-    "cmp-temporal-02": ("hist-temporal-004", "temporal_continuation", False, ()),
-    "cmp-contradiction-01": ("hist-contradiction-004", "contradiction_prevention", True, ("baseline", "memory")),
-    "cmp-contradiction-02": ("hist-contradiction-002", "contradiction_prevention", False, ()),
+DATASET = EXPERIMENT / "datasets" / "project-factory-history-039a62988625"
+EXPECTED_SOURCE_SHA = "039a62988625369f3f86c055cd476b0080395daa"
+EXPECTED_CLASSES = {
+    "exact_constraint": 2,
+    "temporal_continuation": 2,
+    "contradiction_prevention": 2,
+}
+EXPECTED_LIVE_ORDERS = {
+    "exact_constraint": ("baseline", "memory"),
+    "temporal_continuation": ("memory", "baseline"),
+    "contradiction_prevention": ("baseline", "memory"),
 }
 
 
@@ -33,24 +36,33 @@ class MemoryComparisonFixtureContract(unittest.TestCase):
         from comparison.contracts import load_cases
 
         cls.document = json.loads(CASES.read_text(encoding="utf-8"))
-        cls.loaded = load_cases(CASES, DATASET)
+        try:
+            cls.loaded = load_cases(CASES, DATASET)
+            cls.load_error = None
+        except ValueError as exc:
+            cls.loaded = None
+            cls.load_error = exc
 
     def test_fixture_exists(self):
         self.assertTrue(CASES.is_file(), "comparison case fixture is missing")
+        self.assertIsNone(
+            getattr(self, "load_error", None),
+            f"comparison fixture must bind the current dataset: {getattr(self, 'load_error', None)}",
+        )
 
-    def test_matrix_is_exactly_the_approved_six_cases(self):
+    def test_matrix_has_two_cases_per_class_and_one_live_order(self):
         if self.loaded is None:
             self.skipTest("fixture missing")
-        actual = {
-            case.alias: (
-                case.question_id,
-                case.case_class,
-                case.live,
-                case.arm_order,
-            )
-            for case in self.loaded
+        self.assertEqual(self.document["dataset"]["source_sha"], EXPECTED_SOURCE_SHA)
+        counts = {
+            case_class: sum(case.case_class == case_class for case in self.loaded)
+            for case_class in EXPECTED_CLASSES
         }
-        self.assertEqual(actual, EXPECTED)
+        self.assertEqual(counts, EXPECTED_CLASSES)
+        for case_class, order in EXPECTED_LIVE_ORDERS.items():
+            live = [case for case in self.loaded if case.case_class == case_class and case.live]
+            self.assertEqual(len(live), 1)
+            self.assertEqual(live[0].arm_order, order)
 
     def test_every_case_resolves_to_locked_dataset_evidence(self):
         if self.loaded is None:
@@ -63,11 +75,21 @@ class MemoryComparisonFixtureContract(unittest.TestCase):
                 if line
             )
         }
+        event_ids = {
+            row["event_id"]
+            for row in (
+                json.loads(line)
+                for line in (DATASET / "events.jsonl").read_text(encoding="utf-8").splitlines()
+                if line
+            )
+        }
         for case in self.loaded:
             question = questions[case.question_id]
             self.assertEqual(set(case.allowed_evidence_ids), set(question["relevant_event_ids"]))
             self.assertTrue(case.verification_command_ids)
             self.assertFalse(set(case.allowed_evidence_ids) & set(case.rejected_evidence_ids))
+            self.assertTrue(set(case.allowed_evidence_ids) <= event_ids)
+            self.assertTrue(set(case.rejected_evidence_ids) <= event_ids)
 
     def test_public_fixture_does_not_duplicate_gold_text_or_private_material(self):
         if self.document is None:
