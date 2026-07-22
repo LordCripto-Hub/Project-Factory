@@ -397,3 +397,27 @@ git push origin feat/memory-gate-b-comparison
 ```
 
 Update draft PR `#12`. Passing authorizes only the design of a larger statistical experiment; it does not enable memory globally.
+
+## Execution outcome
+
+- [x] Tasks 1-6 completed with the repository-owned generator, current-SHA
+  dataset and lock, deterministic fixtures, offline qualification, disposable
+  Docker E2E, and exact live preflight.
+- [x] The current-SHA preflight passed against the clean live workspace with
+  unchanged restart count.
+- [x] Two full-run attempts stopped during their first baseline under the
+  fail-closed rules. No arm completed and no selective arm was rerun.
+- [x] Both aborted runs recorded complete cleanup with zero retained synthetic
+  cards, workers, conversations, or temporary result directories.
+- [x] The promotion gates were enforced. The decision is `not_promoted` because
+  production benefit was not measured.
+- [x] The corrected harness passed focused Windows/Linux tests, real disposable
+  Docker E2E, the packaged isolated verifier, and J1-J52.
+- [x] The direct host `bash verify/run-suite.sh` invocation refused with exit
+  `125` as designed; the same suite passed through the official isolated
+  verifier during the final backup-first upgrade.
+- [x] The final live deployment has comparison flag `0`, no memory sidecar,
+  restart count `0`, HTTP `200/200`, and no synthetic comparison cards.
+- [x] Public artifacts remain English-only and sanitized; actual, estimated,
+  and `not_measured` metrics remain distinct.
+- [x] Draft PR #12 was updated; memory remains opt-in and globally disabled.
