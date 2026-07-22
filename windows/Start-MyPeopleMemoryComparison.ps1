@@ -27,10 +27,37 @@ $schedule = @(
 
 function Invoke-Docker {
     param([Parameter(Mandatory)][string[]]$Arguments, [switch]$AllowFailure)
-    $output = @(& docker @Arguments 2>&1)
-    $exitCode = $LASTEXITCODE
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& docker @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
     if (-not $AllowFailure -and $exitCode -ne 0) {
         throw "docker_command_failed: $($output -join ' ')"
+    }
+    [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
+}
+
+function Invoke-DockerPython {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [string[]]$Arguments = @(),
+        [switch]$AllowFailure
+    )
+    $dockerArguments = @('exec', '-i', $Container, 'python3', '-') + $Arguments
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @($Source | & docker @dockerArguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if (-not $AllowFailure -and $exitCode -ne 0) {
+        throw "docker_python_failed: $($output -join ' ')"
     }
     [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join "`n") }
 }
@@ -52,7 +79,7 @@ from mpcommon import ENV,http_json
 payload=json.loads(base64.b64decode(sys.argv[1]).decode("utf-8"))
 print(json.dumps(http_json("/todo/update","POST",payload,base="http://127.0.0.1:9933",token=ENV.get("QUEUE_SECRET","")),separators=(",",":")))
 '@
-    $response = Invoke-Docker -Arguments @('exec', $Container, 'python3', '-c', $python, $encoded)
+    $response = Invoke-DockerPython -Source $python -Arguments @($encoded)
     $response.Output | ConvertFrom-Json
 }
 
@@ -107,14 +134,20 @@ function Assert-Preflight {
     # git status --porcelain: reject uncommitted project state before comparison.
     $workspaceStatus = Invoke-Docker -Arguments @('exec', $Container, 'git', '-C', '/home/mp/workspaces/project-factory', 'status', '--porcelain')
     if (-not [string]::IsNullOrWhiteSpace($workspaceStatus.Output)) { throw 'workspace_dirty' }
-    $flag = Invoke-Docker -Arguments @('exec', $Container, 'sh', '-lc', 'test "$MYPEOPLE_MEMORY_COMPARISON_ENABLED" = 1') -AllowFailure
-    if ($flag.ExitCode -ne 0) { throw 'MYPEOPLE_MEMORY_COMPARISON_ENABLED_required' }
+    $flag = Invoke-Docker -Arguments @('exec', $Container, 'printenv', 'MYPEOPLE_MEMORY_COMPARISON_ENABLED') -AllowFailure
+    if ($flag.ExitCode -ne 0 -or $flag.Output.Trim() -ne '1') { throw 'MYPEOPLE_MEMORY_COMPARISON_ENABLED_required' }
     $provider = Invoke-Docker -Arguments @('exec', $Container, 'codex', 'login', 'status') -AllowFailure
     if ($provider.ExitCode -ne 0) { throw 'provider_unavailable' }
-    $resources = Invoke-Docker -Arguments @('exec', $Container, 'python3', '-c', 'import json,pathlib,sys; root=pathlib.Path("/home/mp/mypeople/run/memory-comparison/runs"); active=[] if not root.exists() else [p for p in root.glob("*/state.json") if json.loads(p.read_text()).get("status") not in {"completed","aborted"}]; sys.exit(1 if active else 0)') -AllowFailure
+    $resourceProbe = @'
+import json,pathlib,sys
+root=pathlib.Path("/home/mp/mypeople/run/memory-comparison/runs")
+active=[] if not root.exists() else [p for p in root.glob("*/state.json") if json.loads(p.read_text()).get("status") not in {"completed","aborted"}]
+inbox=pathlib.Path("/home/mp/mypeople/run/memory-comparison/inbox")
+pending=[] if not inbox.exists() else list(inbox.iterdir())
+sys.exit(1 if active or pending else 0)
+'@
+    $resources = Invoke-DockerPython -Source $resourceProbe -AllowFailure
     if ($resources.ExitCode -ne 0) { throw 'comparison_resources_present' }
-    $inbox = Invoke-Docker -Arguments @('exec', $Container, 'sh', '-lc', 'test ! -d /home/mp/mypeople/run/memory-comparison/inbox || test -z "$(find /home/mp/mypeople/run/memory-comparison/inbox -mindepth 1 -print -quit)"') -AllowFailure
-    if ($inbox.ExitCode -ne 0) { throw 'comparison_resources_present' }
     $sidecar = Invoke-Docker -Arguments @('ps', '--filter', 'label=com.docker.compose.service=memory-gate-b', '--filter', 'health=healthy', '--format', '{{.ID}}') -AllowFailure
     if ($sidecar.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($sidecar.Output)) { throw 'memory_sidecar_unavailable' }
     $binding = Get-OfflineBinding

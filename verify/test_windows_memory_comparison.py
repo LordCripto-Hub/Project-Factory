@@ -21,6 +21,8 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
         self.assertIn("[switch]$ConfirmLiveRun", self.text)
         self.assertIn("$ConfirmedRunId", self.text)
         self.assertIn("execution_confirmation_mismatch", self.text)
+        self.assertIn("$previousPreference = $ErrorActionPreference", self.text)
+        self.assertIn("$ErrorActionPreference = 'Continue'", self.text)
 
     def test_preflight_binds_runtime_dataset_fixture_and_offline_receipt(self):
         for marker in (
@@ -46,6 +48,12 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.text)
+
+    def test_container_python_uses_stdin_instead_of_fragile_windows_dash_c(self):
+        self.assertIn("function Invoke-DockerPython", self.text)
+        self.assertIn("'exec', '-i', $Container, 'python3', '-'", self.text)
+        self.assertNotIn("'python3', '-c'", self.text)
+        self.assertNotIn("'sh', '-lc'", self.text)
 
     def test_exact_counterbalanced_schedule_uses_fresh_luna_workers(self):
         for alias, first, second in (
