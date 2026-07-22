@@ -133,7 +133,13 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
             except MemoryCanaryError as error:
                 raise TaskSpecError(error.code) from error
         else:
-            spec = compile_task_spec(task, profile)
+            compile_profile = profile
+            if comparison_baseline:
+                compile_profile = {
+                    **profile,
+                    "memory": {**profile.get("memory", {}), "enabled": False},
+                }
+            spec = compile_task_spec(task, compile_profile)
         taskspecs_dir = os.path.realpath(
             ENV.get("TASKSPECS_DIR", os.path.join(ROOT, "run", "taskspecs"))
         )

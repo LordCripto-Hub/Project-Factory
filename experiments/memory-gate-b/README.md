@@ -111,7 +111,19 @@ cost, better Boss decisions, or improved real-agent coordination.
 
 ### Paired live status
 
-The earlier paired-live attempt stopped before creating any synthetic card or
-worker because the durable workspace no longer matched the old dataset source.
-That historical stop remains valid. A new current-SHA live run is not recorded
-until the updated disposable-Docker and exact-workspace preflight pass.
+The current-SHA preflight passed with the exact workspace SHA, locked fixture,
+offline digest, healthy sidecar, available provider, and unchanged restart
+count. Two infrastructure attempts then stopped during the first baseline,
+before any provider conversation or completed arm. The first exposed a missing
+process-environment allowlist entry and an invalid baseline TaskSpec path. The
+second exposed that the baseline compiler still followed the enabled project
+memory profile instead of enforcing the explicit no-memory arm.
+
+Both attempts have zero completed arms, zero scored outputs, zero harmful
+outputs, and no provider-token measurement. Their synthetic cards and temporary
+directories were removed and no comparison worker was retained. Runtime
+cleanup was verified complete. No selective arm was rerun. The live decision is therefore
+`not_promoted`: offline retrieval remains qualified, but production benefit is
+not demonstrated. A future live comparison requires a fresh reviewed run after
+the corrected harness passes disposable end-to-end verification; this report
+does not authorize automatic activation.

@@ -72,6 +72,12 @@ class MemoryComparisonPublicArtifacts(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, text)
 
+    def test_readme_records_the_current_live_decision_without_claiming_promotion(self):
+        text = README.read_text(encoding="utf-8")
+        self.assertIn("not_promoted", text)
+        self.assertIn("zero completed arms", text)
+        self.assertIn("cleanup was verified complete", text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
