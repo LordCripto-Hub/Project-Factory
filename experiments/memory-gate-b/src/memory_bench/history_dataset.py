@@ -65,6 +65,16 @@ EXPECTED_FAMILIES = {
     "negative": 5,
 }
 
+CORRECTIVE_VERBS = (
+    "fix",
+    "restore",
+    "harden",
+    "guard",
+    "repair",
+    "rollback",
+    "correct",
+)
+
 SECRET_PATTERN = re.compile(
     r"(?:ghp_|github_pat_|sk-|tskey-)[A-Za-z0-9_-]{20,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
@@ -117,11 +127,16 @@ def build_history_dataset(
     repo_slug: str,
 ) -> HistoryDataset:
     resolved_sha, commits = read_git_history(repo_path, source_sha)
-    if len(commits) < 100:
-        raise ValueError("history dataset requires at least 100 non-merge commits")
-    fix_commits = tuple(commit for commit in commits if commit.subject.casefold().startswith("fix:"))
-    if len(fix_commits) < 5:
-        raise ValueError("history dataset requires at least five fix commits")
+    if len(commits) < 50:
+        raise ValueError("history dataset requires at least 50 non-merge commits")
+    corrective_commits = tuple(
+        commit
+        for commit in commits
+        if commit.subject.casefold().split(maxsplit=1)[0].rstrip(":")
+        in CORRECTIVE_VERBS
+    )
+    if len(corrective_commits) < 5:
+        raise ValueError("history dataset requires at least five corrective commits")
 
     events, commit_events, file_events = _build_events(commits, repo_slug)
     repeated_paths = tuple(
@@ -178,7 +193,7 @@ def build_history_dataset(
             )
         )
 
-    for index, commit in enumerate(commits[40:55], start=1):
+    for index, commit in enumerate(commits[-15:], start=1):
         commit_event = commit_events[commit.sha]
         if not commit.changed_paths:
             raise ValueError(f"selected multi-hop commit has no changed path: {commit.sha}")
@@ -210,8 +225,8 @@ def build_history_dataset(
             )
         )
 
-    for index, commit in enumerate(commits[55:65], start=1):
-        next_commit = commits[55 + index]
+    for index, commit in enumerate(commits[:10], start=1):
+        next_commit = commits[index]
         next_event = commit_events[next_commit.sha]
         questions.append(
             HistoryQuestion(
@@ -224,7 +239,7 @@ def build_history_dataset(
             )
         )
 
-    for index, commit in enumerate(fix_commits[:5], start=1):
+    for index, commit in enumerate(corrective_commits[:5], start=1):
         event = commit_events[commit.sha]
         questions.append(
             HistoryQuestion(
@@ -259,7 +274,7 @@ def build_history_dataset(
     )
     return HistoryDataset(
         schema_version=1,
-        generator_version="project-factory-history-v1",
+        generator_version="project-factory-history-v2",
         repo_slug=repo_slug,
         source_sha=resolved_sha,
         source_timestamp=source_timestamp,

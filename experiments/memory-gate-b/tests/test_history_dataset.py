@@ -94,6 +94,24 @@ class HistoryDatasetTests(unittest.TestCase):
             for question in first.questions:
                 self.assertTrue(set(question.relevant_event_ids).issubset(event_ids))
 
+    def test_builds_100_questions_from_the_52_commit_live_boundary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = self._build_history(Path(temp), 52)
+
+            try:
+                dataset = history_dataset.build_history_dataset(
+                    repo, "HEAD", "example/project-factory"
+                )
+            except ValueError as exc:
+                self.fail(f"52 committed changes must satisfy generator v2: {exc}")
+
+            self.assertEqual(len(dataset.questions), 100)
+            self.assertEqual(dataset.generator_version, "project-factory-history-v2")
+            self.assertEqual(
+                Counter(question.family for question in dataset.questions),
+                EXPECTED_FAMILIES,
+            )
+
     def test_writes_canonical_validated_artifacts(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -123,16 +141,21 @@ class HistoryDatasetTests(unittest.TestCase):
             self.assertEqual(manifest["question_count"], 100)
 
     def _build_long_history(self, repo: Path) -> Path:
+        return self._build_history(repo, 120)
+
+    def _build_history(self, repo: Path, commit_count: int) -> Path:
         repo.mkdir(parents=True, exist_ok=True)
         self._init_repo(repo)
         base = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        for index in range(120):
+        corrective = {3: "fix", 11: "restore", 19: "harden", 27: "guard", 35: "repair"}
+        for index in range(commit_count):
             path = repo / "src" / f"module-{index % 20:02d}.txt"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"revision {index}\n", encoding="utf-8")
+            verb = corrective.get(index)
             subject = (
-                f"fix: repair module {index:03d}"
-                if index % 17 == 0
+                f"{verb}: repair module {index:03d}"
+                if verb
                 else f"feat: evolve module {index:03d}"
             )
             self._commit_at(repo, subject, base + timedelta(seconds=index))

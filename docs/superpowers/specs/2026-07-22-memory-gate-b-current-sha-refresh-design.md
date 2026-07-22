@@ -23,10 +23,18 @@ would introduce an unrelated mutation and move the target again.
 
 ## Data And Case Refresh
 
+The live revision has 52 non-merge ancestors and only one subject prefixed
+`Fix`. Generator version 2 therefore accepts at least 50 committed changes,
+reuses grounded events deterministically across question families, and
+classifies corrective history from a closed verb set (`fix`, `restore`,
+`harden`, `guard`, `repair`, `rollback`, `correct`). It still emits 100 unique
+questions. Reuse is allowed only between families; no event, answer, or history
+record may be fabricated.
+
 1. Verify that the live workspace is clean and resolves exactly to the approved
    SHA.
-2. Reuse the existing deterministic history-dataset generator from the prior
-   benchmark sandbox or repository tooling. Do not hand-author history events.
+2. Use the repository-owned deterministic version 2 history-dataset generator.
+   Do not hand-author history events.
 3. Write the new corpus to
    `datasets/project-factory-history-039a62988625/`.
 4. Generate a separate content lock for the new corpus.

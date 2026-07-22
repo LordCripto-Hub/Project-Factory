@@ -17,6 +17,8 @@
 - New source SHA: `039a62988625369f3f86c055cd476b0080395daa`.
 - New dataset directory: `experiments/memory-gate-b/datasets/project-factory-history-039a62988625`.
 - New lock: `experiments/memory-gate-b/docker/history-hybrid-039a62988625.dataset-lock.json`.
+- Generator v2 accepts the observed 52-commit boundary, still emits 100 unique
+  grounded questions, and never invents history.
 - Old dataset, old lock, and old reports remain byte-identical.
 - Public repository content is English and sanitized.
 - Raw question text and gold answers remain in the private dataset/runtime path; the committed comparison fixture contains identifiers only.
@@ -59,7 +61,7 @@ def validate_history_dataset(dataset: HistoryDataset) -> dict[str, object]: ...
 def write_history_dataset(dataset: HistoryDataset, output: Path) -> dict[str, object]: ...
 ```
 
-The builder must read committed Git objects only, resolve the requested SHA once, reject fewer than 100 non-merge commits, create exactly 100 grounded questions, and write canonical UTF-8 JSON/JSONL.
+The builder must read committed Git objects only, resolve the requested SHA once, reject fewer than 50 non-merge commits, create exactly 100 grounded questions, and write canonical UTF-8 JSON/JSONL. It may reuse evidence deterministically between families and selects correction cases only from the closed verbs `fix`, `restore`, `harden`, `guard`, `repair`, `rollback`, and `correct`.
 
 - [ ] **Step 4: Verify deterministic reproduction**
 
