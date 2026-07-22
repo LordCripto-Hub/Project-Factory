@@ -102,6 +102,14 @@ def score_result():
 
 
 class MemoryComparisonApiContract(unittest.TestCase):
+    def test_process_environment_can_enable_comparison_without_queue_env_mutation(self):
+        import mpcommon
+
+        missing = str(Path(tempfile.gettempdir()) / "missing-memory-comparison.env")
+        with patch.dict(os.environ, {"MYPEOPLE_MEMORY_COMPARISON_ENABLED": "1"}, clear=False):
+            merged = mpcommon.read_env(missing)
+        self.assertEqual(merged["MYPEOPLE_MEMORY_COMPARISON_ENABLED"], "1")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.server = load_server(self.temp.name)
