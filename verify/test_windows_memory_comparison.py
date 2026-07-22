@@ -32,6 +32,8 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
             "fixture_sha256",
             "offline_digest",
             "offline_qualified",
+            "git rev-parse HEAD",
+            "workspace_source_mismatch",
             "memory-comparison",
             "http://127.0.0.1:9933/",
             "http://127.0.0.1:9900/",
@@ -54,6 +56,9 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
         self.assertIn("--owner-task", self.text)
         self.assertIn("--without-memory", self.text)
         self.assertIn("[guid]::NewGuid()", self.text)
+        self.assertIn("questions.jsonl", self.text)
+        self.assertIn("question_id", self.text)
+        self.assertIn(".query", self.text)
 
     def test_waits_for_closed_result_and_records_honest_metrics(self):
         for marker in (

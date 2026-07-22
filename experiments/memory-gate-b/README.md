@@ -97,3 +97,12 @@ resource reuse, cleanup failure, or a container restart.
 Offline qualification demonstrates deterministic retrieval and scoring over a
 locked public fixture. It does not prove production benefit, lower provider
 cost, better Boss decisions, or improved real-agent coordination.
+
+### Paired live status
+
+The paired live run is intentionally not recorded yet. Its preflight stopped
+before creating any synthetic card or worker because the durable Project
+Factory workspace no longer matched the dataset source commit. The typed stop
+reason is `workspace_source_mismatch`. A future run must either use a reviewed
+workspace pinned to the locked source or qualify a new locked dataset; it must
+not reuse these results against a different source revision.

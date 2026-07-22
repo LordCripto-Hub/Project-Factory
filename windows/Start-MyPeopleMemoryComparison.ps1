@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $casesPath = Join-Path $projectRoot 'experiments\memory-gate-b\comparison\cases.json'
 $datasetPath = Join-Path $projectRoot 'experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632'
+$questionsPath = Join-Path $datasetPath 'questions.jsonl'
 $offlineReport = Join-Path $projectRoot 'experiments\memory-gate-b\reports\comparison-offline-2026-07-22.json'
 $sourceSha = '80dce6f866329b79061bb1ed6b0594f9fdf2dd45'
 $model = 'gpt-5.6-luna'
@@ -83,12 +84,25 @@ function Get-OfflineBinding {
     }
 }
 
+function Get-CaseQuestion {
+    param([Parameter(Mandatory)][string]$CaseAlias)
+    $caseDocument = Get-Content -LiteralPath $casesPath -Raw | ConvertFrom-Json
+    $case = @($caseDocument.cases | Where-Object { $_.alias -eq $CaseAlias })
+    if ($case.Count -ne 1 -or -not $case[0].question_id) { throw 'comparison_question_missing' }
+    $question = @(Get-Content -LiteralPath $questionsPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.question_id -eq $case[0].question_id })
+    if ($question.Count -ne 1 -or [string]::IsNullOrWhiteSpace($question[0].query)) { throw 'comparison_question_missing' }
+    [string]$question[0].query
+}
+
 function Assert-Preflight {
     $snapshot = Get-ContainerSnapshot
     Test-HttpHealth
     if (-not (Test-Path -LiteralPath $datasetPath -PathType Container)) { throw 'dataset_missing' }
     $cases = Get-Content -LiteralPath $casesPath -Raw | ConvertFrom-Json
     if ($cases.dataset.source_sha -ne $sourceSha) { throw 'wrong_project' }
+    # Exact live binding: git rev-parse HEAD in the durable project workspace.
+    $workspace = Invoke-Docker -Arguments @('exec', $Container, 'git', '-C', '/home/mp/workspaces/project-factory', 'rev-parse', 'HEAD')
+    if ($workspace.Output.Trim() -ne $sourceSha) { throw 'workspace_source_mismatch' }
     $flag = Invoke-Docker -Arguments @('exec', $Container, 'sh', '-lc', 'test "$MYPEOPLE_MEMORY_COMPARISON_ENABLED" = 1') -AllowFailure
     if ($flag.ExitCode -ne 0) { throw 'MYPEOPLE_MEMORY_COMPARISON_ENABLED_required' }
     $binding = Get-OfflineBinding
@@ -183,10 +197,11 @@ function Invoke-PairedRun {
             $remoteDirectory = "/home/mp/mypeople/run/memory-comparison/inbox/$RunId/$($pair.alias)-$arm-$nonce"
             $cardId = ''
             try {
+                $question = Get-CaseQuestion -CaseAlias $pair.alias
                 $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds).ToUnixTimeSeconds()
                 $card = Invoke-TodoMachine -Payload @{
                     op = 'add'; text = "Synthetic Gate B comparison $($pair.alias) $arm"; test = $true
-                    projectSlug = 'project-factory'; contextQuestion = "Execute comparison alias $($pair.alias) using only approved evidence IDs."
+                    projectSlug = 'project-factory'; contextQuestion = $question
                     memoryCanary = ($arm -eq 'memory'); evidencePolicy = 'optional'
                     experiment = @{ memory_comparison = @{ experiment_id = $RunId; case_alias = $pair.alias; arm = $arm; cleanup_deadline = $deadline } }
                 }
