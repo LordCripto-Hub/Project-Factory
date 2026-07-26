@@ -326,6 +326,9 @@ class TaskSpecSpawnContract(unittest.TestCase):
             "memoryStatus": "ok", "memoryClaims": [{"content": "claim"}],
         })
         document.memory_metadata = {
+            "requestedClaimCount": 3,
+            "returnedClaimCount": 1,
+            "embeddedClaimCount": 1,
             "responseCharacters": 5,
             "aiUsage": {"neurons": 12},
         }

@@ -57,6 +57,10 @@ class WindowsMemoryCanaryContract(unittest.TestCase):
         self.assertIn("mp memory mode off", text)
         self.assertNotIn("docker restart mypeople", text)
         self.assertNotIn("docker rm", text)
+        self.assertIn("if ([string]::IsNullOrWhiteSpace($MemorySource))", text)
+        self.assertIn("if ([string]::IsNullOrWhiteSpace($Dataset))", text)
+        self.assertIn("if ([string]::IsNullOrWhiteSpace($Image))", text)
+        self.assertIn("{{.Config.Image}}", text)
 
 
 if __name__ == "__main__":

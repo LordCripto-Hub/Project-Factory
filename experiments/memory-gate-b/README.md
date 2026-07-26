@@ -10,7 +10,7 @@ the local task contract or changing the live runtime.
 - irrelevant recall returns no claims;
 - no memory question causes no memory call;
 - the locked Project Factory history dataset is bound to source commit
-  `80dce6f866329b79061bb1ed6b0594f9fdf2dd45`;
+  `039a62988625369f3f86c055cd476b0080395daa`;
 - the disposable fixture has no external network, production volume, Docker
   socket, provider key, or write tool;
 - actual provider tokens are `not_measured`; 236 tokens is only the estimated
@@ -45,6 +45,53 @@ The dataset is public. Because Boss and workers share the `mp` Linux identity,
 the canary is not a private-memory isolation boundary and must not receive
 private project material. One canary proves bounded activation and rollback;
 it does not provide statistical evidence of improved quality or token cost.
+
+## Automatic bounded mode candidate
+
+The verified candidate adds an explicit `automatic` mode without adding a
+second memory system. Eligible Project Factory owner tasks derive one bounded
+query from the task title, done condition, and context question. One shared
+coordinator then attempts the existing store in this order:
+
+1. FTS5/graph fast recall;
+2. relation-aware deep recall;
+3. bounded exhaustive exploration over the same loaded events;
+4. SHA-locked, read-only local emergency scan.
+
+The first sufficient level stops the sequence. All levels share a two-second
+deadline, a maximum of three provenance-bearing claims, and a 300 estimated
+token budget. An empty, unavailable, invalid, timed-out, or over-budget memory
+result is recorded with a typed status and does not block TaskSpec creation.
+No level writes memory, calls a provider model, contacts Cloudflare, creates a
+board corpus, or uses `memory-dump.py`.
+
+The HUD and Priorities expose only mode, typed status, selected level, attempted
+levels, counts, latency, estimated memory tokens, provenance state, and provider
+usage when attributable. They never expose the query, claims, credentials, or
+provider transcript.
+
+Enable the reviewed sidecar in automatic mode without restarting MyPeople:
+
+```powershell
+.\windows\Start-MyPeopleMemoryCanary.ps1 -Action Enable -Mode Automatic
+docker exec mypeople mp memory mode status
+```
+
+Instantly stop recall for the next TaskSpec, without stopping the sidecar:
+
+```powershell
+docker exec mypeople mp memory mode off
+```
+
+Remove the sidecar, internal network attachment, and ephemeral credential:
+
+```powershell
+.\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
+```
+
+`manual_canary` remains available for explicit diagnostic cards. Automatic mode
+is Project Factory-only and remains a deployment gate until the disposable
+Docker suite and an explicit live approval are complete.
 
 ## Promotion
 
@@ -129,5 +176,6 @@ The decision remains `not_promoted` under the fail-closed rule. The quality gate
 passed, but two required live observability gates did not: retrieval latency and
 injected-context size were not captured per live arm. The sanitized receipt is
 [`reports/comparison-live-039a62988625.json`](reports/comparison-live-039a62988625.json).
-This result authorizes design of the next measured canary; it does not authorize
-automatic or global memory activation.
+This historical result authorized the measured automatic-mode design. It did
+not itself authorize live activation; deployment still requires the current
+candidate's disposable Docker evidence and an explicit approval.

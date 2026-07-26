@@ -791,9 +791,9 @@ This prevents an unrelated or expired Apps authentication from producing
 `codex_apps` MCP startup warnings inside agent terminals.
 
 This switch does not remove or disable MyPeople's memory code. The local,
-bounded Memory Gate B path remains available only through its explicit canary
-controls. The hosted Cloudflare memory pilot remains disabled by default and
-is never activated by a normal agent launch.
+bounded Memory Gate B sidecar remains off by default and can run in explicit
+manual-canary or automatic mode. The hosted Cloudflare memory pilot remains
+disabled by default and is never activated by a normal agent launch.
 
 ## Recommended next stage
 
@@ -882,3 +882,59 @@ This does not restart MyPeople. The shared `mp` Linux identity is not a
 private-memory boundary, so this canary is restricted to the public dataset.
 One successful card is operational rollback evidence, not statistical proof
 that memory improves quality, coordination, duration, or total token cost.
+
+## Automatic bounded project memory
+
+Automatic mode is an optional local extension of the same Gate B hybrid store.
+It is limited to Project Factory owner tasks and is disabled by default. It
+does not use Cloudflare, `memory-dump.py`, a board corpus, a second index, an
+OpenAI API key, or a provider model for retrieval.
+
+For each eligible TaskSpec, MyPeople derives one deterministic query from the
+task title, done condition, and optional context question. It tries fast,
+deep, bounded exhaustive, and SHA-locked local emergency retrieval in order,
+stopping after the first sufficient result. The complete recovery transaction
+has a two-second deadline and may inject at most three provenance-bearing
+claims and 300 estimated tokens.
+
+Enable the reviewed local sidecar and automatic mode with one command:
+
+```powershell
+.\windows\Start-MyPeopleMemoryCanary.ps1 -Action Enable -Mode Automatic
+```
+
+The launcher defaults to the final locked dataset and the image already used
+by the running `mypeople` container. It starts only the read-only sidecar,
+connects the internal Docker network, activates the Project Factory profile,
+and changes the memory mode. It does not recreate or restart MyPeople.
+
+Inspect state:
+
+```powershell
+docker exec mypeople mp memory mode status
+```
+
+Stop all automatic recall immediately for the next TaskSpec while leaving the
+rest of MyPeople running:
+
+```powershell
+docker exec mypeople mp memory mode off
+```
+
+Remove the sidecar, its network attachment, and its ephemeral credential:
+
+```powershell
+.\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
+```
+
+Memory failures fail open for task execution: the TaskSpec contains no claims
+and records `insufficient_evidence`, `memory_unavailable`,
+`memory_invalid_response`, or `memory_budget_exceeded`. TaskSpec write errors
+and other non-memory contract failures continue to fail closed.
+
+The HUD shows **Memory mode**, **Recall level**, **Latency**, and **Memory
+tokens** in the existing Scorpion theme. Priorities shows a compact, read-only
+status strip on Project Factory cards. These surfaces receive only bounded
+metadata; queries, claim text, credentials, and provider transcripts are never
+projected. Provider token usage remains `not measured` unless the active
+provider exposes counters attributable to the same session.

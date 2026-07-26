@@ -666,19 +666,22 @@
               });
               kill.textContent = "Confirm kill";
               kill.className = "card-action danger armed";
-              setTimeout(() => {
+              const disarmKill = () => {
                 const latest = coreOperationState.get(row.agent_id) || {};
-                if (
-                  latest.killArmedUntil &&
-                  latest.killArmedUntil <= Date.now()
-                ) {
+                const remaining = (latest.killArmedUntil || 0) - Date.now();
+                if (remaining > 0) {
+                  setTimeout(disarmKill, remaining + 1);
+                  return;
+                }
+                if (latest.killArmedUntil) {
                   setOperation(row.agent_id, {
                     killArmedUntil: 0,
                     message: "ready",
                   });
                   renderAgentCards();
                 }
-              }, 5000);
+              };
+              setTimeout(disarmKill, 5000);
               return;
             }
             strip.classList.add("busy");

@@ -153,7 +153,10 @@ async function assertUnifiedHudCards(page) {
   await firstCard.getByRole('button', { name: 'Kill', exact: true }).click();
   await expect(killRequests === 0, 'first Kill click sent a mutation');
   await expect((await firstCard.getByRole('button', { name: 'Confirm kill' }).count()) === 1, 'Kill was not visibly armed');
-  await page.waitForTimeout(5100);
+  await page.waitForFunction(() => {
+    const button = document.querySelector('#telemetryCards .combat-card:first-child .card-action.danger');
+    return button?.textContent?.trim() === 'Kill';
+  }, undefined, { timeout: 7000 });
   await expect((await firstCard.getByRole('button', { name: 'Kill', exact: true }).count()) === 1, 'Kill did not disarm');
   await page.unroute('**/kill');
 

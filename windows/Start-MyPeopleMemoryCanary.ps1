@@ -103,13 +103,22 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'The MyPeople container does not exist.' }
     $running = (& docker inspect $Container --format '{{.State.Running}}').Trim()
     if ($running -ne 'true') { throw 'The MyPeople container must already be running.' }
+    if ([string]::IsNullOrWhiteSpace($MemorySource)) {
+        $MemorySource = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\experiments\memory-gate-b'))
+    }
+    if ([string]::IsNullOrWhiteSpace($Dataset)) {
+        $Dataset = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\experiments\memory-gate-b\datasets\project-factory-history-039a62988625'))
+    }
+    if ([string]::IsNullOrWhiteSpace($Image)) {
+        $Image = (& docker inspect $Container --format '{{.Config.Image}}').Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Image)) { throw 'Unable to resolve the current MyPeople image.' }
+    }
     if (-not (Test-Path -LiteralPath $MemorySource -PathType Container)) {
         throw 'MemorySource must be an existing directory.'
     }
     if (-not (Test-Path -LiteralPath $Dataset -PathType Container)) {
         throw 'Dataset must be an existing directory.'
     }
-    if ([string]::IsNullOrWhiteSpace($Image)) { throw 'Image is required.' }
 
     $random = [Security.Cryptography.RandomNumberGenerator]::Create()
     try { $random.GetBytes($tokenBytes) } finally { $random.Dispose() }

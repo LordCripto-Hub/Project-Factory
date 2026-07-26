@@ -122,7 +122,7 @@ class MemoryCanaryE2E(unittest.TestCase):
         self.assertEqual(bypass["candidate"]["memoryClaims"], [])
         self.assertEqual(bypass["receipt"]["memoryStatus"], "rolled_back")
         disabled = memory_canary.set_control(self.runtime, enabled=False, now=lambda: 30.0)
-        self.assertFalse(disabled["enabled"])
+        self.assertEqual(disabled["mode"], "off")
         with self.assertRaisesRegex(memory_canary.MemoryCanaryError, "canary_disabled"):
             self.compile_and_spawn(task())
         ledger = (self.runtime / memory_canary.RECEIPT_NAME).read_text(encoding="utf-8")
@@ -155,7 +155,7 @@ class MemoryCanaryE2E(unittest.TestCase):
     def test_launcher_cleanup_removes_sidecar_network_and_token(self):
         launcher = (ROOT / "windows" / "Start-MyPeopleMemoryCanary.ps1").read_text(encoding="utf-8")
         disable = launcher[launcher.index("function Disable-Canary"):launcher.index("if ($Action -eq 'Status')")]
-        for marker in ("memory-canary disable", "memory-profile disable", "rm -f $secretDirectory/MYPEOPLE_MEMORY_TOKEN", "docker network disconnect", "down --volumes"):
+        for marker in ("memory mode off", "memory-profile disable", "rm -f $secretDirectory/MYPEOPLE_MEMORY_TOKEN", "docker network disconnect", "down --volumes"):
             self.assertIn(marker, disable)
 
     def test_real_disposable_docker_lifecycle_when_requested(self):
@@ -165,7 +165,7 @@ class MemoryCanaryE2E(unittest.TestCase):
         container = f"memory-canary-e2e-main-{os.getpid()}"
         launcher = ROOT / "windows" / "Start-MyPeopleMemoryCanary.ps1"
         source = ROOT / "experiments" / "memory-gate-b"
-        dataset = source / "datasets" / "project-factory-history-80dce6f86632"
+        dataset = source / "datasets" / "project-factory-history-039a62988625"
         run = lambda arguments, check=True: subprocess.run(
             arguments, cwd=ROOT, capture_output=True, text=True,
             timeout=180, check=check,

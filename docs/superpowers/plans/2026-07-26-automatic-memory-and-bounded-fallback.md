@@ -660,7 +660,9 @@ Expected: focused automatic-memory tests pass and the full J1–J52 contract sui
 Run:
 
 ```powershell
-docker build -t mypeople-node:auto-memory-candidate .
+$base = "mypeople-node:recovery-base-auto-memory"
+docker build -f docker/Dockerfile.recovery-base -t $base .
+docker build -f docker/Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t mypeople-node:auto-memory-candidate .
 powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image mypeople-node:auto-memory-candidate -TimeoutSeconds 1800 -UsePackagedSource
 ```
 
@@ -687,7 +689,7 @@ git commit -m "docs: operationalize bounded automatic memory"
 
 - [ ] **Step 8: Stop at the live gate**
 
-Present commits, exact test counts, isolated image digest, measured recall latency/context size, and rollback evidence. Do not merge, push, deploy, or enable automatic mode in the live container until Rafa explicitly approves that transaction.
+Present commits, exact test counts, isolated image digest, measured recall latency/context size, and rollback evidence. Do not merge, push, deploy, or enable automatic mode in the live container until the operator explicitly approves that transaction.
 
 ## Final Acceptance Matrix
 
