@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 
@@ -82,6 +85,43 @@ def applied_response():
 
 
 class AutomaticMemoryTaskSpecTests(unittest.TestCase):
+    def test_live_gateway_boundary_preserves_typed_automatic_metadata(self):
+        response = applied_response()
+
+        def runner(*_args, **_kwargs):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({
+                    "ok": True,
+                    "claims": response["claims"],
+                    "truncated": False,
+                    "responseChars": 180,
+                    **{key: response[key] for key in (
+                        "status", "selectedLevel", "levelsAttempted",
+                        "elapsedMilliseconds", "examinedCount", "returnedCount",
+                        "estimatedTokens", "provenanceComplete", "reasonCode",
+                        "aiUsage",
+                    )},
+                }),
+            )
+
+        previous = os.environ.get("MYPEOPLE_MEMORY_TOKEN")
+        os.environ["MYPEOPLE_MEMORY_TOKEN"] = "synthetic-test-token"
+        try:
+            result = project_context.call_memory_gateway(
+                profile(), "Repair publisher continuity", runner=runner
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("MYPEOPLE_MEMORY_TOKEN", None)
+            else:
+                os.environ["MYPEOPLE_MEMORY_TOKEN"] = previous
+
+        self.assertEqual(result["status"], "memory_applied")
+        self.assertEqual(result["selectedLevel"], "fast")
+        self.assertEqual(result["levelsAttempted"], ["fast"])
+        self.assertEqual(result["estimatedTokens"], 40)
+
     def test_automatic_mode_uses_derived_query_without_explicit_question(self):
         requests = []
         spec = project_context.compile_task_spec(

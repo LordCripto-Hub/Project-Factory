@@ -375,12 +375,20 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
         or not 0 <= response_chars <= request["maxChars"]
     ):
         raise MemoryError("invalid_response")
-    return {
+    result = {
         "claims": response["claims"],
         "truncated": response["truncated"],
         "responseChars": response_chars,
         "aiUsage": _normalize_ai_usage(response.get("aiUsage")),
     }
+    for key in (
+        "status", "selectedLevel", "levelsAttempted", "elapsedMilliseconds",
+        "examinedCount", "returnedCount", "estimatedTokens",
+        "provenanceComplete", "reasonCode",
+    ):
+        if key in response:
+            result[key] = response[key]
+    return result
 
 
 def _normalize_ai_usage(value):
