@@ -2,6 +2,8 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet('Enable', 'Disable', 'Status')]
     [string]$Action,
+    [ValidateSet('Automatic', 'ManualCanary')]
+    [string]$Mode = 'ManualCanary',
     [string]$MemorySource,
     [string]$Dataset,
     [string]$Image,
@@ -61,7 +63,7 @@ function Disable-Canary {
         & docker inspect $Container *> $null
         $containerExists = $LASTEXITCODE -eq 0
         if ($containerExists) {
-            & docker exec $Container /home/mp/mypeople/bin/mp memory-canary disable *> $null
+            & docker exec $Container /home/mp/mypeople/bin/mp memory mode off *> $null
             if ($LASTEXITCODE -ne 0) { $failures.Add('runtime-control') }
             $profileOutput = (& docker exec $Container /home/mp/mypeople/bin/memory-profile disable --project project-factory 2>&1 | Out-String)
             if ($LASTEXITCODE -ne 0 -and $profileOutput -notmatch 'profile_not_found') { $failures.Add('project-profile') }
@@ -84,6 +86,7 @@ if ($Action -eq 'Status') {
     Set-ComposeParseDefaults
     & docker inspect $Container --format '{{.State.Status}}'
     & docker compose --project-name $projectName -f $composePath ps
+    & docker exec $Container /home/mp/mypeople/bin/mp memory mode status
     exit $LASTEXITCODE
 }
 if ($Action -eq 'Disable') {
@@ -141,7 +144,11 @@ try {
 
     & docker exec $Container /home/mp/mypeople/bin/memory-profile enable --project project-factory --server-url $serverUrl --secret-path $secretPath
     if ($LASTEXITCODE -ne 0) { throw 'Unable to activate the project memory profile.' }
-    & docker exec $Container /home/mp/mypeople/bin/mp memory-canary enable --project project-factory
+    if ($Mode -eq 'Automatic') {
+        & docker exec $Container /home/mp/mypeople/bin/mp memory mode automatic
+    } else {
+        & docker exec $Container /home/mp/mypeople/bin/mp memory mode manual-canary
+    }
     if ($LASTEXITCODE -ne 0) { throw 'Unable to enable the memory canary control.' }
     $enabled = $true
     Write-Output 'Memory Gate B canary enabled on the internal Docker network.'

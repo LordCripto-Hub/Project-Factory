@@ -7,7 +7,7 @@ from .history_runner import (
     HistoryHybridRetriever,
 )
 from .exhaustive import BoundedExhaustiveSearch
-from .retrieval import CanonicalRetriever, SQLiteFTSRetriever
+from .retrieval import CanonicalRetriever, SQLiteFTSRetriever, tokenize
 
 
 PROJECT_REPOSITORY = "LordCripto-Hub/Project-Factory"
@@ -63,8 +63,18 @@ class HistoryMemoryStore:
 
     def fast(self, query, limit):
         self._limit(limit)
-        rows = self.fast_retriever.retrieve(str(query or "").strip(), limit=limit)
-        return {"claims": _claims(rows), "examinedCount": len(rows)}
+        query = str(query or "").strip()
+        rows = self.fast_retriever.retrieve(query, limit=limit)
+        tokens = set(tokenize(query))
+        needs_deep = (
+            bool(tokens & self.hybrid_retriever.alias_tokens)
+            or {"next", "after"}.issubset(tokens)
+            or not rows
+        )
+        return {
+            "claims": [] if needs_deep else _claims(rows),
+            "examinedCount": len(rows),
+        }
 
     def deep(self, query, limit):
         self._limit(limit)

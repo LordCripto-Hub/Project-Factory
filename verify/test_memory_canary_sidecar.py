@@ -36,6 +36,16 @@ class MemoryCanarySidecarContract(unittest.TestCase):
         self.assertIn("  host,", text)
         self.assertIn("allowedHosts: liveCanary ? ['memory-gate-b']", text)
 
+    def test_server_uses_typed_four_level_bridge_and_safe_receipts(self):
+        text = (ROOT / "experiments/memory-gate-b/docker/taskspec-memory-server.mjs").read_text(encoding="utf-8")
+        self.assertIn("query_automatic_memory.py", text)
+        for marker in (
+            "status", "selectedLevel", "levelsAttempted", "elapsedMilliseconds",
+            "examinedCount", "estimatedTokens", "provenanceComplete", "reasonCode",
+        ):
+            self.assertIn(marker, text)
+        self.assertNotIn("query: argumentsValue.query", text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

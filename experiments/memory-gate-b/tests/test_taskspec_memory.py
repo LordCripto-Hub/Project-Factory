@@ -83,6 +83,25 @@ class TaskSpecMemoryTests(unittest.TestCase):
             self.assertGreaterEqual(result["examinedCount"], len(result["claims"]))
             self.assertTrue(all(claim["sourceUri"] for claim in result["claims"]))
 
+    def test_fast_adapter_defers_continuation_queries_to_deep_recovery(self):
+        question = next(
+            item
+            for item in self.loaded.fixture.questions
+            if item.question_id == "hist-continuation-001"
+        )
+        store = HistoryMemoryStore(self.loaded)
+        try:
+            fast = store.fast(question.query, 3)
+            deep = store.deep(question.query, 3)
+        finally:
+            store.close()
+        self.assertEqual(fast["claims"], [])
+        self.assertGreater(fast["examinedCount"], 0)
+        self.assertTrue(
+            set(question.relevant_event_ids)
+            & {claim["id"] for claim in deep["claims"]}
+        )
+
     def test_limit_and_project_contract_fail_closed(self):
         with self.assertRaisesRegex(ValueError, "invalid_recall_limit"):
             recall_history_claims(self.loaded, "question", limit=4)
@@ -149,6 +168,43 @@ class TaskSpecMemoryTests(unittest.TestCase):
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("invalid_recall_hops", completed.stderr)
+
+    def test_automatic_bridge_returns_typed_deep_recovery(self):
+        question = next(
+            item for item in self.loaded.fixture.questions
+            if item.question_id == "hist-continuation-001"
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "query_automatic_memory.py"),
+                "--dataset", str(DATASET),
+                "--lock", str(LOCK),
+                "--runtime", str(ROOT / ".tmp-emergency-test"),
+            ],
+            input=json.dumps({
+                "projectSlug": PROJECT_SLUG,
+                "query": question.query,
+                "limit": 3,
+                "hops": 0,
+            }),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join((
+                    str(ROOT / "src"), str(ROOT.parents[1] / "bin")
+                )),
+            },
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "memory_applied")
+        self.assertEqual(result["selectedLevel"], "deep")
+        self.assertEqual(result["levelsAttempted"], ["fast", "deep"])
+        self.assertLessEqual(result["estimatedTokens"], 300)
+        self.assertEqual(result["aiUsage"], "not_measured")
 
 
 if __name__ == "__main__":

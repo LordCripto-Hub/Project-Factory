@@ -50,6 +50,14 @@ class WindowsMemoryCanaryContract(unittest.TestCase):
         self.assertIn('rm -f $secretDirectory/MYPEOPLE_MEMORY_TOKEN $secretDirectory/MYPEOPLE_MEMORY_CANARY_TOKEN', text)
         self.assertNotIn('rm -rf $secretDirectory', text)
 
+    def test_launcher_selects_automatic_mode_without_recreating_main_container(self):
+        text = (ROOT / "windows/Start-MyPeopleMemoryCanary.ps1").read_text(encoding="utf-8")
+        self.assertIn("ValidateSet('Automatic', 'ManualCanary')", text)
+        self.assertIn("mp memory mode automatic", text)
+        self.assertIn("mp memory mode off", text)
+        self.assertNotIn("docker restart mypeople", text)
+        self.assertNotIn("docker rm", text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

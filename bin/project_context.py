@@ -561,6 +561,7 @@ def _apply_automatic_response(result, response, project_slug, profile, limit):
         "aiUsage": _normalize_ai_usage(response.get("aiUsage")),
         "selectedLevel": response["selectedLevel"],
         "levelsAttempted": levels,
+        "retrievalLatencyMs": int(response["elapsedMilliseconds"]),
         "examinedCount": int(response["examinedCount"]),
         "estimatedTokens": int(response["estimatedTokens"]),
         "provenanceComplete": True,

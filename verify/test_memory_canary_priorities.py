@@ -153,6 +153,12 @@ class MemoryCanaryPrioritiesContract(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, html)
 
+    def test_automatic_mode_uses_read_only_task_status_strip(self):
+        html = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
+        self.assertIn("automatic-memory-strip", html)
+        self.assertIn("selectedLevel", html)
+        self.assertIn("estimatedTokens", html)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

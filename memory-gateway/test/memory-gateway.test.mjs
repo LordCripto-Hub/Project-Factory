@@ -40,7 +40,7 @@ test('accepts only the bounded recall contract', () => {
     {...input, serverUrl: 'https://user:secret' + '@' + 'memory.example/mcp'},
     {...input, serverUrl: 'https://memory.example/mcp?token=secret'},
     {...input, serverUrl: 'https://memory.example/mcp#secret'},
-    {...input, question: 'x'.repeat(501)},
+    {...input, question: 'x'.repeat(801)},
     {...input, maxChars: 20100},
   ]) assert.throws(() => validateInput(bad));
 });
@@ -95,6 +95,34 @@ test('normalizes optional metadata, usage, and rejects error tool results', asyn
     executeRecall(input, {token: 'x', clientFactory: () => fake}),
     /invalid_response/
   );
+});
+
+test('preserves only validated typed automatic-recovery metadata', async () => {
+  const typed = {
+    status: 'memory_applied',
+    selectedLevel: 'deep',
+    levelsAttempted: ['fast', 'deep'],
+    claims: [claim],
+    elapsedMilliseconds: 7,
+    examinedCount: 12,
+    returnedCount: 1,
+    estimatedTokens: 42,
+    provenanceComplete: true,
+    reasonCode: null,
+    aiUsage: 'not_measured',
+    query: 'must-not-leak',
+  };
+  const fake = {
+    connect: async () => {},
+    callTool: async () => ({structuredContent: typed}),
+    close: async () => {},
+  };
+  const result = await executeRecall(input, {token: 'x', clientFactory: () => fake});
+  assert.equal(result.status, 'memory_applied');
+  assert.equal(result.selectedLevel, 'deep');
+  assert.deepEqual(result.levelsAttempted, ['fast', 'deep']);
+  assert.equal(result.returnedCount, 1);
+  assert.equal('query' in result, false);
 });
 
 test('calls only recall and closes the client', async () => {

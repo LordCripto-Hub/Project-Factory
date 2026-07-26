@@ -269,6 +269,7 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
         "aiUsage": metadata.get("aiUsage", "not_measured"),
         "selectedLevel": metadata.get("selectedLevel"),
         "levelsAttempted": metadata.get("levelsAttempted", []),
+        "retrievalLatencyMs": metadata.get("retrievalLatencyMs"),
         "examinedCount": metadata.get("examinedCount", 0),
         "estimatedTokens": metadata.get("estimatedTokens", 0),
         "provenanceComplete": metadata.get("provenanceComplete", False),

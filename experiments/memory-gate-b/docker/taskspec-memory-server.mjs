@@ -32,18 +32,20 @@ function runRecall(argumentsValue) {
     const child = spawn(
       'python3',
       [
-        '/workspace/scripts/query_taskspec_memory.py',
+        '/workspace/scripts/query_automatic_memory.py',
         '--dataset',
         '/project-factory-history-039a62988625',
         '--lock',
         '/workspace/docker/history-hybrid-039a62988625.dataset-lock.json',
+        '--runtime',
+        '/run/memory-emergency',
       ],
       {
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           LANG: process.env.LANG || 'C.UTF-8',
-          PYTHONPATH: '/workspace/src',
+          PYTHONPATH: '/workspace/src:/home/mp/mypeople/bin',
           PYTHONDONTWRITEBYTECODE: '1',
         },
         shell: false,
@@ -85,7 +87,7 @@ app.post('/mcp', async (request, response) => {
   mcp.registerTool('recall', {
     inputSchema: {
       projectSlug: z.literal('project-factory'),
-      query: z.string().min(1).max(500),
+      query: z.string().min(1).max(800),
       limit: z.number().int().min(1).max(3),
       hops: z.literal(0),
     },
@@ -100,14 +102,21 @@ app.post('/mcp', async (request, response) => {
         topK: argumentsValue.limit,
         hops: argumentsValue.hops,
         claimCount: result.claims.length,
+        status: result.status,
+        selectedLevel: result.selectedLevel,
+        levelsAttempted: result.levelsAttempted,
+        elapsedMilliseconds: result.elapsedMilliseconds,
+        examinedCount: result.examinedCount,
+        estimatedTokens: result.estimatedTokens,
+        provenanceComplete: result.provenanceComplete,
+        reasonCode: result.reasonCode,
       }) + '\n',
       {encoding: 'utf8', mode: 0o600},
     );
     return {
       content: [{type: 'text', text: 'recall complete'}],
       structuredContent: {
-        claims: result.claims,
-        aiUsage: result.aiUsage,
+        ...result,
       },
     };
   });

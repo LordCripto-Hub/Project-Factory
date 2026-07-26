@@ -17,6 +17,7 @@ import memory_comparison as memory_comparison_runtime
 from agent_session import SessionError, session_files
 from operator_telemetry import build_operator_telemetry
 from provider_health import read_health_receipts
+from memory_observability import get_memory_projection
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
@@ -341,24 +342,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json({"ok":True,"health":rows},head=head)
         if p=="/todo/memory-canary":
             task_id=urllib.parse.parse_qs(u.query).get("task_id",[""])[0]
-            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",task_id):
+            if task_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",task_id):
                 return self.json({"ok":False,"error":"invalid_task_id"},400,head=head)
             try:
                 runtime_dir=os.path.realpath(os.path.join(ROOT,"run"))
-                control=load_memory_canary_control(runtime_dir)
-                attempt=memory_canary_receipt_projection(runtime_dir,task_id)
+                projection=get_memory_projection(runtime_dir,task_id)
+                attempt=memory_canary_receipt_projection(runtime_dir,task_id) if task_id else None
             except MemoryCanaryError as error:
                 return self.json({"ok":False,"error":error.code},400,head=head)
-            return self.json({
-                "ok":True,
-                "control":{
-                    "enabled":control.get("mode", "manual_canary" if control.get("enabled") else "off")!="off",
-                    "mode":control.get("mode", "manual_canary" if control.get("enabled") else "off"),
-                    "allowedProjects":control["allowedProjects"],
-                    "revision":control["revision"],
-                },
-                "attempt":attempt,
-            },head=head)
+            return self.json({"ok":True,**projection,"control":{"enabled":projection["enabled"],"mode":projection["mode"],"revision":projection["controlRevision"]},"attempt":attempt},head=head)
         if p in ("/todo/attach","/todo/terminal","/terminal"):
             aid=urllib.parse.parse_qs(u.query).get("agent",[""])[0]
             try:
