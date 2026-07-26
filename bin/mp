@@ -75,6 +75,11 @@ from provider_health import (
     read_health_receipts,
     write_health_receipt,
 )
+from backend_resolution import (
+    BackendResolutionError,
+    resolve_backend,
+    resolve_profile_backend,
+)
 
 INSTALL_DIR = ROOT
 RECOVERY_COOLDOWN = float(os.environ.get("MYPEOPLE_RECOVERY_COOLDOWN_SEC","30"))
@@ -810,6 +815,20 @@ def spawn(
     if getattr(ns, "without_memory", False) and not ns.owner_task:
         raise SystemExit("--without-memory requires --owner-task")
     aid = full_agent_id(ns.agent_id); host, session, tab = parse_agent_id(aid)
+    bindings = load_provider_json(
+        os.environ.get("PROVIDER_BINDINGS_PATH",os.path.join(ROOT,"run","provider-bindings.json")),{}
+    )
+    bound_profile = resolve_profile_backend(bindings,aid)
+    try:
+        backend_decision = resolve_backend(
+            explicit=getattr(ns,"backend","") or "",
+            profile=bound_profile,
+            policy="",
+        )
+    except BackendResolutionError as error:
+        raise SystemExit(error.code) from error
+    ns.backend = backend_decision["backend"]
+    backend_resolution_source = backend_decision["resolutionSource"]
     if host != ENV.get("HOST_ID"):
         model = ns.model if ns.model is not None else (
             ""
@@ -818,7 +837,7 @@ def spawn(
             if ns.owner_task and ns.backend == "codex"
             else DEFAULT_ENG_MODEL
         )
-        payload={"backend":ns.backend,"cwd":ns.cwd,"boss":raw_boss,"is_master":ns.master,"model":model,
+        payload={"backend":ns.backend,"backend_resolution_source":backend_resolution_source,"cwd":ns.cwd,"boss":raw_boss,"is_master":ns.master,"model":model,
                  "owner_task_id":ns.owner_task or "","temporary":ns.temporary,
                  "without_memory":bool(getattr(ns,"without_memory",False))}
         result=http_json("/task/submit","POST",{"type":"spawn","target_agent":aid,"payload":payload})
@@ -1074,7 +1093,7 @@ def spawn(
     if ns.owner_task:audit += ["--owner-task",ns.owner_task]
     if getattr(ns,"without_memory",False):audit += ["--without-memory"]
     if ns.temporary:audit += ["--temporary"]
-    rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"state":"alive",
+    rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"backend_resolution_source":backend_resolution_source,"state":"alive",
          "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
          "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time()),
          "stop_intent":"","retired_reason":"","retired_at":0,**session_identity}
@@ -2446,7 +2465,7 @@ def memory_comparison_command(ns):
 
 def parser():
     p=argparse.ArgumentParser(prog="mp"); sub=p.add_subparsers(dest="verb",required=True)
-    q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="claude",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.add_argument("--without-memory",action="store_true");q.set_defaults(fn=spawn)
+    q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.add_argument("--without-memory",action="store_true");q.set_defaults(fn=spawn)
     q=sub.add_parser("send");q.add_argument("agent_id");q.add_argument("message",nargs="+");q.set_defaults(fn=send)
     q=sub.add_parser("complete");q.add_argument("summary",nargs="+");q.add_argument("--proof",action="append",default=[]);q.add_argument("--proof-file",action="append",default=[]);q.add_argument("--proof-url",action="append",default=[]);q.set_defaults(fn=complete)
     q=sub.add_parser("fail");q.add_argument("--failure",required=True,choices=sorted(ELIGIBLE_FAILURES));q.add_argument("--summary",nargs="+",required=True);q.add_argument("--proof",action="append",default=[],required=True);q.set_defaults(fn=fail)
