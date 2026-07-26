@@ -11,6 +11,8 @@ PUBLIC_FILES = [
     ROOT / "docs" / "UPSTREAM-MYPEOPLE-REVIEW.md",
     ROOT / "docs" / "USER-MANUAL.md",
     ROOT / "docs" / "ADAPTIVE-ROUTING-LIVE-CANARY.md",
+    ROOT / "experiments" / "memory-gate-b" / "README.md",
+    ROOT / "experiments" / "memory-gate-b" / "artifacts" / "taskspec-memory-report.md",
     ROOT / "windows" / "Start-MyPeople.ps1",
     ROOT / "windows" / "Install-MyPeopleShortcut.ps1",
 ]
@@ -41,6 +43,7 @@ class PublicRepositoryContract(unittest.TestCase):
             re.compile(r"(?i)/users/[^/]+"),
         ]
         for path in PUBLIC_FILES:
+            self.assertTrue(path.is_file(), path)
             text = path.read_text(encoding="utf-8")
             for pattern in forbidden:
                 self.assertIsNone(pattern.search(text), f"{path}: {pattern.pattern}")
@@ -91,6 +94,17 @@ class PublicRepositoryContract(unittest.TestCase):
         self.assertIn("disposable agent-free container", manual)
         self.assertIn("Persistent memory activation is blocked", manual)
         self.assertIn("same Linux user", manual)
+
+    def test_memory_gate_b_is_provider_neutral_and_not_activated(self):
+        readme_path = ROOT / "experiments" / "memory-gate-b" / "README.md"
+        self.assertTrue(readme_path.is_file(), readme_path)
+        readme = readme_path.read_text(encoding="utf-8")
+        normalized = " ".join(readme.split())
+        root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("provider-neutral", readme)
+        self.assertIn("not installed or enabled", root_readme)
+        self.assertIn("not production memory", normalized)
+        self.assertIn("not dependencies of this experiment", normalized)
 
     def test_launcher_degraded_mode_is_public(self):
         for path in (ROOT / "README.md", ROOT / "docs" / "USER-MANUAL.md"):

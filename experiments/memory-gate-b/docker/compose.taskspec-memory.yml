@@ -1,0 +1,44 @@
+services:
+  taskspec-memory:
+    image: ${MYPEOPLE_TASKSPEC_IMAGE:?set MYPEOPLE_TASKSPEC_IMAGE}
+    user: mp
+    init: true
+    read_only: true
+    network_mode: none
+    entrypoint:
+      - /bin/bash
+      - /workspace/docker/taskspec-memory-entrypoint.sh
+    environment:
+      MYPEOPLE_TASKSPEC_ISOLATED: "1"
+      MYPEOPLE_TASKSPEC_DATASET_NAME: ${MYPEOPLE_TASKSPEC_DATASET_NAME:?set dataset name}
+      EXPECTED_SOURCE_SHA: ${EXPECTED_SOURCE_SHA:?set source SHA}
+      MYPEOPLE_MEMORY_ALLOW_HTTP: "0"
+      PYTHONDONTWRITEBYTECODE: "1"
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      CODEX_API_KEY: ""
+      GH_TOKEN: ""
+      GITHUB_TOKEN: ""
+      MYPEOPLE_MEMORY_TOKEN: ""
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    tmpfs:
+      - /tmp:exec,nosuid,nodev,uid=1000,gid=1000,mode=1777
+      - /run:exec,nosuid,nodev,uid=1000,gid=1000,mode=0755
+      - /work:exec,nosuid,nodev,uid=1000,gid=1000,mode=0700
+      - /home/mp/.config:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700
+    volumes:
+      - type: bind
+        source: ${MP_TASKSPEC_SOURCE:?set source}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${MP_TASKSPEC_DATASET:?set dataset}
+        target: /project-factory-history-80dce6f86632
+        read_only: true
+      - type: bind
+        source: ${MP_TASKSPEC_EVIDENCE:?set evidence}
+        target: /evidence

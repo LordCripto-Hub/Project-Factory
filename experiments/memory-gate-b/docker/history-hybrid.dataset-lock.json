@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "dataset_dir": "project-factory-history-80dce6f86632",
+  "repo_slug": "LordCripto-Hub/Project-Factory",
+  "source_sha": "80dce6f866329b79061bb1ed6b0594f9fdf2dd45",
+  "files": {
+    "aliases.json": "84b5c5d0d7b5bd5b8a42c63079bb88b46a53d4f0acbd7ab52855da460db26f35",
+    "events.jsonl": "38146f1d7922c7e03d8c6b07b2c78a6dfa40cf039eb9a192fd38bd402b6cf015",
+    "manifest.json": "2b59a23dbd2b7dfbd6ec589bd3a10d2cb4f53e98a26900f2f17276b8818d154e",
+    "questions.jsonl": "80813c8ad4283543e6d7f80d75f5e6c0a5c7282384721808afa69efeb700a3ee",
+    "validation.json": "f3451091ecc73683bb3a23efd48af09a3bd729eb5a9296bc649bfa515a7b5490"
+  }
+}

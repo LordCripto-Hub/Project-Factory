@@ -1,0 +1,1 @@
+{"checks":["alias-answer-leakage","canonical-supersession","evidence-references","family-distribution","host-path-scan","provenance-binding","secret-shape-scan","unique-identifiers"],"event_count":647,"family_distribution":{"continuation":10,"contradiction":10,"exact":20,"failure":5,"multi_hop":15,"negative":5,"semantic":20,"temporal":15},"passed":true,"question_count":100}
