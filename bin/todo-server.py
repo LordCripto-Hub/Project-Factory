@@ -13,6 +13,7 @@ from memory_canary import (
     set_control as set_memory_canary_control,
 )
 import memory_comparison as memory_comparison_runtime
+from provider_health import read_health_receipts
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
@@ -302,6 +303,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_bytes(open(path,"rb").read(),200,mimetypes.guess_type(path)[0] or "application/octet-stream",head=head)
         if p=="/todo/board":
             b=load_board();o=copy.deepcopy(b);o["displayOrder"]=ordered_ids(b);o["boardPath"]=BOARD_PATH;o["projectSlugs"]=available_project_slugs();return self.json(o,head=head)
+        if p=="/todo/provider-health":
+            rows=read_health_receipts(
+                os.path.join(ROOT,"run"),
+                float(ENV.get("MYPEOPLE_PROVIDER_HEALTH_STALE_SEC","300")),
+            )
+            return self.json({"ok":True,"health":rows},head=head)
         if p=="/todo/memory-canary":
             task_id=urllib.parse.parse_qs(u.query).get("task_id",[""])[0]
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",task_id):

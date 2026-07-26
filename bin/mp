@@ -70,6 +70,11 @@ from provider_transaction import (
 from provider_launch import pause as pause_provider_launch
 from provider_launch import resume as resume_provider_launch
 from provider_launch import status as provider_launch_status
+from provider_health import (
+    build_health_receipt,
+    read_health_receipts,
+    write_health_receipt,
+)
 
 INSTALL_DIR = ROOT
 RECOVERY_COOLDOWN = float(os.environ.get("MYPEOPLE_RECOVERY_COOLDOWN_SEC","30"))
@@ -1104,6 +1109,14 @@ def spawn(
             run_tmux(["kill-window","-t",target],check=False)
             raise RuntimeError("resume_process_failed")
     update_roster(rec); write_status(aid,"starting",rec.get("summary",""),boss_id=boss,backend=ns.backend)
+    write_health_receipt(
+        os.path.join(ROOT,"run"),
+        build_health_receipt(
+            ns.backend,profile_id,aid,
+            {"processAlive":True,"authenticatedInteraction":bool(session_identity.get("session_id"))},
+            "spawn",
+        ),
+    )
     queue_register(rec); recorder(session,tab)
     if fresh_owner_route and routing_decision is not None:
         try:
@@ -2339,8 +2352,30 @@ def providers_resume(_ns):
     resume_provider_launch(provider_pause_path())
     print(json.dumps({"paused":False},sort_keys=True))
 
-def providers_status(_ns):
-    print(json.dumps(provider_launch_status(provider_pause_path()),sort_keys=True))
+def providers_status(ns):
+    runtime_dir=os.path.join(ROOT,"run")
+    if getattr(ns,"refresh",False):
+        for record in load_roster():
+            if record.get("retired") or record.get("state") not in ("alive","starting","recovering"):
+                continue
+            alive=window_exists(tmux_target(record["agent_id"]))
+            evidence={"processAlive":alive}
+            if alive and record.get("session_id"):
+                evidence["authenticatedInteraction"]=True
+            write_health_receipt(
+                runtime_dir,
+                build_health_receipt(
+                    record.get("backend",""),record.get("provider_profile",""),
+                    record["agent_id"],evidence,"manual",
+                ),
+            )
+    payload={
+        "launch":provider_launch_status(provider_pause_path()),
+        "health":read_health_receipts(
+            runtime_dir,float(os.environ.get("MYPEOPLE_PROVIDER_HEALTH_STALE_SEC","300"))
+        ),
+    }
+    print(json.dumps(payload,sort_keys=True))
 
 def memory_canary_command(ns):
     runtime_dir=os.path.realpath(os.path.join(ROOT,"run"))
@@ -2432,7 +2467,7 @@ def parser():
     q=sub.add_parser("queue-status");q.add_argument("task_id");q.set_defaults(fn=queue_task_status)
     q=sub.add_parser("providers-pause");q.add_argument("--reason",default="operator requested");q.set_defaults(fn=providers_pause)
     q=sub.add_parser("providers-resume");q.set_defaults(fn=providers_resume)
-    q=sub.add_parser("providers-status");q.set_defaults(fn=providers_status)
+    q=sub.add_parser("providers-status");q.add_argument("--refresh",action="store_true");q.set_defaults(fn=providers_status)
     canary=sub.add_parser("memory-canary")
     canary_sub=canary.add_subparsers(dest="memory_canary_action",required=True)
     canary_sub.add_parser("status")
