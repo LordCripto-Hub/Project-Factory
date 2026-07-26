@@ -1135,9 +1135,25 @@ def notify_agent(agent_id, message):
     else:
         http_json("/task/submit","POST",{"type":"send","target_agent":aid,"payload":{"message":message}})
 
+def identity_expectation(record):
+    return {
+        "backend": record.get("backend", ""),
+        "profile": record.get("provider_profile", ""),
+        "model": record.get("model", ""),
+        "cwd": record.get("cwd", ""),
+        "owner_task_id": record.get("owner_task_id", ""),
+    }
+
 def send(ns):
     msg=" ".join(ns.message)
     if not msg.strip(): raise SystemExit("message must be non-empty")
+    aid=full_agent_id(ns.agent_id)
+    record=next((x for x in load_roster() if x.get("agent_id")==aid),None)
+    if not record: raise SystemExit("agent_identity_unknown")
+    try:
+        require_matching_agent(tmux_target(aid),identity_expectation(record))
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
     notify_agent(ns.agent_id,msg)
 
 
@@ -2045,6 +2061,7 @@ def revive(ns):
         current=next((x for x in load_roster() if x.get("agent_id")==aid),{})
         if current.get("session_id")!=session_id:
             raise RuntimeError("session_identity_mismatch")
+        require_matching_agent(tmux_target(aid),identity_expectation(current))
     except SessionError as error:
         update_roster(snapshot)
         raise SystemExit(error.code) from error

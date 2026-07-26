@@ -3,6 +3,7 @@
 from __future__ import annotations
 import contextlib, fcntl, json, os, pathlib, shlex, subprocess, tempfile, time
 import urllib.error, urllib.parse, urllib.request
+from agent_identity import validate_tmux_agent
 
 CONFIG = os.environ.get("MYPEOPLE_CONFIG_PATH", os.path.expanduser("~/.config/mypeople/queue.env"))
 DEFAULT_ENG_MODEL = "claude-opus-4-8"
@@ -96,6 +97,12 @@ def run_tmux(args, *, check=True, capture=False, env=None):
 
 def window_exists(target: str) -> bool:
     return run_tmux(["has-session", "-t", target], check=False, capture=True).returncode == 0
+
+def require_matching_agent(target: str, expected: dict) -> dict:
+    result = validate_tmux_agent(target, expected, run_tmux)
+    if not result["ok"]:
+        raise RuntimeError(f"agent_identity_{result['state']}: {target}")
+    return result
 
 def tmux_send_message(target: str, message, runner=run_tmux, delay=.4, submit_delay=.08) -> bool:
     """Paste exactly one nonempty payload and submit once; retry only a stuck multiline paste."""
