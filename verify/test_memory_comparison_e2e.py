@@ -65,7 +65,9 @@ class MemoryComparisonE2E(unittest.TestCase):
     )
     def test_disposable_docker_restart_count_is_unchanged(self):
         self.require_fixture()
-        image = os.environ.get("MYPEOPLE_COMPARISON_E2E_IMAGE", "mypeople-node:upgrade-20260721T225008Z")
+        image = os.environ.get("MYPEOPLE_COMPARISON_E2E_IMAGE", "").strip()
+        if not image:
+            self.skipTest("set MYPEOPLE_COMPARISON_E2E_IMAGE for the host Docker lifecycle")
         name = f"mypeople-comparison-e2e-{uuid.uuid4().hex[:12]}"
         root = str(ROOT.resolve())
         try:

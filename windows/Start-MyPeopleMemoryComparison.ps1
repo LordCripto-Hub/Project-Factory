@@ -294,7 +294,7 @@ function Invoke-PairedRun {
 
 switch ($Action) {
     'Preflight' { Assert-Preflight | ConvertTo-Json -Compress }
-    'Offline' { & python (Join-Path $projectRoot 'experiments\memory-gate-b\scripts\run_memory_comparison_offline.py') --dataset $datasetPath --lock $lockPath --cases $casesPath }
+    'Offline' { & python (Join-Path $projectRoot 'experiments\memory-gate-b\scripts\run_memory_comparison_offline.py') --dataset $datasetPath --lock $lockPath --cases $casesPath --output $offlineReport }
     'Paired' { Invoke-PairedRun | ConvertTo-Json -Depth 12 -Compress }
     'Status' { if (-not $RunId) { throw 'run_id_required' }; (Invoke-Mp -Arguments @('memory-comparison','status',$RunId)).Output }
     'Cleanup' { Assert-LiveConfirmation; Stop-ComparisonRun -Code 'operator_cleanup'; '{"ok":true,"status":"cleanup_requested"}' }

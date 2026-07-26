@@ -56,6 +56,15 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
         self.assertNotIn("'python3', '-c'", self.text)
         self.assertNotIn("'sh', '-lc'", self.text)
 
+    def test_offline_action_writes_the_bound_receipt(self):
+        offline = re.search(r"'Offline'\s*\{(?P<body>.*?)\}", self.text, re.DOTALL)
+        self.assertIsNotNone(offline)
+        body = offline.group("body")
+        self.assertIn("--dataset $datasetPath", body)
+        self.assertIn("--lock $lockPath", body)
+        self.assertIn("--cases $casesPath", body)
+        self.assertIn("--output $offlineReport", body)
+
     def test_exact_counterbalanced_schedule_uses_fresh_luna_workers(self):
         for alias, first, second in (
             ("cmp-exact-01", "baseline", "memory"),
