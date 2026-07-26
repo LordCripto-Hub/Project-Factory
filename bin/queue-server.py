@@ -8,7 +8,7 @@ HOST=ENV.get("BIND_ADDR","0.0.0.0"); PORT=int(ENV.get("HUD_PORT","9900")); TODO_
 SECRET=ENV["QUEUE_SECRET"]; DEAD=float(ENV.get("QUEUE_DEAD_AFTER","20")); START=time.time()
 CLIENTS={}; AGENTS={}; TASKS={}; BROWSER=set(); LOCK=threading.RLock()
 QUEUE_PATH=os.path.realpath(os.environ.get("QUEUE_STATE_PATH") or os.path.join(ROOT,"run","control-queue.json"))
-TASK_TYPES={"send","peek","kill","spawn","answer","revive"}
+TASK_TYPES={"send","peek","kill","spawn","answer","revive","routing_escalate"}
 TASK_STATUSES={"queued","delivered","done","failed","uncertain"}
 TERMINAL_TASK_STATUSES={"done","failed","uncertain"}
 TERMINAL_TASK_LIMIT=500
@@ -220,7 +220,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json({"ok":True})
         if path=="/task/submit":
             typ=b.get("type") or b.get("action")
-            if typ not in ("send","peek","kill","spawn","answer","revive"):return self.json({"ok":False,"error":"invalid_type"},400)
+            if typ not in TASK_TYPES:return self.json({"ok":False,"error":"invalid_type"},400)
             tid=secrets.token_hex(12);t={"task_id":tid,"type":typ,"target_agent":b.get("target_agent",""),"payload":b.get("payload",{}),"status":"queued","created_at":now()}
             with LOCK:TASKS[tid]=t;persist_tasks()
             return self.json({"task_id":tid})

@@ -101,9 +101,38 @@ operator policy.
 The canonical routing receipt is private, SHA-256-bound to the roster, and
 summarized once in the Priorities task comments.
 
-Exact revive preserves that receipt and model. The current release calculates
-the next eligible tier for bounded typed failures but intentionally leaves
-cross-model process replacement and HUD controls to a separate gated phase.
+Exact revive preserves that receipt and model. Lossless automatic escalation
+accepts only `verification_failed`, `implementation_blocked`, or
+`model_capability_insufficient`. A worker reports its own assigned task with:
+
+```bash
+mp fail --failure verification_failed \
+  --summary "The focused verifier still fails." \
+  --proof "python3 verify/example.py: 1 failed"
+```
+
+The owning Boss or a local operator can use:
+
+```bash
+mp escalate node-1/main:Worker-1 \
+  --failure model_capability_insufficient \
+  --summary "The bounded implementation path exceeds this model." \
+  --proof "Boss review confirmed the capability blocker."
+```
+
+MyPeople preserves the same agent, task, assignee, provider profile, working
+directory, TaskSpec, role receipt, and same Codex session. It stops only the
+selected worker, resumes that exact session on one higher policy-compliant
+model, verifies identity, and sends one compact continuation message.
+The routing calculation consumes zero model tokens; the continuation starts
+one normal turn on the higher model and has that model's ordinary token cost.
+
+Provider quota, authentication, startup, infrastructure, Docker, tmux, queue,
+filesystem, network, missing-context, timeout, silence, and crash failures
+never escalate the model. A failed forward resume rolls back to the prior exact
+session and receipt. If rollback also fails, the task and selected worker enter
+`recovery_required`; all private evidence is preserved and no fresh session is
+created. HUD model controls remain a future interface phase.
 
 ## Durable Docker state
 

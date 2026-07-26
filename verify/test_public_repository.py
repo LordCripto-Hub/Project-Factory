@@ -126,6 +126,23 @@ class PublicRepositoryContract(unittest.TestCase):
             manual,
         )
 
+    def test_lossless_escalation_operator_contract_is_public(self):
+        for path in (
+            ROOT / "README.md",
+            ROOT / "docs" / "USER-MANUAL.md",
+        ):
+            text = path.read_text(encoding="utf-8")
+            for phrase in (
+                "mp fail",
+                "mp escalate",
+                "same Codex session",
+                "verification_failed",
+                "model_capability_insufficient",
+                "one compact continuation message",
+                "routing calculation consumes zero model tokens",
+            ):
+                self.assertIn(phrase, text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

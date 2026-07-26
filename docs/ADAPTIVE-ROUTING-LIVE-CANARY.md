@@ -3,8 +3,8 @@
 Use this procedure only after the reviewed image passes focused and isolated
 verification. It exercises the live board, TaskSpec compiler, private routing
 policy, roster, provider profile, and one disposable Codex owner worker. It
-does not prove provider capacity, model quality, or automatic cross-model
-replacement.
+also proves one bounded lossless Luna-to-Terra escalation. It does not prove
+general provider capacity or model quality.
 
 ## Preconditions
 
@@ -28,6 +28,10 @@ replacement.
    ```bash
    python3 /home/mp/mypeople/verify/test_task_routing.py
    python3 /home/mp/mypeople/verify/test_adaptive_owner_routing.py
+   python3 /home/mp/mypeople/verify/test_routing_escalation.py
+   python3 /home/mp/mypeople/verify/test_routing_escalation_cli.py
+   python3 /home/mp/mypeople/verify/test_queue_routing_escalation.py
+   python3 /home/mp/mypeople/verify/test_lossless_routing_escalation.py
    ```
 
 ## Execute one disposable route
@@ -89,8 +93,60 @@ PY
 mp status
 ```
 
-Confirm the card contains exactly one comment with the receipt marker. Attach
-the sanitized command output and routing comment to the rollout record, then
+Confirm the card contains exactly one comment with the initial receipt marker.
+
+## Escalate the same exact session once
+
+Record only a digest of the private session identity, then submit a controlled
+capability failure as a local operator:
+
+```bash
+SESSION_BEFORE_SHA=$(python3 - "$CANARY_AGENT" <<'PY'
+import hashlib, json, pathlib, sys
+agent = sys.argv[1]
+roster = json.loads(pathlib.Path("/home/mp/mypeople/run/roster.json").read_text())
+record = next(item for item in roster if item.get("agent_id") == agent)
+print(hashlib.sha256(record["session_id"].encode()).hexdigest())
+PY
+)
+export SESSION_BEFORE_SHA
+env -u AGENT_ID mp escalate "$CANARY_AGENT" \
+  --failure model_capability_insufficient \
+  --summary "Controlled canary requests one bounded higher tier." \
+  --proof "Initial Luna route and exact-session receipt were verified."
+```
+
+The command must return `phase=committed`. The card receives one result
+comment shaped like:
+
+```text
+[routing:<12 hex>] escalation=committed failure=model_capability_insufficient from=gpt-5.6-luna to=gpt-5.6-terra sameTask=true exactResume=true continuation=sent routingAiUsage=none
+```
+
+Verify the session digest, task, model, immutable history, and live services:
+
+```bash
+python3 - "$CANARY_AGENT" "$CARD_ID" "$SESSION_BEFORE_SHA" <<'PY'
+import hashlib, json, pathlib, sys
+agent, card, before = sys.argv[1:]
+roster = json.loads(pathlib.Path("/home/mp/mypeople/run/roster.json").read_text())
+record = next(item for item in roster if item.get("agent_id") == agent)
+assert hashlib.sha256(record["session_id"].encode()).hexdigest() == before
+assert record["owner_task_id"] == card
+assert record["model"] == "gpt-5.6-terra"
+receipt = json.loads(pathlib.Path(record["routing_path"]).read_text())
+assert receipt["selection"] == "automatic_escalation"
+assert receipt["attemptCount"] == 2
+assert receipt["escalationCount"] == 1
+history = pathlib.Path("/home/mp/mypeople/run/routing-history") / card
+assert len(list(history.glob("attempt-*.json"))) >= 2
+print(json.dumps({"agent": agent, "model": record["model"], "exactResume": True}, sort_keys=True))
+PY
+mp status
+mp providers-status
+```
+
+Attach only sanitized output and routing comments to the rollout record, then
 retire only the disposable worker:
 
 ```bash
@@ -113,6 +169,9 @@ fails, kill only the canary, pause launches with
 the evidence. Do not hand-edit the receipt or roster. Roll back through the
 backup-first Docker transaction; never use `docker compose down -v`.
 
-Authentication, quota, infrastructure, and missing-context failures are not
-routing escalations. This release calculates a bounded next tier for eligible
-typed implementation failures but does not automatically replace the worker.
+Authentication, quota, provider startup, infrastructure, Docker, tmux, queue,
+filesystem, network, missing-context, timeout, silence, and crash failures are
+not routing escalations. A forward failure must restore the prior exact session
+and receipt. A failed rollback must leave the card and selected worker blocked
+with `recovery_required`, preserve private evidence, and never create a fresh
+session.
