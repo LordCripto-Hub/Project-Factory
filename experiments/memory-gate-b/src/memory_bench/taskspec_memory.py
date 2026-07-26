@@ -6,11 +6,83 @@ from .history_runner import (
     HistoryGraphRetriever,
     HistoryHybridRetriever,
 )
+from .exhaustive import BoundedExhaustiveSearch
 from .retrieval import CanonicalRetriever, SQLiteFTSRetriever
 
 
 PROJECT_REPOSITORY = "LordCripto-Hub/Project-Factory"
 PROJECT_SLUG = "project-factory"
+
+
+def _claims(results) -> list[dict[str, str]]:
+    return [
+        {
+            "id": result.event.event_id,
+            "projectSlug": PROJECT_SLUG,
+            "content": result.event.content,
+            "sourceUri": result.event.provenance,
+            "sourceType": result.event.event_type,
+            "status": "canonical",
+        }
+        for result in results
+    ]
+
+
+class HistoryMemoryStore:
+    """One locked fixture and one FTS index shared by every recall level."""
+
+    def __init__(self, loaded: LoadedHistoryFixture):
+        if loaded.repo_slug != PROJECT_REPOSITORY:
+            raise ValueError("project_mismatch")
+        self.loaded = loaded
+        self.index = SQLiteFTSRetriever(loaded.fixture.events)
+        self.fast_retriever = HistoryGraphRetriever(
+            CanonicalRetriever(self.index, loaded.fixture.events),
+            loaded.fixture.events,
+        )
+        self.deep_retriever = HistoryDeepRetriever(
+            self.index,
+            loaded.fixture.events,
+            expansions=loaded.fixture.expansion_map,
+        )
+        self.hybrid_retriever = HistoryHybridRetriever(
+            self.fast_retriever,
+            self.deep_retriever,
+            alias_tokens=loaded.fixture.expansion_map,
+            max_escalations=1,
+        )
+        self.exhaustive_retriever = BoundedExhaustiveSearch(
+            loaded.fixture.events,
+            loaded.fixture.expansion_map,
+        )
+
+    @staticmethod
+    def _limit(limit):
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 3:
+            raise ValueError("invalid_recall_limit")
+
+    def fast(self, query, limit):
+        self._limit(limit)
+        rows = self.fast_retriever.retrieve(str(query or "").strip(), limit=limit)
+        return {"claims": _claims(rows), "examinedCount": len(rows)}
+
+    def deep(self, query, limit):
+        self._limit(limit)
+        rows = self.deep_retriever.retrieve(str(query or "").strip(), limit=limit)
+        return {"claims": _claims(rows), "examinedCount": len(rows)}
+
+    def exhaustive(self, query, limit):
+        self._limit(limit)
+        outcome = self.exhaustive_retriever.retrieve(
+            str(query or "").strip(), max_examined=100, limit=limit
+        )
+        return {
+            "claims": _claims(outcome.results),
+            "examinedCount": outcome.examined_count,
+        }
+
+    def close(self):
+        self.index.close()
 
 
 def recall_history_claims(
@@ -27,34 +99,9 @@ def recall_history_claims(
     if not query:
         raise ValueError("question_required")
 
-    index = SQLiteFTSRetriever(loaded.fixture.events)
+    store = HistoryMemoryStore(loaded)
     try:
-        fast = HistoryGraphRetriever(
-            CanonicalRetriever(index, loaded.fixture.events),
-            loaded.fixture.events,
-        )
-        deep = HistoryDeepRetriever(
-            index,
-            loaded.fixture.events,
-            expansions=loaded.fixture.expansion_map,
-        )
-        hybrid = HistoryHybridRetriever(
-            fast,
-            deep,
-            alias_tokens=loaded.fixture.expansion_map,
-            max_escalations=1,
-        )
-        outcome = hybrid.retrieve(query, limit=limit)
-        return [
-            {
-                "id": result.event.event_id,
-                "projectSlug": PROJECT_SLUG,
-                "content": result.event.content,
-                "sourceUri": result.event.provenance,
-                "sourceType": result.event.event_type,
-                "status": "canonical",
-            }
-            for result in outcome.results
-        ]
+        outcome = store.hybrid_retriever.retrieve(query, limit=limit)
+        return _claims(outcome.results)
     finally:
-        index.close()
+        store.close()

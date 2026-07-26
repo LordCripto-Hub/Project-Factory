@@ -9,7 +9,11 @@ import sys
 import unittest
 
 from memory_bench.history_fixture import load_history_fixture
-from memory_bench.taskspec_memory import PROJECT_SLUG, recall_history_claims
+from memory_bench.taskspec_memory import (
+    HistoryMemoryStore,
+    PROJECT_SLUG,
+    recall_history_claims,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +64,24 @@ class TaskSpecMemoryTests(unittest.TestCase):
             limit=3,
         )
         self.assertEqual(claims, [])
+
+    def test_one_store_exposes_fast_deep_and_exhaustive_adapters(self):
+        question = next(
+            item for item in self.loaded.fixture.questions
+            if item.question_id == "hist-exact-003"
+        )
+        store = HistoryMemoryStore(self.loaded)
+        try:
+            fast = store.fast(question.query, 3)
+            deep = store.deep(question.query, 3)
+            exhaustive = store.exhaustive(question.query, 3)
+        finally:
+            store.close()
+        for result in (fast, deep, exhaustive):
+            self.assertEqual(set(result), {"claims", "examinedCount"})
+            self.assertLessEqual(len(result["claims"]), 3)
+            self.assertGreaterEqual(result["examinedCount"], len(result["claims"]))
+            self.assertTrue(all(claim["sourceUri"] for claim in result["claims"]))
 
     def test_limit_and_project_contract_fail_closed(self):
         with self.assertRaisesRegex(ValueError, "invalid_recall_limit"):
