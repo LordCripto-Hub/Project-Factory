@@ -156,6 +156,8 @@ function normalizeTypedRecovery(raw, normalized) {
     estimatedTokens: raw.estimatedTokens,
     provenanceComplete: raw.provenanceComplete,
     reasonCode: raw.reasonCode,
+    truncated: normalized.truncated,
+    responseChars: normalized.responseChars,
     aiUsage: normalized.aiUsage,
   };
 }

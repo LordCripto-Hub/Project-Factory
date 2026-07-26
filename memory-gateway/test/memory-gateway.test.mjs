@@ -122,6 +122,8 @@ test('preserves only validated typed automatic-recovery metadata', async () => {
   assert.equal(result.selectedLevel, 'deep');
   assert.deepEqual(result.levelsAttempted, ['fast', 'deep']);
   assert.equal(result.returnedCount, 1);
+  assert.equal(result.truncated, false);
+  assert.equal(result.responseChars, claim.content.length);
   assert.equal('query' in result, false);
 });
 
