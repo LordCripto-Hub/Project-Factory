@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import atexit
+import base64
 import copy
 import hashlib
 import json
@@ -371,6 +372,27 @@ def queue_api(path, method="GET", body=None, headers=None, timeout=20):
 
 def sandbox_api(path, method="GET", body=None, headers=None, timeout=20):
     return http_json(f"{sandbox.todo_url}{path}", method=method, body=body, headers=headers or {"X-Queue-Secret": QUEUE_SECRET}, timeout=timeout)
+
+
+def sandbox_upload(task_id: str, file_path: Path):
+    boundary = "mypeople-core-verify-upload"
+    content = file_path.read_bytes()
+    body = (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"task_id\"\r\n\r\n{task_id}\r\n"
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"by\"\r\n\r\nCEO\r\n"
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_path.name}\"\r\nContent-Type: image/png\r\n\r\n"
+    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+    req = request.Request(
+        f"{sandbox.todo_url}/todo/proof",
+        method="POST",
+        data=body,
+        headers={
+            "X-Queue-Secret": QUEUE_SECRET,
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    with request.urlopen(req, timeout=20) as response:
+        return json.loads(response.read())
 
 
 def sandbox_queue(path, method="GET", body=None, headers=None, timeout=20):
@@ -874,8 +896,8 @@ def build_sandbox_fixtures():
     check(assign_res.get("ok") is True, "owner browser assign endpoint rejected")
     # Make an image proof available via upload.
     img = TMP / "proof.png"
-    img.write_bytes(bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010802000000907724e50000000a49444154789c6360000002000154a24f5d0000000049454e44ae426082"))
-    sandbox_api("/todo/proof", "POST", {"task_id": proof_id, "kind": "image", "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO94W9kAAAAASUVORK5CYII="})
+    img.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO94W9kAAAAASUVORK5CYII="))
+    sandbox_upload(proof_id, img)
     # Optional inline text proof for completeness.
     sandbox_api("/todo/proof", "POST", {"task_id": proof_id, "kind": "text", "body": "proof text"})
     # Owner history fixture for attach clicks.
