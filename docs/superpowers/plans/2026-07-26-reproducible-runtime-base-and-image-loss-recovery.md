@@ -578,3 +578,26 @@ git push origin feat/memory-gate-b-comparison
 
 Update draft PR #12. This completes preparation only. Running the three paired
 Gate B cases requires a new explicit approval.
+
+---
+
+## Execution record
+
+Completed on 2026-07-26:
+
+- rebuilt a repository-owned Debian 12 base with pinned Node 22, Codex, Claude,
+  ttyd, ffmpeg, and non-root UID/GID 1000;
+- made the application overlay rebuild locked Playwright, browser, and memory
+  gateway dependencies instead of relying on deleted image layers;
+- added the fail-closed Windows image-loss recovery transaction;
+- passed the complete isolated packaged-source verifier and J1-J52 contracts;
+- produced a protected portable backup and recovered the live container over
+  the unchanged eight canonical volumes;
+- verified exact image ID, restart count zero, preserved board and stable-roster
+  hashes, memory flag zero, and live Boss and Nightwatch roles.
+
+The Gate B live preflight was attempted and correctly refused because recovery
+kept `MYPEOPLE_MEMORY_COMPARISON_ENABLED=0` and did not start the sidecar. That
+preflight is an activation-dependent live gate, not a passive audit. Enabling
+it or running paired cases remains outside this recovery approval and requires
+a new explicit approval.

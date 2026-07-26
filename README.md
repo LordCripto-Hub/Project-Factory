@@ -176,6 +176,50 @@ Provider sessions are independent of code upgrades. An exhausted, logged-out,
 or intentionally stopped provider remains in that state; the upgrade does not
 open OAuth, validate provider quotas, or revive agents.
 
+### Rebuild after local image loss
+
+If the `mypeople` container and all `mypeople-node:*` images are missing but
+the eight named volumes still exist, rebuild from the repository instead of
+recreating or restoring the volumes:
+
+```powershell
+$sha = (git rev-parse --short=7 HEAD).Trim()
+$base = "mypeople-node:recovery-base-$sha"
+$candidate = "mypeople-node:recovery-candidate-$sha"
+docker build -f docker\Dockerfile.recovery-base -t $base .
+docker build -f docker\Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t $candidate .
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image $candidate -TimeoutSeconds 1800 -UsePackagedSource
+```
+
+Record the successful verifier result in a current-user-protected JSON receipt
+under `%LOCALAPPDATA%\MyPeople\state`. Bind `sourceCommit` to `git rev-parse
+HEAD`, `imageId` to `docker image inspect <candidate> --format '{{.Id}}'`, set
+`status` to `pass`, and set `verification` to `isolated-packaged-source`.
+Recovery refuses a dirty checkout, a mismatched receipt, a live `mypeople`
+container, a missing canonical volume, or insufficient disk space.
+
+```powershell
+# Read-only plan and receipt
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Recover-MyPeopleDockerDeployment.ps1 -CandidateImage $candidate -VerificationReceipt <protected-receipt.json>
+
+# Explicit recovery after reviewing the plan
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Recover-MyPeopleDockerDeployment.ps1 -CandidateImage $candidate -VerificationReceipt <protected-receipt.json> -Execute
+
+# Normal provider rehydration and role startup
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeople.ps1 -NoBrowser -NonInteractive
+```
+
+The recovery mounts every source volume read-only while producing a sanitized
+portable archive, verifies its SHA-256 after the Docker copy, pins the exact
+candidate image ID, and checks board and stable-roster hashes after Compose
+starts. A failed deployment removes only the new container and restores the
+previous deployment files; it never claims that a deleted old image was
+restored. Backups contain volume state, not Docker image layers.
+
+Memory comparison remains disabled after recovery. Its live `Preflight` action
+requires the comparison flag and sidecar to be explicitly enabled first; do
+not treat that command as a passive check or run it without a separate approval.
+
 ## Persistent Project Factory workspace
 
 The runtime rehydrates one shell-only tmux session without changing Git content:
