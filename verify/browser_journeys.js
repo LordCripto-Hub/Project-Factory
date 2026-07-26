@@ -133,6 +133,51 @@ async function count(page, sel) {
   return await page.locator(sel).count();
 }
 
+async function assertUnifiedHudCards(page) {
+  await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length === 2);
+  await expect(await count(page, '#telemetryCards .combat-card') === 2, 'HUD did not render one card per active agent');
+  await expect(await count(page, '#agentsTable') === 0, 'legacy Agents table is still visible');
+  const firstCard = page.locator('#telemetryCards .combat-card').first();
+  const pagesBefore = page.context().pages().length;
+  await firstCard.getByRole('button', { name: 'Copy spawn' }).click();
+  await page.waitForTimeout(100);
+  await expect(page.context().pages().length === pagesBefore, 'nested card action opened a popup');
+
+  const clickPopup = page.waitForEvent('popup');
+  await firstCard.locator('.combat-title').click();
+  const clicked = await clickPopup;
+  await clicked.waitForURL(url => url.toString().includes('/todo/terminal?agent='), { timeout: 5000 });
+  await expect(clicked.url().includes('/todo/terminal?agent='), 'card click did not open terminal');
+  await clicked.close();
+
+  const keyboardPopup = page.waitForEvent('popup');
+  await firstCard.focus();
+  await page.keyboard.press('Enter');
+  const keyed = await keyboardPopup;
+  await keyed.waitForURL(url => url.toString().includes('/todo/terminal?agent='), { timeout: 5000 });
+  await expect(keyed.url().includes('/todo/terminal?agent='), 'keyboard attach did not open terminal');
+  await keyed.close();
+
+  await page.evaluate(() => {
+    window.__hudOriginalFetch = window.fetch;
+    window.fetch = (input, init) => String(input).includes('/todo/operator-telemetry')
+      ? Promise.resolve(new Response('{"error":"synthetic stale telemetry"}', {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      : window.__hudOriginalFetch(input, init);
+  });
+  await page.evaluate(() => window.__hud.poll());
+  await expect((await text(page, '#telemetryState')) === 'STALE', 'HUD did not expose stale telemetry');
+  await expect(await count(page, '#telemetryCards .combat-card') === 2, 'HUD cards disappeared during stale telemetry');
+  await expect(await count(page, '#telemetryCards .card-action') >= 2, 'lifecycle actions disappeared during stale telemetry');
+  await page.evaluate(() => {
+    window.fetch = window.__hudOriginalFetch;
+    delete window.__hudOriginalFetch;
+    return window.__hud.poll();
+  });
+}
+
 async function liveCore(page) {
   const liveMarker = `browser-${browserName}-${Date.now()}`;
   await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
@@ -151,6 +196,7 @@ async function liveCore(page) {
   await page.click('a.navlink[href="/dashboard"]');
   await page.waitForURL(/\/dashboard$/);
   await expect((await text(page, 'h1')) === 'MyPeople - HUD', 'HUD title mismatch');
+  await assertUnifiedHudCards(page);
   await page.click('a.nav[href="/"]');
   await page.waitForURL(/\/$/);
   await page.click('a.navlink[href="/wall"]');
@@ -280,7 +326,7 @@ async function sandboxSuite(page, boardPollNavigation) {
   await page.waitForURL(/\/$/);
   await expect((await text(page, 'h1')) === 'Priorities', 'HUD->board failed');
   await page.goto(`${hudUrl}/dashboard`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#agentsTable');
+  await page.waitForSelector('#telemetryCards .combat-card');
   await page.click('a.nav[href="/"]');
   await page.waitForURL(/\/$/);
   await expect((await text(page, 'h1')) === 'Priorities', 'direct HUD->board failed');
@@ -325,7 +371,9 @@ async function sandboxSuite(page, boardPollNavigation) {
 
   // Hidden live-board controls check.
   await page.goto(`${baseUrl}/dashboard`, { waitUntil: 'domcontentloaded' });
-  await expect(await count(page, 'a.attach') >= 0, 'dashboard missing');
+  await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length >= 1);
+  await expect(await count(page, '#telemetryCards .combat-card') >= 1, 'dashboard cards missing');
+  await expect(await count(page, '#agentsTable') === 0, 'legacy dashboard table returned');
   await page.goto(`${baseUrl}/wall`, { waitUntil: 'domcontentloaded' });
   await expect(await count(page, 'iframe') >= 1, 'wall iframe missing');
   await page.goto(`${baseUrl}/terminal-graph`, { waitUntil: 'domcontentloaded' });

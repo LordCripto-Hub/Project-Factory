@@ -11,16 +11,16 @@ class HudProviderTelemetryContract(unittest.TestCase):
     def setUpClass(cls):
         cls.source = (ROOT / "bin" / "dashboard.html").read_text(encoding="utf-8")
 
-    def test_combat_status_and_agent_detail_surfaces_exist(self):
+    def test_combat_status_unifies_agent_and_telemetry_surfaces(self):
         for marker in (
             'id="combatStatus"',
             'id="telemetryState"',
             'id="telemetryCards"',
             "Combat Status",
             "/todo/operator-telemetry",
-            "<th>MODEL</th>",
-            "<th>HEALTH</th>",
-            "No active provider telemetry",
+            "buildCardRows",
+            "renderAgentCards",
+            "No active agents",
         ):
             self.assertIn(marker, self.source)
 
@@ -39,11 +39,11 @@ class HudProviderTelemetryContract(unittest.TestCase):
         self.assertIn("outputTokens", self.source)
         self.assertIn("sessionAlias", self.source)
 
-    def test_rendering_is_safe_selectable_and_stale_aware(self):
+    def test_rendering_is_safe_attachable_and_stale_aware(self):
         for marker in (
             "textContent",
-            "selected-agent",
-            "scrollIntoView",
+            "activateCardAttach",
+            "dataset.attachUrl",
             "telemetryStale",
             "lastTelemetry",
             "STALE",
