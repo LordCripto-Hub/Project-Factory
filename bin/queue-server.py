@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import http.client, http.cookies, http.server, json, os, secrets, subprocess, threading, time
+import http.client, http.cookies, http.server, json, os, secrets, threading, time
 import urllib.parse
 from mpcommon import *
+import core_agent_controls
 
 HOST=ENV.get("BIND_ADDR","0.0.0.0"); PORT=int(ENV.get("HUD_PORT","9900")); TODO_PORT=int(ENV.get("TODO_PORT","9933"))
 SECRET=ENV["QUEUE_SECRET"]; DEAD=float(ENV.get("QUEUE_DEAD_AFTER","20")); START=time.time()
@@ -176,6 +177,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path in ("/dashboard","/dashboard/"):return self.page("dashboard.html",head)
         if path=="/" or path.startswith(("/todos","/wall","/terminal-graph","/terminal","/assets/","/voice/","/todo/","/nightwatch/")):return self.proxy(head)
         if not self.authed():return self.json({"ok":False,"error":"unauthorized"},401,head=head)
+        if path=="/control-capabilities":return self.json(core_agent_controls.capabilities(),head=head)
         if path=="/clients":
             with LOCK:return self.json(list(CLIENTS.values()),head=head)
         if path=="/agents":return self.json(joined_agents(),head=head)
@@ -232,12 +234,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path=="/task/retry":
             try:return self.json({"ok":True,"task":retry_task(str(b.get("task_id") or ""))})
             except ValueError as error:return self.json({"ok":False,"error":str(error)},400)
-        if path=="/revive":
-            aid=b.get("agent_id","")
-            try:
-                p=subprocess.run([os.path.join(ROOT,"bin","mp"),"revive",aid],capture_output=True,text=True,timeout=30)
-                return self.json({"ok":p.returncode==0,"result":p.stdout or p.stderr},200 if p.returncode==0 else 400)
-            except Exception as e:return self.json({"ok":False,"error":str(e)},500)
+        if path in ("/kill","/revive","/switch"):
+            try:return self.json(core_agent_controls.execute(path[1:],b,os.path.join(ROOT,"run","roster.json")))
+            except core_agent_controls.ControlError as error:
+                return self.json({"ok":False,"error":error.code},error.status)
+            except Exception:
+                return self.json({"ok":False,"error":"control_unavailable"},500)
         self.json({"error":"not_found"},404)
 
 if __name__=="__main__":

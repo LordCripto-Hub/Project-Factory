@@ -158,6 +158,19 @@ class PublicRepositoryContract(unittest.TestCase):
             manual,
         )
 
+    def test_hud_core_agent_controls_are_public_and_bounded(self):
+        manual = (ROOT / "docs" / "USER-MANUAL.md").read_text(encoding="utf-8")
+        normalized = " ".join(manual.split())
+        for phrase in (
+            "only for Boss and Nightwatch",
+            "selector is supplied by the server",
+            "second confirmation click within five seconds",
+            "exact-session recovery",
+            "These controls do not apply to engineers",
+            "through its terminal",
+        ):
+            self.assertIn(phrase, normalized)
+
     def test_lossless_escalation_operator_contract_is_public(self):
         for path in (
             ROOT / "README.md",

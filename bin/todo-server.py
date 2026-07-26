@@ -314,7 +314,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p in ("/","/todos"):return self.page("todos.html",head)
         if p=="/wall":return self.page("wall.html",head)
         if p=="/terminal-graph":return self.page("terminal-graph.html",head)
-        if p=="/dashboard" or p.startswith("/dashboard/") or p in ("/agents","/roster","/clients"):return self.proxy_hud(head)
+        if p=="/dashboard" or p.startswith("/dashboard/") or p in ("/agents","/roster","/clients","/control-capabilities"):return self.proxy_hud(head)
         if not self.auth_kind():return self.json({"ok":False,"error":"unauthorized"},401,head=head)
         if p.startswith("/todo/proof-file/"):
             name=os.path.basename(urllib.parse.unquote(p.rsplit('/',1)[-1]));path=os.path.realpath(os.path.join(PROOFS_DIR,name));base=os.path.realpath(PROOFS_DIR)+os.sep
@@ -388,7 +388,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return None
     def do_POST(self):
         p=urllib.parse.urlparse(self.path).path
-        if p in ("/agents","/roster","/clients","/revive") or p.startswith("/dashboard"):return self.proxy_hud(False)
+        if p in ("/agents","/roster","/clients","/kill","/revive","/switch") or p.startswith("/dashboard"):return self.proxy_hud(False)
         kind=self.auth_kind()
         if not kind:return self.json({"ok":False,"error":"unauthorized"},401)
         try:body,raw=self.read_body()

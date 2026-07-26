@@ -26,8 +26,8 @@ class HudUnifiedAgentCardsContract(unittest.TestCase):
             "card.dataset.attachUrl",
             "activateCardAttach",
             "event.stopPropagation()",
-            "event.key==='Enter'||event.key===' '",
-            "role','link'",
+            'event.key === "Enter" || event.key === " "',
+            'card.setAttribute("role", "link")',
         ):
             self.assertIn(marker, self.source)
 
@@ -35,7 +35,7 @@ class HudUnifiedAgentCardsContract(unittest.TestCase):
         self.assertIn("Copy spawn", self.source)
         self.assertIn("summary-toggle", self.source)
         self.assertIn("navigator.clipboard?.writeText", self.source)
-        self.assertIn("catch(()=>{})", self.source)
+        self.assertRegex(self.source, r"\.catch\(\(\)\s*=>\s*\{\}\)")
         self.assertNotIn('class="cmd"', self.source)
 
     def test_cards_remain_safe_and_telemetry_honest(self):

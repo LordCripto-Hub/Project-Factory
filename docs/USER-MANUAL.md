@@ -59,6 +59,25 @@ docker exec -it mypeople tmux attach -t mc-nightwatch
 
 Detach without stopping the session with `Ctrl+B`, then `D`.
 
+### Boss and Nightwatch controls in the HUD
+
+The Combat Status cards expose a closed `COMMAND` strip only for Boss and
+Nightwatch. The model selector is supplied by the server and currently offers
+`gpt-5.6-sol` and `gpt-5.6-luna`.
+
+- `Apply model` switches a running core agent and preserves exact-session
+  recovery when the existing provider profile supports it.
+- `Kill` requires a second confirmation click within five seconds.
+- A stopped core agent can be revived with its saved model or relaunched with
+  the other allowed model.
+- The HUD waits for a fresh roster observation before reporting success.
+  Server error codes remain visible on the card.
+
+These controls do not apply to engineers. Boss continues to create, switch,
+kill, and revive delegated workers through its terminal and the existing
+`mp` commands. Provider profiles and account bindings are intentionally not
+changed by this HUD selector.
+
 ## Provider health
 
 Read the latest non-secret provider-health receipts without contacting a paid

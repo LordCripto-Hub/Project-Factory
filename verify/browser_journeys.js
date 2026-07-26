@@ -137,11 +137,37 @@ async function assertUnifiedHudCards(page) {
   await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length === 2);
   await expect(await count(page, '#telemetryCards .combat-card') === 2, 'HUD did not render one card per active agent');
   await expect(await count(page, '#agentsTable') === 0, 'legacy Agents table is still visible');
+  await expect(await count(page, '#telemetryCards .command-strip') === 2, 'core COMMAND strips are missing');
+  await expect(await count(page, '#telemetryCards .command-model option') === 4, 'closed model options mismatch');
   const firstCard = page.locator('#telemetryCards .combat-card').first();
   const pagesBefore = page.context().pages().length;
   await firstCard.getByRole('button', { name: 'Copy spawn' }).click();
   await page.waitForTimeout(100);
   await expect(page.context().pages().length === pagesBefore, 'nested card action opened a popup');
+
+  let killRequests = 0;
+  await page.route('**/kill', async route => {
+    killRequests += 1;
+    await route.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"synthetic_kill"}' });
+  });
+  await firstCard.getByRole('button', { name: 'Kill', exact: true }).click();
+  await expect(killRequests === 0, 'first Kill click sent a mutation');
+  await expect((await firstCard.getByRole('button', { name: 'Confirm kill' }).count()) === 1, 'Kill was not visibly armed');
+  await page.waitForTimeout(5100);
+  await expect((await firstCard.getByRole('button', { name: 'Kill', exact: true }).count()) === 1, 'Kill did not disarm');
+  await page.unroute('**/kill');
+
+  let switchBody = null;
+  await page.route('**/switch', async route => {
+    switchBody = route.request().postDataJSON();
+    await route.fulfill({ status: 409, contentType: 'application/json', body: '{"ok":false,"error":"synthetic_switch_failure"}' });
+  });
+  await firstCard.locator('.command-model').selectOption('gpt-5.6-luna');
+  await firstCard.getByRole('button', { name: 'Apply model' }).click();
+  await expect(switchBody?.agent_id === 'node-1/main:Boss' && switchBody?.model === 'gpt-5.6-luna', 'switch body was not exact');
+  await expect((await text(page, '#telemetryCards .combat-card:first-child .command-status')).includes('synthetic_switch_failure'), 'control failure was hidden');
+  await expect(page.context().pages().length === pagesBefore, 'COMMAND action opened terminal');
+  await page.unroute('**/switch');
 
   const clickPopup = page.waitForEvent('popup');
   await firstCard.locator('.combat-title').click();

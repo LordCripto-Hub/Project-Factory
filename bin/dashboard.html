@@ -1,25 +1,868 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MyPeople - HUD</title><style>
-:root{--midnight:#01000a;--arena:#111110;--panel:#15150f;--card:#1a1a14;--card-hover:#202018;--bone:#f0f0e8;--smoke:rgba(240,240,232,.48);--line:rgba(255,255,255,.09);--gold:#d5ef8a;--gold-dim:rgba(213,239,138,.14);--gold-line:rgba(213,239,138,.24);--success:#45c46a;--danger:#ff4f45;--warning:#ff9f2e;--serif:'Instrument Serif',Georgia,serif;--sans:'DM Sans',system-ui,sans-serif;--mono:'DM Mono','SF Mono',monospace}*{box-sizing:border-box}body{margin:0;background:var(--arena);color:var(--bone);font-family:var(--sans)}button{font:inherit}.wrap{max-width:1500px;margin:auto;padding:42px 25px}.top{display:flex;justify-content:space-between;gap:15px;align-items:end}h1{font:400 38px var(--serif);margin:0}.meta{font:12px var(--mono);color:var(--smoke);text-transform:uppercase;margin-top:6px}.nav{color:var(--gold);font:12px var(--mono);text-transform:uppercase}.arena-panel{margin-top:30px;background:var(--panel);border:1px solid var(--gold-line);border-radius:18px;overflow:hidden}.combat-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 0}.combat-head h2{font:400 28px var(--serif);margin:0}.telemetry-state{font:700 10px var(--mono);letter-spacing:.12em;color:var(--gold)}.telemetry-state.stale{color:var(--warning)}.telemetry-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;padding:16px 22px 22px}.combat-card{min-width:0;color:var(--bone);background:var(--card);border:1px solid var(--gold-line);border-radius:12px;padding:15px;text-align:left;transition:border-color .16s,background .16s,transform .16s}.combat-card.attachable{cursor:pointer}.combat-card.attachable:hover,.combat-card.attachable:focus-visible{border-color:var(--gold);background:var(--card-hover);outline:none;transform:translateY(-1px)}.combat-card.non-attachable{border-color:var(--line)}.combat-title{display:flex;align-items:center;gap:8px;font:700 12px var(--mono);text-transform:uppercase}.combat-dot{width:7px;height:7px;border-radius:50%;background:var(--warning)}.combat-card.authenticated .combat-dot{background:var(--success);animation:combatPulse 1.8s ease-in-out infinite}.combat-card.quota_exhausted .combat-dot{background:var(--warning)}.combat-card.expired .combat-dot,.combat-card.unreachable .combat-dot,.combat-card.process_dead .combat-dot{background:var(--danger)}.telemetry-stale .combat-dot{animation:none!important}.combat-health{margin-left:auto;font:700 9px var(--mono);color:var(--smoke)}.combat-subtitle{display:flex;gap:8px;align-items:center;margin-top:7px;font:10px var(--mono);color:var(--smoke);text-transform:uppercase}.status{border-radius:100px;padding:3px 7px;background:rgba(255,255,255,.05)}.status.working{color:var(--warning)}.status.blocked{color:var(--danger)}.status.idle,.status.ready{color:var(--gold)}.combat-data{display:grid;grid-template-columns:1fr 1fr;gap:8px 13px;margin-top:13px}.datum{min-width:0;font:10px var(--mono);color:var(--smoke);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.datum strong{display:block;margin-top:2px;color:var(--bone);font-weight:500;overflow:hidden;text-overflow:ellipsis}.combat-usage{grid-column:1/-1}.combat-summary{margin:13px 0 0;padding-top:11px;border-top:1px solid var(--line);color:rgba(240,240,232,.75);font-size:12px;line-height:1.45}.summary-toggle{border:0;background:none;color:var(--gold);padding:3px 0 0;cursor:pointer;font:700 10px var(--mono)}.card-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}.card-action{border:1px solid var(--gold-line);border-radius:8px;padding:6px 9px;background:transparent;color:var(--gold);cursor:pointer;font:700 10px var(--mono);text-transform:uppercase}.card-action.primary{background:var(--gold);color:var(--midnight)}.card-action:focus-visible,.summary-toggle:focus-visible{outline:2px solid var(--gold);outline-offset:2px}.health.authenticated{color:var(--success)}.health.unknown{color:var(--warning)}.health.quota_exhausted{color:var(--warning)}.health.expired,.health.unreachable,.health.process_dead{color:var(--danger)}.empty{padding:20px;color:var(--smoke)}.retired-agents{margin-top:18px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.025)}.retired-agents>summary{cursor:pointer;padding:13px 16px;color:var(--smoke);font:700 11px var(--mono);text-transform:uppercase}.retired-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:9px;padding:0 14px 14px}.retired-card{border:1px solid var(--line);border-radius:9px;padding:11px;background:rgba(255,255,255,.025)}.retired-card strong{font:11px var(--mono)}.retired-card p{margin:7px 0;color:var(--smoke);font-size:12px}@keyframes combatPulse{50%{opacity:.42;transform:scale(.82)}}@media(max-width:700px){.wrap{padding:24px 14px}.telemetry-cards{grid-template-columns:1fr;padding:14px}.combat-head{padding:16px 14px 0}}@media(prefers-reduced-motion:reduce){.combat-card,.combat-dot{animation:none!important;transition:none}}
-</style><link rel="stylesheet" href="/assets/mypeople-ui.css"></head><body><main class="wrap"><header class="top"><div><h1>MyPeople - HUD</h1><div class="meta"><span id="count">0 agents</span> · refreshed <span id="refreshed">—</span> · <span id="live">live</span></div></div><a class="nav" href="/">TODO ↗</a></header><section id="combatStatus" class="arena-panel"><div class="combat-head"><h2>Combat Status</h2><span id="telemetryState" class="telemetry-state">LIVE</span></div><div id="telemetryCards" class="telemetry-cards"><div class="empty">No active agents</div></div></section><details id="retiredAgents" class="retired-agents"><summary>Retired engineers · <span id="retiredCount">0</span></summary><div id="retiredCards" class="retired-cards"></div></details></main><script>
-'use strict';const $=selector=>document.querySelector(selector);let agents=[],roster=[],lastTelemetry={agents:[]},telemetryStale=false;
-async function get(path,options){const response=await fetch(path,{credentials:'same-origin',cache:'no-store',...(options||{})});const data=await response.json();if(!response.ok)throw Error(data.error||response.status);return data}
-function el(tag,className,text){const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node}
-function attachUrl(row){return row.state==='alive'?'/todo/terminal?agent='+encodeURIComponent(row.agent_id):''}
-function tokenCount(value){if(!Number.isSafeInteger(value)||value<0)return 'not measured';if(value<1000)return String(value);return (value/1000).toFixed(value<10000?1:0).replace('.0','')+'k'}
-function telemetryMap(){return new Map((lastTelemetry.agents||[]).map(row=>[row.agentId,row]))}
-function buildCardRows(){const live=new Map(agents.map(row=>[row.agent_id,row]));const rosterMap=new Map(roster.filter(row=>!row.retired).map(row=>[row.agent_id,row]));const telemetry=telemetryMap();const ids=[...new Set([...live.keys(),...rosterMap.keys()])].sort();return ids.map(agentId=>({...(rosterMap.get(agentId)||{}),...(live.get(agentId)||{}),agent_id:agentId,telemetry:telemetry.get(agentId)||{}}))}
-function activateCardAttach(card){if(!card.dataset.attachUrl)return;window.open(card.dataset.attachUrl,'_blank','noopener,noreferrer')}
-function bindCardAttach(card,url){if(!url){card.classList.add('non-attachable');return}card.dataset.attachUrl=url;card.tabIndex=0;card.setAttribute('role','link');card.classList.add('attachable');card.onclick=()=>activateCardAttach(card);card.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();activateCardAttach(card)}}}
-function stopCardAction(event){event.stopPropagation()}
-function roleName(row){return row.telemetry.role||(row.is_master?'boss':row.agent_id.includes('/nightwatch:')?'nightwatch':'engineer')}
-function addDatum(parent,label,value,className){const item=el('span','datum'+(className?' '+className:''),label);item.append(el('strong','',value||'—'));parent.append(item)}
-function addSummary(card,row){const full=String(row.summary||'').trim();if(!full)return;const limit=96,truncated=full.length>limit;const paragraph=el('p','combat-summary',truncated?full.slice(0,limit-1)+'…':full);card.append(paragraph);if(truncated){const toggle=el('button','summary-toggle','Show summary');toggle.type='button';toggle.setAttribute('aria-expanded','false');toggle.onclick=event=>{event.stopPropagation();const expanded=toggle.getAttribute('aria-expanded')==='true';toggle.setAttribute('aria-expanded',String(!expanded));toggle.textContent=expanded?'Show summary':'Hide summary';paragraph.textContent=expanded?full.slice(0,limit-1)+'…':full};card.append(toggle)}}
-function copyAction(row){const copy=el('button','card-action','Copy spawn');copy.type='button';copy.disabled=!row.spawn_cmd;copy.onclick=event=>{event.stopPropagation();Promise.resolve(navigator.clipboard?.writeText(row.spawn_cmd||'')).catch(()=>{})};return copy}
-function attachAction(card){const button=el('button','card-action primary','Attach');button.type='button';button.onclick=event=>{event.stopPropagation();activateCardAttach(card)};return button}
-function reviveAction(row){const button=el('button','card-action primary','Revive');button.type='button';button.onclick=async event=>{event.stopPropagation();button.disabled=true;try{await get('/revive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_id:row.agent_id})});await poll()}catch(error){button.textContent='Revive failed';button.title=String(error.message||error)}finally{button.disabled=false}};return button}
-function renderAgentCards(){const root=$('#combatStatus'),cards=$('#telemetryCards'),state=$('#telemetryState');root.classList.toggle('telemetry-stale',telemetryStale);state.className='telemetry-state'+(telemetryStale?' stale':'');state.textContent=telemetryStale?'STALE':'LIVE';cards.replaceChildren();const rows=buildCardRows();if(!rows.length){cards.append(el('div','empty','No active agents'));return}for(const row of rows){const telemetry=row.telemetry||{},health=telemetry.health||{state:'unknown',stale:true},healthState=health.state||'unknown',card=el('article','combat-card '+healthState);card.dataset.agentId=row.agent_id;const title=el('div','combat-title'),dot=el('span','combat-dot'),name=el('span','',roleName(row)+' · '+row.agent_id.split(':').pop()),healthLabel=el('span','combat-health health '+healthState,healthState);title.append(dot,name,healthLabel);const subtitle=el('div','combat-subtitle'),life=el('span','state '+(row.state||'unknown'),row.state||'unknown'),work=el('span','status '+(row.status||'ready'),row.status||'ready');subtitle.append(life,work);const data=el('div','combat-data');addDatum(data,'provider',telemetry.provider||row.backend||'—');addDatum(data,'model',telemetry.model||row.model||'—');addDatum(data,'profile',telemetry.profile||row.provider_profile||'—');addDatum(data,'session',telemetry.sessionAlias||'unavailable');if(row.boss_id)addDatum(data,'boss',row.boss_id.split(':').pop());const measured=telemetry.usage?.measurement==='measured';addDatum(data,'tokens',measured?`${tokenCount(telemetry.usage.inputTokens)} in / ${tokenCount(telemetry.usage.outputTokens)} out`:'not measured','combat-usage');const actions=el('div','card-actions');bindCardAttach(card,attachUrl(row));if(card.dataset.attachUrl)actions.append(attachAction(card));if(row.state!=='alive')actions.append(reviveAction(row));actions.append(copyAction(row));card.append(title,subtitle,data);addSummary(card,row);card.append(actions);cards.append(card)}$('#count').textContent=`${rows.length} agent${rows.length===1?'':'s'}`}
-function renderRetired(){const root=$('#retiredCards'),rows=roster.filter(row=>row.retired);root.replaceChildren();$('#retiredCount').textContent=String(rows.length);for(const row of rows){const card=el('div','retired-card'),name=el('strong','',row.agent_id),summary=el('p','',row.summary||'No summary'),actions=el('div','card-actions');actions.append(copyAction(row),reviveAction(row));card.append(name,summary,actions);root.append(card)}if(!rows.length)root.append(el('div','empty','No retired engineers'))}
-function render(){renderAgentCards();renderRetired();$('#refreshed').textContent=new Date().toLocaleTimeString()}
-async function poll(){try{const base=await Promise.all([get('/agents'),get('/roster')]);agents=base[0];roster=base[1];try{lastTelemetry=await get('/todo/operator-telemetry');telemetryStale=false}catch{telemetryStale=true}$('#live').textContent=telemetryStale?'stale':'live';render()}catch{telemetryStale=true;$('#live').textContent='stale';renderAgentCards()}}
-setInterval(poll,2500);poll();window.__hud={poll,buildCardRows,get agents(){return agents},get roster(){return roster},get telemetry(){return lastTelemetry}};
-</script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>MyPeople - HUD</title>
+    <style>
+      :root {
+        --midnight: #01000a;
+        --arena: #111110;
+        --panel: #15150f;
+        --card: #1a1a14;
+        --card-hover: #202018;
+        --bone: #f0f0e8;
+        --smoke: rgba(240, 240, 232, 0.48);
+        --line: rgba(255, 255, 255, 0.09);
+        --gold: #d5ef8a;
+        --gold-dim: rgba(213, 239, 138, 0.14);
+        --gold-line: rgba(213, 239, 138, 0.24);
+        --success: #45c46a;
+        --danger: #ff4f45;
+        --warning: #ff9f2e;
+        --serif: "Instrument Serif", Georgia, serif;
+        --sans: "DM Sans", system-ui, sans-serif;
+        --mono: "DM Mono", "SF Mono", monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--arena);
+        color: var(--bone);
+        font-family: var(--sans);
+      }
+      button {
+        font: inherit;
+      }
+      .wrap {
+        max-width: 1500px;
+        margin: auto;
+        padding: 42px 25px;
+      }
+      .top {
+        display: flex;
+        justify-content: space-between;
+        gap: 15px;
+        align-items: end;
+      }
+      h1 {
+        font: 400 38px var(--serif);
+        margin: 0;
+      }
+      .meta {
+        font: 12px var(--mono);
+        color: var(--smoke);
+        text-transform: uppercase;
+        margin-top: 6px;
+      }
+      .nav {
+        color: var(--gold);
+        font: 12px var(--mono);
+        text-transform: uppercase;
+      }
+      .arena-panel {
+        margin-top: 30px;
+        background: var(--panel);
+        border: 1px solid var(--gold-line);
+        border-radius: 18px;
+        overflow: hidden;
+      }
+      .combat-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 22px 0;
+      }
+      .combat-head h2 {
+        font: 400 28px var(--serif);
+        margin: 0;
+      }
+      .telemetry-state {
+        font: 700 10px var(--mono);
+        letter-spacing: 0.12em;
+        color: var(--gold);
+      }
+      .telemetry-state.stale {
+        color: var(--warning);
+      }
+      .telemetry-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 12px;
+        padding: 16px 22px 22px;
+      }
+      .combat-card {
+        min-width: 0;
+        color: var(--bone);
+        background: var(--card);
+        border: 1px solid var(--gold-line);
+        border-radius: 12px;
+        padding: 15px;
+        text-align: left;
+        transition:
+          border-color 0.16s,
+          background 0.16s,
+          transform 0.16s;
+      }
+      .combat-card.attachable {
+        cursor: pointer;
+      }
+      .combat-card.attachable:hover,
+      .combat-card.attachable:focus-visible {
+        border-color: var(--gold);
+        background: var(--card-hover);
+        outline: none;
+        transform: translateY(-1px);
+      }
+      .combat-card.non-attachable {
+        border-color: var(--line);
+      }
+      .combat-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font: 700 12px var(--mono);
+        text-transform: uppercase;
+      }
+      .combat-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--warning);
+      }
+      .combat-card.authenticated .combat-dot {
+        background: var(--success);
+        animation: combatPulse 1.8s ease-in-out infinite;
+      }
+      .combat-card.quota_exhausted .combat-dot {
+        background: var(--warning);
+      }
+      .combat-card.expired .combat-dot,
+      .combat-card.unreachable .combat-dot,
+      .combat-card.process_dead .combat-dot {
+        background: var(--danger);
+      }
+      .telemetry-stale .combat-dot {
+        animation: none !important;
+      }
+      .combat-health {
+        margin-left: auto;
+        font: 700 9px var(--mono);
+        color: var(--smoke);
+      }
+      .combat-subtitle {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-top: 7px;
+        font: 10px var(--mono);
+        color: var(--smoke);
+        text-transform: uppercase;
+      }
+      .status {
+        border-radius: 100px;
+        padding: 3px 7px;
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .status.working {
+        color: var(--warning);
+      }
+      .status.blocked {
+        color: var(--danger);
+      }
+      .status.idle,
+      .status.ready {
+        color: var(--gold);
+      }
+      .combat-data {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 13px;
+        margin-top: 13px;
+      }
+      .datum {
+        min-width: 0;
+        font: 10px var(--mono);
+        color: var(--smoke);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .datum strong {
+        display: block;
+        margin-top: 2px;
+        color: var(--bone);
+        font-weight: 500;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .combat-usage {
+        grid-column: 1/-1;
+      }
+      .combat-summary {
+        margin: 13px 0 0;
+        padding-top: 11px;
+        border-top: 1px solid var(--line);
+        color: rgba(240, 240, 232, 0.75);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .summary-toggle {
+        border: 0;
+        background: none;
+        color: var(--gold);
+        padding: 3px 0 0;
+        cursor: pointer;
+        font: 700 10px var(--mono);
+      }
+      .card-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 12px;
+      }
+      .card-action {
+        border: 1px solid var(--gold-line);
+        border-radius: 8px;
+        padding: 6px 9px;
+        background: transparent;
+        color: var(--gold);
+        cursor: pointer;
+        font: 700 10px var(--mono);
+        text-transform: uppercase;
+      }
+      .card-action.primary {
+        background: var(--gold);
+        color: var(--midnight);
+      }
+      .card-action:focus-visible,
+      .summary-toggle:focus-visible {
+        outline: 2px solid var(--gold);
+        outline-offset: 2px;
+      }
+      .health.authenticated {
+        color: var(--success);
+      }
+      .health.unknown {
+        color: var(--warning);
+      }
+      .health.quota_exhausted {
+        color: var(--warning);
+      }
+      .health.expired,
+      .health.unreachable,
+      .health.process_dead {
+        color: var(--danger);
+      }
+      .empty {
+        padding: 20px;
+        color: var(--smoke);
+      }
+      .retired-agents {
+        margin-top: 18px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.025);
+      }
+      .retired-agents > summary {
+        cursor: pointer;
+        padding: 13px 16px;
+        color: var(--smoke);
+        font: 700 11px var(--mono);
+        text-transform: uppercase;
+      }
+      .retired-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 9px;
+        padding: 0 14px 14px;
+      }
+      .retired-card {
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 11px;
+        background: rgba(255, 255, 255, 0.025);
+      }
+      .retired-card strong {
+        font: 11px var(--mono);
+      }
+      .retired-card p {
+        margin: 7px 0;
+        color: var(--smoke);
+        font-size: 12px;
+      }
+      .command-strip {
+        display: grid;
+        grid-template-columns: auto minmax(120px, 1fr) auto;
+        gap: 7px;
+        align-items: center;
+        margin-top: 13px;
+        padding-top: 11px;
+        border-top: 1px solid var(--gold-line);
+      }
+      .command-label {
+        font: 700 9px var(--mono);
+        letter-spacing: 0.13em;
+        color: var(--warning);
+      }
+      .command-model {
+        min-width: 0;
+        border: 1px solid var(--gold-line);
+        border-radius: 8px;
+        padding: 6px 8px;
+        background: var(--midnight);
+        color: var(--bone);
+        font: 10px var(--mono);
+      }
+      .command-status {
+        grid-column: 1/-1;
+        min-height: 14px;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--smoke);
+        font: 9px var(--mono);
+      }
+      .command-status.error {
+        color: var(--danger);
+      }
+      .card-action.danger {
+        border-color: rgba(255, 79, 69, 0.55);
+        color: var(--danger);
+      }
+      .card-action.danger.armed {
+        background: var(--danger);
+        color: var(--midnight);
+      }
+      .command-strip.busy {
+        opacity: 0.65;
+        pointer-events: none;
+      }
+      @keyframes combatPulse {
+        50% {
+          opacity: 0.42;
+          transform: scale(0.82);
+        }
+      }
+      @media (max-width: 700px) {
+        .wrap {
+          padding: 24px 14px;
+        }
+        .telemetry-cards {
+          grid-template-columns: 1fr;
+          padding: 14px;
+        }
+        .combat-head {
+          padding: 16px 14px 0;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .combat-card,
+        .combat-dot {
+          animation: none !important;
+          transition: none;
+        }
+      }
+    </style>
+    <link rel="stylesheet" href="/assets/mypeople-ui.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="top">
+        <div>
+          <h1>MyPeople - HUD</h1>
+          <div class="meta">
+            <span id="count">0 agents</span> · refreshed
+            <span id="refreshed">—</span> · <span id="live">live</span>
+          </div>
+        </div>
+        <a class="nav" href="/">TODO ↗</a>
+      </header>
+      <section id="combatStatus" class="arena-panel">
+        <div class="combat-head">
+          <h2>Combat Status</h2>
+          <span id="telemetryState" class="telemetry-state">LIVE</span>
+        </div>
+        <div id="telemetryCards" class="telemetry-cards">
+          <div class="empty">No active agents</div>
+        </div>
+      </section>
+      <details id="retiredAgents" class="retired-agents">
+        <summary>Retired engineers · <span id="retiredCount">0</span></summary>
+        <div id="retiredCards" class="retired-cards"></div>
+      </details>
+    </main>
+    <script>
+      "use strict";
+      const $ = (selector) => document.querySelector(selector);
+      let agents = [],
+        roster = [],
+        lastTelemetry = { agents: [] },
+        telemetryStale = false,
+        controlCapabilities = { agents: [], models: [] };
+      const coreOperationState = new Map();
+      async function get(path, options) {
+        const response = await fetch(path, {
+          credentials: "same-origin",
+          cache: "no-store",
+          ...(options || {}),
+        });
+        const data = await response.json();
+        if (!response.ok) throw Error(data.error || response.status);
+        return data;
+      }
+      function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+      function attachUrl(row) {
+        return row.state === "alive"
+          ? "/todo/terminal?agent=" + encodeURIComponent(row.agent_id)
+          : "";
+      }
+      function tokenCount(value) {
+        if (!Number.isSafeInteger(value) || value < 0) return "not measured";
+        if (value < 1000) return String(value);
+        return (
+          (value / 1000).toFixed(value < 10000 ? 1 : 0).replace(".0", "") + "k"
+        );
+      }
+      function telemetryMap() {
+        return new Map(
+          (lastTelemetry.agents || []).map((row) => [row.agentId, row]),
+        );
+      }
+      function buildCardRows() {
+        const live = new Map(agents.map((row) => [row.agent_id, row]));
+        const rosterMap = new Map(
+          roster
+            .filter((row) => !row.retired)
+            .map((row) => [row.agent_id, row]),
+        );
+        const telemetry = telemetryMap();
+        const ids = [...new Set([...live.keys(), ...rosterMap.keys()])].sort();
+        return ids.map((agentId) => ({
+          ...(rosterMap.get(agentId) || {}),
+          ...(live.get(agentId) || {}),
+          agent_id: agentId,
+          telemetry: telemetry.get(agentId) || {},
+        }));
+      }
+      function activateCardAttach(card) {
+        if (!card.dataset.attachUrl) return;
+        window.open(card.dataset.attachUrl, "_blank", "noopener,noreferrer");
+      }
+      function bindCardAttach(card, url) {
+        if (!url) {
+          card.classList.add("non-attachable");
+          return;
+        }
+        card.dataset.attachUrl = url;
+        card.tabIndex = 0;
+        card.setAttribute("role", "link");
+        card.classList.add("attachable");
+        card.onclick = () => activateCardAttach(card);
+        card.onkeydown = (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            activateCardAttach(card);
+          }
+        };
+      }
+      function stopCardAction(event) {
+        event.stopPropagation();
+      }
+      function roleName(row) {
+        return (
+          row.telemetry.role ||
+          (row.is_master
+            ? "boss"
+            : row.agent_id.includes("/nightwatch:")
+              ? "nightwatch"
+              : "engineer")
+        );
+      }
+      function addDatum(parent, label, value, className) {
+        const item = el(
+          "span",
+          "datum" + (className ? " " + className : ""),
+          label,
+        );
+        item.append(el("strong", "", value || "—"));
+        parent.append(item);
+      }
+      function addSummary(card, row) {
+        const full = String(row.summary || "").trim();
+        if (!full) return;
+        const limit = 96,
+          truncated = full.length > limit;
+        const paragraph = el(
+          "p",
+          "combat-summary",
+          truncated ? full.slice(0, limit - 1) + "…" : full,
+        );
+        card.append(paragraph);
+        if (truncated) {
+          const toggle = el("button", "summary-toggle", "Show summary");
+          toggle.type = "button";
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.onclick = (event) => {
+            event.stopPropagation();
+            const expanded = toggle.getAttribute("aria-expanded") === "true";
+            toggle.setAttribute("aria-expanded", String(!expanded));
+            toggle.textContent = expanded ? "Show summary" : "Hide summary";
+            paragraph.textContent = expanded
+              ? full.slice(0, limit - 1) + "…"
+              : full;
+          };
+          card.append(toggle);
+        }
+      }
+      function copyAction(row) {
+        const copy = el("button", "card-action", "Copy spawn");
+        copy.type = "button";
+        copy.disabled = !row.spawn_cmd;
+        copy.onclick = (event) => {
+          event.stopPropagation();
+          Promise.resolve(
+            navigator.clipboard?.writeText(row.spawn_cmd || ""),
+          ).catch(() => {});
+        };
+        return copy;
+      }
+      function attachAction(card) {
+        const button = el("button", "card-action primary", "Attach");
+        button.type = "button";
+        button.onclick = (event) => {
+          event.stopPropagation();
+          activateCardAttach(card);
+        };
+        return button;
+      }
+      function reviveAction(row) {
+        const button = el("button", "card-action primary", "Revive");
+        button.type = "button";
+        button.onclick = async (event) => {
+          event.stopPropagation();
+          button.disabled = true;
+          try {
+            await get("/revive", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ agent_id: row.agent_id }),
+            });
+            await poll();
+          } catch (error) {
+            button.textContent = "Revive failed";
+            button.title = String(error.message || error);
+          } finally {
+            button.disabled = false;
+          }
+        };
+        return button;
+      }
+      function isCoreControlled(row) {
+        return controlCapabilities.agents.includes(row.agent_id);
+      }
+      async function postControl(path, body) {
+        return get(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      }
+      function setOperation(agentId, patch) {
+        coreOperationState.set(agentId, {
+          ...(coreOperationState.get(agentId) || {}),
+          ...patch,
+        });
+      }
+      function addCommandStrip(card, row) {
+        if (!isCoreControlled(row)) return;
+        const current = row.model || row.telemetry?.model || "";
+        const state = coreOperationState.get(row.agent_id) || {};
+        const strip = el("div", "command-strip");
+        const label = el("span", "command-label", "COMMAND");
+        const select = el("select", "command-model");
+        const action = el("button", "card-action primary");
+        const status = el(
+          "span",
+          "command-status" + (state.error ? " error" : ""),
+          state.message || "ready",
+        );
+        select.setAttribute("aria-label", "Model for " + row.agent_id);
+        for (const model of controlCapabilities.models) {
+          const option = el("option", "", model);
+          option.value = model;
+          option.selected = model === current;
+          select.append(option);
+        }
+        const alive = row.state === "alive";
+        action.type = "button";
+        action.textContent = alive
+          ? "Apply model"
+          : select.value === current
+            ? "Revive"
+            : "Relaunch";
+        select.onchange = () => {
+          if (!alive)
+            action.textContent = select.value === current ? "Revive" : "Relaunch";
+        };
+        const kill = alive ? el("button", "card-action danger", "Kill") : null;
+        if (kill) {
+          kill.type = "button";
+          if (state.killArmedUntil > Date.now()) {
+            kill.textContent = "Confirm kill";
+            kill.className = "card-action danger armed";
+          }
+          kill.onclick = async (event) => {
+            event.stopPropagation();
+            const active = coreOperationState.get(row.agent_id) || {};
+            if (!active.killArmedUntil || active.killArmedUntil < Date.now()) {
+              setOperation(row.agent_id, {
+                killArmedUntil: Date.now() + 5000,
+                message: "Confirm kill",
+                error: false,
+              });
+              kill.textContent = "Confirm kill";
+              kill.className = "card-action danger armed";
+              setTimeout(() => {
+                const latest = coreOperationState.get(row.agent_id) || {};
+                if (
+                  latest.killArmedUntil &&
+                  latest.killArmedUntil <= Date.now()
+                ) {
+                  setOperation(row.agent_id, {
+                    killArmedUntil: 0,
+                    message: "ready",
+                  });
+                  renderAgentCards();
+                }
+              }, 5000);
+              return;
+            }
+            strip.classList.add("busy");
+            try {
+              await postControl("/kill", { agent_id: row.agent_id });
+              setOperation(row.agent_id, {
+                killArmedUntil: 0,
+                message: "checking state",
+                error: false,
+              });
+              await poll();
+              const fresh = buildCardRows().find(
+                (item) => item.agent_id === row.agent_id,
+              );
+              if (fresh?.state === "alive") throw Error("state_not_confirmed");
+              setOperation(row.agent_id, { message: "stopped", error: false });
+              renderAgentCards();
+            } catch (error) {
+              setOperation(row.agent_id, {
+                killArmedUntil: 0,
+                message: String(error.message || error).slice(0, 80),
+                error: true,
+              });
+              renderAgentCards();
+            }
+          };
+        }
+        action.onclick = async (event) => {
+          event.stopPropagation();
+          strip.classList.add("busy");
+          const selected = select.value;
+          const path = alive
+            ? "/switch"
+            : selected === current
+              ? "/revive"
+              : "/switch";
+          const body =
+            path === "/revive"
+              ? { agent_id: row.agent_id }
+              : { agent_id: row.agent_id, model: selected };
+          try {
+            await postControl(path, body);
+            setOperation(row.agent_id, {
+              message: "checking state",
+              error: false,
+            });
+            await poll();
+            const fresh = buildCardRows().find(
+              (item) => item.agent_id === row.agent_id,
+            );
+            if (
+              fresh?.state !== "alive" ||
+              (path === "/switch" && fresh.model !== selected)
+            )
+              throw Error("state_not_confirmed");
+            setOperation(row.agent_id, {
+              message: path === "/revive" ? "revived" : "model applied",
+              error: false,
+            });
+            renderAgentCards();
+          } catch (error) {
+            setOperation(row.agent_id, {
+              message: String(error.message || error).slice(0, 80),
+              error: true,
+            });
+            renderAgentCards();
+          }
+        };
+        for (const node of [strip, select, action, status, kill].filter(
+          Boolean,
+        )) {
+          node.addEventListener("click", (event) => event.stopPropagation());
+          node.addEventListener("keydown", (event) => event.stopPropagation());
+        }
+        strip.append(label, select, action);
+        if (kill) strip.append(kill);
+        strip.append(status);
+        card.append(strip);
+      }
+      function renderAgentCards() {
+        const root = $("#combatStatus"),
+          cards = $("#telemetryCards"),
+          state = $("#telemetryState");
+        root.classList.toggle("telemetry-stale", telemetryStale);
+        state.className = "telemetry-state" + (telemetryStale ? " stale" : "");
+        state.textContent = telemetryStale ? "STALE" : "LIVE";
+        cards.replaceChildren();
+        const rows = buildCardRows();
+        if (!rows.length) {
+          cards.append(el("div", "empty", "No active agents"));
+          return;
+        }
+        for (const row of rows) {
+          const telemetry = row.telemetry || {},
+            health = telemetry.health || { state: "unknown", stale: true },
+            healthState = health.state || "unknown",
+            card = el("article", "combat-card " + healthState);
+          card.dataset.agentId = row.agent_id;
+          const title = el("div", "combat-title"),
+            dot = el("span", "combat-dot"),
+            name = el(
+              "span",
+              "",
+              roleName(row) + " · " + row.agent_id.split(":").pop(),
+            ),
+            healthLabel = el(
+              "span",
+              "combat-health health " + healthState,
+              healthState,
+            );
+          title.append(dot, name, healthLabel);
+          const subtitle = el("div", "combat-subtitle"),
+            life = el(
+              "span",
+              "state " + (row.state || "unknown"),
+              row.state || "unknown",
+            ),
+            work = el(
+              "span",
+              "status " + (row.status || "ready"),
+              row.status || "ready",
+            );
+          subtitle.append(life, work);
+          const data = el("div", "combat-data");
+          addDatum(data, "provider", telemetry.provider || row.backend || "—");
+          addDatum(data, "model", telemetry.model || row.model || "—");
+          addDatum(
+            data,
+            "profile",
+            telemetry.profile || row.provider_profile || "—",
+          );
+          addDatum(data, "session", telemetry.sessionAlias || "unavailable");
+          if (row.boss_id) addDatum(data, "boss", row.boss_id.split(":").pop());
+          const measured = telemetry.usage?.measurement === "measured";
+          addDatum(
+            data,
+            "tokens",
+            measured
+              ? `${tokenCount(telemetry.usage.inputTokens)} in / ${tokenCount(telemetry.usage.outputTokens)} out`
+              : "not measured",
+            "combat-usage",
+          );
+          const actions = el("div", "card-actions");
+          bindCardAttach(card, attachUrl(row));
+          if (card.dataset.attachUrl) actions.append(attachAction(card));
+          if (row.state !== "alive" && !isCoreControlled(row))
+            actions.append(reviveAction(row));
+          actions.append(copyAction(row));
+          card.append(title, subtitle, data);
+          addSummary(card, row);
+          addCommandStrip(card, row);
+          card.append(actions);
+          cards.append(card);
+        }
+        $("#count").textContent =
+          `${rows.length} agent${rows.length === 1 ? "" : "s"}`;
+      }
+      function renderRetired() {
+        const root = $("#retiredCards"),
+          rows = roster.filter((row) => row.retired);
+        root.replaceChildren();
+        $("#retiredCount").textContent = String(rows.length);
+        for (const row of rows) {
+          const card = el("div", "retired-card"),
+            name = el("strong", "", row.agent_id),
+            summary = el("p", "", row.summary || "No summary"),
+            actions = el("div", "card-actions");
+          actions.append(copyAction(row), reviveAction(row));
+          card.append(name, summary, actions);
+          root.append(card);
+        }
+        if (!rows.length)
+          root.append(el("div", "empty", "No retired engineers"));
+      }
+      function render() {
+        renderAgentCards();
+        renderRetired();
+        $("#refreshed").textContent = new Date().toLocaleTimeString();
+      }
+      async function poll() {
+        try {
+          const base = await Promise.all([get("/agents"), get("/roster")]);
+          agents = base[0];
+          roster = base[1];
+          try {
+            controlCapabilities = await get("/control-capabilities");
+          } catch {
+            controlCapabilities = { agents: [], models: [] };
+            $("#live").title = "controls unavailable";
+          }
+          try {
+            lastTelemetry = await get("/todo/operator-telemetry");
+            telemetryStale = false;
+          } catch {
+            telemetryStale = true;
+          }
+          $("#live").textContent = telemetryStale ? "stale" : "live";
+          render();
+        } catch {
+          telemetryStale = true;
+          $("#live").textContent = "stale";
+          renderAgentCards();
+        }
+      }
+      setInterval(poll, 2500);
+      poll();
+      window.__hud = {
+        poll,
+        buildCardRows,
+        get agents() {
+          return agents;
+        },
+        get roster() {
+          return roster;
+        },
+        get telemetry() {
+          return lastTelemetry;
+        },
+      };
+    </script>
+  </body>
+</html>
