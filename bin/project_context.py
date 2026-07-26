@@ -23,6 +23,7 @@ FILE_REF_RE = re.compile(
     r"^file:///run/mypeople-secrets/([A-Z][A-Z0-9_]{1,63})$"
 )
 MEMORY_SECRET_ROOT = Path("/run/mypeople-secrets")
+MEMORY_CANARY_URL = "http://memory-gate-b:18443/mcp"
 MAX_CREDENTIAL_BYTES = 4096
 SECRET_KEY_RE = re.compile(r"token|secret|password|credentialvalue|apikey", re.I)
 
@@ -132,6 +133,8 @@ def _validate_memory_url(value: str) -> str:
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ProfileError("memory_url_credentials_forbidden")
     if parsed.scheme == "https" and parsed.netloc:
+        return value
+    if value == MEMORY_CANARY_URL:
         return value
     allow_http = _runtime_setting("MYPEOPLE_MEMORY_ALLOW_HTTP") == "1"
     if (
@@ -317,6 +320,19 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
         if key in os.environ
     }
     child_environment[credential_env] = token
+    if profile["memory"]["serverUrl"] == MEMORY_CANARY_URL:
+        control_path = Path(__file__).resolve().parents[1] / "run" / "memory-canary-control.json"
+        try:
+            control = json.loads(control_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise MemoryError("unavailable") from error
+        if (
+            control.get("enabled") is not True
+            or control.get("allowedProjects") != ["project-factory"]
+            or profile["slug"] != "project-factory"
+        ):
+            raise MemoryError("unavailable")
+        child_environment["MYPEOPLE_MEMORY_CANARY_URL"] = MEMORY_CANARY_URL
     try:
         completed = runner(
             ["node", os.path.realpath(gateway_path)],
