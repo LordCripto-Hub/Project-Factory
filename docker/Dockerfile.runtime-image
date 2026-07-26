@@ -2,9 +2,14 @@ ARG BASE_IMAGE=mypeople-node:integration-a54d9e3
 FROM ${BASE_IMAGE}
 
 USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/mp/.cache/ms-playwright
 COPY --chown=mp:mp . /tmp/mypeople-source
 RUN python3 /tmp/mypeople-source/docker/sync_runtime_source.py \
       /tmp/mypeople-source /home/mp/mypeople \
+    && npm ci --prefix /home/mp/mypeople/verify \
+    && npm ci --prefix /home/mp/mypeople/memory-gateway \
+    && npx --prefix /home/mp/mypeople/verify \
+      playwright install --with-deps chromium webkit \
     && rm -rf /tmp/mypeople-source \
     && chown -R mp:mp /home/mp/mypeople \
     && chmod +x /home/mp/mypeople/bin/* \
