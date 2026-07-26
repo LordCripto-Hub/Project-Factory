@@ -13,6 +13,7 @@ RUN apt-get update \
         bash \
         ca-certificates \
         curl \
+        ffmpeg \
         git \
         iproute2 \
         jq \
@@ -55,6 +56,7 @@ RUN command -v python3 \
     && command -v rg \
     && command -v codex \
     && command -v claude \
+    && command -v ffmpeg \
     && node --version | grep -Eq '^v22\.'
 
 USER mp

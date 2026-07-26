@@ -32,7 +32,7 @@ class ReproducibleRuntimeBaseContract(unittest.TestCase):
     def test_installs_and_verifies_required_commands(self):
         for command in (
             "python3", "node", "npm", "tmux", "ttyd", "git",
-            "rg", "codex", "claude",
+            "rg", "codex", "claude", "ffmpeg",
         ):
             with self.subTest(command=command):
                 self.assertIn(f"command -v {command}", self.text)
