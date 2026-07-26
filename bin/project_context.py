@@ -507,7 +507,10 @@ def _apply_automatic_response(result, response, project_slug, profile, limit):
         "elapsedMilliseconds", "examinedCount", "returnedCount",
         "estimatedTokens", "provenanceComplete", "reasonCode",
     }
-    allowed = required | {"aiUsage"}
+    # The transport boundary validates these envelope fields before returning
+    # the typed automatic-memory payload. They remain bounded metadata and are
+    # safe to accept here even though TaskSpec does not persist them directly.
+    allowed = required | {"aiUsage", "truncated", "responseChars"}
     if not isinstance(response, dict) or not required.issubset(response) or not set(response).issubset(allowed):
         raise TaskSpecError("memory_invalid_response")
     status = response["status"]

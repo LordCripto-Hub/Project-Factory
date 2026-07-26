@@ -121,6 +121,13 @@ class AutomaticMemoryTaskSpecTests(unittest.TestCase):
         self.assertEqual(result["selectedLevel"], "fast")
         self.assertEqual(result["levelsAttempted"], ["fast"])
         self.assertEqual(result["estimatedTokens"], 40)
+        spec = project_context.compile_task_spec(
+            task(), profile(),
+            recall=lambda _request: result,
+            memory_query="Repair publisher continuity",
+            memory_mode="automatic",
+        )
+        self.assertEqual(spec["memoryStatus"], "memory_applied")
 
     def test_automatic_mode_uses_derived_query_without_explicit_question(self):
         requests = []
