@@ -530,6 +530,7 @@ def _build_launch_args(agent_id, cwd, boss, is_master, model, backend):
     if backend == "codex":
         real_cwd = os.path.realpath(cwd)
         args = ["codex", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", real_cwd]
+        args += ["--disable", "apps"]
         if model:
             args += ["--model", model]
         if is_managed_codex_cwd(real_cwd):
