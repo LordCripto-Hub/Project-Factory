@@ -49,6 +49,31 @@ class WindowsDockerRecoveryContract(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.text)
 
+    def test_execute_orders_backup_before_deploy_and_has_honest_failure(self):
+        candidate = self.text.index("Set-RecoveryStage 'candidate-verified'")
+        backup = self.text.index("Set-RecoveryStage 'portable-backup'")
+        deploy = self.text.index("Set-RecoveryStage 'deploy'")
+        complete = self.text.index("Set-RecoveryStage 'complete'")
+        self.assertLess(candidate, backup)
+        self.assertLess(backup, deploy)
+        self.assertLess(deploy, complete)
+        for token in (
+            "readonly",
+            "*auth*",
+            "*credential*",
+            "*token*",
+            "Get-FileHash -Algorithm SHA256",
+            "Portable archive hash changed during Docker copy.",
+            "(?m)^MYPEOPLE_IMAGE=.*$",
+            "'up', '--detach', '--force-recreate'",
+            "'rm', '-f', 'mypeople'",
+            "$script:state.oldServiceRestored = $false",
+            "[IO.File]::WriteAllText($environmentPath, $oldEnvironment",
+            "[IO.File]::WriteAllText($composePath, $oldCompose",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
