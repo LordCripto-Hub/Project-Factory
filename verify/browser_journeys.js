@@ -165,6 +165,7 @@ async function assertUnifiedHudCards(page) {
   await firstCard.locator('.command-model').selectOption('gpt-5.6-luna');
   await firstCard.getByRole('button', { name: 'Apply model' }).click();
   await expect(switchBody?.agent_id === 'node-1/main:Boss' && switchBody?.model === 'gpt-5.6-luna', 'switch body was not exact');
+  await page.waitForFunction(() => document.querySelector('#telemetryCards .combat-card:first-child .command-status')?.textContent?.includes('synthetic_switch_failure'));
   await expect((await text(page, '#telemetryCards .combat-card:first-child .command-status')).includes('synthetic_switch_failure'), 'control failure was hidden');
   await expect(page.context().pages().length === pagesBefore, 'COMMAND action opened terminal');
   await page.unroute('**/switch');
