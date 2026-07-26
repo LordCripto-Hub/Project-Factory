@@ -410,6 +410,67 @@ activate a provider profile, open OAuth, validate quota, run `mypeople up`, or
 require Boss and Nightwatch to be alive. Logged-out, exhausted, and deliberately
 stopped providers remain unchanged for a later provider-management cycle.
 
+### Recover when Docker images were deleted
+
+Backups preserve durable state but do not contain Docker image layers. If the
+container and its local images were deleted while all eight canonical volumes
+survived, build a repository-owned base and application image from a clean
+checkout:
+
+```powershell
+$sha = (git rev-parse --short=7 HEAD).Trim()
+$base = "mypeople-node:recovery-base-$sha"
+$candidate = "mypeople-node:recovery-candidate-$sha"
+docker build -f docker\Dockerfile.recovery-base -t $base .
+docker build -f docker\Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t $candidate .
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image $candidate -TimeoutSeconds 1800 -UsePackagedSource
+```
+
+After the verifier passes, create a protected metadata-only receipt under
+`%LOCALAPPDATA%\MyPeople\state`. It must contain `status: pass`, the exact full
+source commit, the exact candidate image ID, and `verification:
+isolated-packaged-source`. Do not put authentication, provider output, prompts,
+or archive contents in this receipt.
+
+Run the recovery preflight without `-Execute`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Recover-MyPeopleDockerDeployment.ps1 `
+  -CandidateImage $candidate `
+  -VerificationReceipt <protected-receipt.json>
+```
+
+Review the reported transaction. It must show `stage: planned`, exactly eight
+volume names, the expected source commit and image ID, and comparison disabled.
+Then execute the same transaction explicitly:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Recover-MyPeopleDockerDeployment.ps1 `
+  -CandidateImage $candidate `
+  -VerificationReceipt <protected-receipt.json> `
+  -Execute
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeople.ps1 -NoBrowser -NonInteractive
+```
+
+The transaction refuses to run if `mypeople` already exists, any canonical
+volume is missing, the receipt does not match the image, the repository is
+dirty, or free space is below the configured threshold. It reads the volumes
+through a temporary read-only helper, writes a sanitized portable archive,
+verifies its SHA-256, pins the exact candidate image ID, and recreates Compose
+over the existing volumes. It checks local-only ports, restart count, memory
+disabled state, mounts, and durable hashes.
+
+On deployment failure, the new container is removed and the old deployment
+files are restored. Since the old image was already deleted, the transaction
+records `oldServiceRestored: false`; it never reports a fictitious rollback.
+Never run `docker compose down -v`, `docker volume rm`, or a Docker volume prune
+as part of this workflow.
+
+The Gate B `Preflight` command is a live readiness gate, not a passive audit.
+It requires `MYPEOPLE_MEMORY_COMPARISON_ENABLED=1` and a healthy internal
+sidecar. Recovery intentionally leaves the flag at `0`; enabling the sidecar or
+running paired arms requires a separate approval.
+
 The connected-client registry remains process memory. Provider conversations
 are durable provider state, while Priorities, ProjectProfile, TaskSpec, Git
 workspace, evidence, and bounded handoffs remain authoritative project state.

@@ -7,15 +7,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExpectedDatasetName = 'project-factory-history-80dce6f86632'
-$ExpectedSourceSha = '80dce6f866329b79061bb1ed6b0594f9fdf2dd45'
+$ExpectedDatasetName = 'project-factory-history-039a62988625'
+$ExpectedSourceSha = '039a62988625369f3f86c055cd476b0080395daa'
 $ExpectedRepoSlug = 'LordCripto-Hub/Project-Factory'
 $SourceRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($DatasetDirectory)) {
-    $DatasetDirectory = Join-Path $SourceRoot 'datasets\project-factory-history-80dce6f86632'
+    $DatasetDirectory = Join-Path $SourceRoot 'datasets\project-factory-history-039a62988625'
 }
 $ComposePath = Join-Path $SourceRoot 'docker\compose.taskspec-memory.yml'
-$LockPath = Join-Path $SourceRoot 'docker\history-hybrid.dataset-lock.json'
+$LockPath = Join-Path $SourceRoot 'docker\history-hybrid-039a62988625.dataset-lock.json'
 $ProjectName = 'mp-taskspec-' + ([Guid]::NewGuid().ToString('N').Substring(0, 12))
 $EvidenceDirectory = Join-Path $EvidenceRoot $ProjectName
 $Started = [DateTime]::UtcNow

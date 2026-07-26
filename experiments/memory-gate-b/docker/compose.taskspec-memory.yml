@@ -37,7 +37,7 @@ services:
         read_only: true
       - type: bind
         source: ${MP_TASKSPEC_DATASET:?set dataset}
-        target: /project-factory-history-80dce6f86632
+        target: /project-factory-history-039a62988625
         read_only: true
       - type: bind
         source: ${MP_TASKSPEC_EVIDENCE:?set evidence}

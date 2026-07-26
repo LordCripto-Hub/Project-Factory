@@ -25,8 +25,8 @@ class TaskSpecDockerContractTests(unittest.TestCase):
     def test_server_delegates_to_locked_python_bridge(self):
         source = SERVER.read_text(encoding="utf-8")
         self.assertIn("/workspace/scripts/query_taskspec_memory.py", source)
-        self.assertIn("/project-factory-history-80dce6f86632", source)
-        self.assertIn("/workspace/docker/history-hybrid.dataset-lock.json", source)
+        self.assertIn("/project-factory-history-039a62988625", source)
+        self.assertIn("/workspace/docker/history-hybrid-039a62988625.dataset-lock.json", source)
         self.assertNotIn("exec(", source)
         self.assertIn("shell: false", source)
 

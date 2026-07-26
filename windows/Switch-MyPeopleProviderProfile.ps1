@@ -67,19 +67,36 @@ function Invoke-ProviderSession {
         }
         $arguments += @('--profile', $TargetProfile)
     }
-    $startArguments = @{
-        FilePath = 'docker'
-        ArgumentList = $arguments
-        WindowStyle = 'Hidden'
-        PassThru = $true
-    }
-    $process = Start-Process @startArguments
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        throw "Provider session phase timed out: $Operation"
-    }
-    if ($process.ExitCode -ne 0) {
-        throw "Provider session phase failed: $Operation"
+    $outputPath = [IO.Path]::GetTempFileName()
+    $errorPath = [IO.Path]::GetTempFileName()
+    try {
+        $startArguments = @{
+            FilePath = 'docker'
+            ArgumentList = $arguments
+            WindowStyle = 'Hidden'
+            PassThru = $true
+            RedirectStandardOutput = $outputPath
+            RedirectStandardError = $errorPath
+        }
+        $process = Start-Process @startArguments
+        $null = $process.Handle
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "Provider session phase timed out: $Operation"
+        }
+        $process.WaitForExit()
+        $process.Refresh()
+        if ($process.ExitCode -ne 0) {
+            $detail = [IO.File]::ReadAllText($errorPath).Trim()
+            if ([string]::IsNullOrWhiteSpace($detail)) {
+                $detail = [IO.File]::ReadAllText($outputPath).Trim()
+            }
+            $detail = ($detail -replace '[\r\n]+', ' ').Trim()
+            if ($detail.Length -gt 1000) { $detail = $detail.Substring(0, 1000) }
+            throw "Provider session phase failed: ${Operation}: $detail"
+        }
+    } finally {
+        Remove-Item -LiteralPath $outputPath, $errorPath -Force -ErrorAction SilentlyContinue
     }
 }
 

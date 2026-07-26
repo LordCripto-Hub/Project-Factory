@@ -16,7 +16,10 @@ while :; do
     continue
   fi
   if ! tmux has-session -t mc-main:Boss >/dev/null 2>&1; then
-    if ! jq -e --arg aid "$boss_id" '.[] | select(.agent_id == $aid)' "$ROOT/run/roster.json" >/dev/null 2>&1; then
+    if ! "$ROOT/bin/mp" reconcile --agent "$boss_id" >>"$log" 2>&1; then
+      echo "$(date -Is) Boss reconcile failed" >>"$log"
+    fi
+    if ! tmux has-session -t mc-main:Boss >/dev/null 2>&1; then
       if ! "$ROOT/bin/mp" spawn "$boss_id" --master --backend codex --model gpt-5.6-sol >>"$log" 2>&1; then
         echo "$(date -Is) Boss bootstrap failed" >>"$log"
       fi

@@ -34,9 +34,9 @@ function runRecall(argumentsValue) {
       [
         '/workspace/scripts/query_taskspec_memory.py',
         '--dataset',
-        '/project-factory-history-80dce6f86632',
+        '/project-factory-history-039a62988625',
         '--lock',
-        '/workspace/docker/history-hybrid.dataset-lock.json',
+        '/workspace/docker/history-hybrid-039a62988625.dataset-lock.json',
       ],
       {
         env: {

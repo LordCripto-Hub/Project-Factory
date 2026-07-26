@@ -42,6 +42,28 @@ class CodexSubmitContract(unittest.TestCase):
         self.assertGreater(events[render_tick][1], 0)
         self.assertLessEqual(events[render_tick][1], 0.25)
 
+    def test_multiline_submit_retries_current_pasted_content_marker(self):
+        runtime = Path(os.environ.get(
+            "MYPEOPLE_MPCOMMON",
+            "/home/mp/mypeople/bin/mpcommon.py",
+        )).resolve()
+        spec = importlib.util.spec_from_file_location("mpcommon_codex_multiline_under_test", runtime)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        events = []
+
+        def runner(argv, **_kwargs):
+            events.append(list(argv))
+            result = Result()
+            if argv[:2] == ["capture-pane", "-p"]:
+                result.stdout = "[Pasted Content 1024 chars]"
+            return result
+
+        module.time.sleep = lambda _seconds: None
+        self.assertTrue(module.tmux_send_message("mc-main:Boss", "line one\nline two", runner=runner))
+        submits = [event for event in events if event == ["send-keys", "-t", "mc-main:Boss", "Enter"]]
+        self.assertEqual(2, len(submits))
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(CodexSubmitContract)

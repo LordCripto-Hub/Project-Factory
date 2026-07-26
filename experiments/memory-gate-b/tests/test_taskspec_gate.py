@@ -10,8 +10,8 @@ from memory_bench.taskspec_gate import run_taskspec_gate, write_taskspec_evidenc
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATASET = ROOT / "datasets" / "project-factory-history-80dce6f86632"
-LOCK = ROOT / "docker" / "history-hybrid.dataset-lock.json"
+DATASET = ROOT / "datasets" / "project-factory-history-039a62988625"
+LOCK = ROOT / "docker" / "history-hybrid-039a62988625.dataset-lock.json"
 
 
 class FakeTaskSpec(dict):

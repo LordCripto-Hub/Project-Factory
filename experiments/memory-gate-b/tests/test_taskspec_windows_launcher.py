@@ -9,8 +9,9 @@ LAUNCHER = ROOT / "windows" / "Invoke-IsolatedTaskSpecMemory.ps1"
 class TaskSpecWindowsLauncherTests(unittest.TestCase):
     def test_launcher_binds_final_identity_and_sanitized_receipt(self):
         source = LAUNCHER.read_text(encoding="utf-8-sig")
-        self.assertIn("project-factory-history-80dce6f86632", source)
-        self.assertIn("80dce6f866329b79061bb1ed6b0594f9fdf2dd45", source)
+        self.assertIn("project-factory-history-039a62988625", source)
+        self.assertIn("039a62988625369f3f86c055cd476b0080395daa", source)
+        self.assertIn("history-hybrid-039a62988625.dataset-lock.json", source)
         self.assertIn("LordCripto-Hub/Project-Factory", source)
         self.assertIn("taskspec-memory-result.json", source)
         self.assertIn("container-receipt.json", source)

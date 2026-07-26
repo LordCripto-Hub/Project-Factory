@@ -1,0 +1,65 @@
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
+FROM ${NODE_IMAGE} AS node-runtime
+
+FROM debian:12-slim
+
+ARG TARGETARCH
+ARG TTYD_VERSION=1.7.7
+ARG CLAUDE_VERSION=2.1.205
+ARG CODEX_VERSION=0.144.3
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        git \
+        iproute2 \
+        jq \
+        procps \
+        python3 \
+        ripgrep \
+        sudo \
+        tmux \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=node-runtime /usr/local/ /usr/local/
+
+RUN groupadd --gid 1000 mp \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash mp \
+    && echo "mp ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/mp \
+    && chmod 0440 /etc/sudoers.d/mp
+
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64) asset=x86_64; digest=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55 ;; \
+      arm64) asset=aarch64; digest=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165 ;; \
+      *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${asset}" -o /usr/local/bin/ttyd; \
+    echo "${digest}  /usr/local/bin/ttyd" | sha256sum -c -; \
+    chmod 0755 /usr/local/bin/ttyd
+
+RUN npm install --global \
+      "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
+      "@openai/codex@${CODEX_VERSION}" \
+    && npm cache clean --force
+
+RUN command -v python3 \
+    && command -v node \
+    && command -v npm \
+    && command -v tmux \
+    && command -v ttyd \
+    && command -v git \
+    && command -v rg \
+    && command -v codex \
+    && command -v claude \
+    && command -v ffmpeg \
+    && node --version | grep -Eq '^v22\.'
+
+USER mp
+WORKDIR /home/mp
+ENTRYPOINT ["/usr/bin/env"]
+CMD ["sleep", "infinity"]

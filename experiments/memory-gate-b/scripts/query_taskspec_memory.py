@@ -10,6 +10,8 @@ from memory_bench.taskspec_memory import PROJECT_SLUG, recall_history_claims
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--lock", required=True)
