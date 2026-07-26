@@ -160,7 +160,7 @@ async function assertUnifiedHudCards(page) {
   let switchBody = null;
   await page.route('**/switch', async route => {
     switchBody = route.request().postDataJSON();
-    await route.fulfill({ status: 409, contentType: 'application/json', body: '{"ok":false,"error":"synthetic_switch_failure"}' });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":false,"error":"synthetic_switch_failure"}' });
   });
   await firstCard.locator('.command-model').selectOption('gpt-5.6-luna');
   await firstCard.getByRole('button', { name: 'Apply model' }).click();

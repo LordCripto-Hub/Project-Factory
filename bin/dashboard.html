@@ -411,7 +411,8 @@
           ...(options || {}),
         });
         const data = await response.json();
-        if (!response.ok) throw Error(data.error || response.status);
+        if (!response.ok || data.ok === false)
+          throw Error(data.error || response.status);
         return data;
       }
       function el(tag, className, text) {

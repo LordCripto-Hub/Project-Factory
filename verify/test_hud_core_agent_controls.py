@@ -26,6 +26,7 @@ class HudCoreAgentControlsContract(unittest.TestCase):
         self.assertIn('"/revive"', SOURCE)
         self.assertIn('"/switch"', SOURCE)
         self.assertIn("command-status", SOURCE)
+        self.assertIn("data.ok === false", SOURCE)
         self.assertIn("await poll()", SOURCE)
         self.assertNotIn("row.model=selected", SOURCE)
         self.assertNotIn('type=\"text\"', SOURCE)
