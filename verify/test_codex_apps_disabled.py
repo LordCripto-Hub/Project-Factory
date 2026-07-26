@@ -17,6 +17,15 @@ class CodexAppsDisabledContract(unittest.TestCase):
         self.assertIn('args += ["--disable", "apps"]', block)
         self.assertIn('if backend == "codex":', block)
 
+    def test_managed_codex_agents_never_block_on_update_prompts(self):
+        start = self.source.index("def _build_launch_args(")
+        end = self.source.index("def build_launch(", start)
+        block = self.source[start:end]
+        self.assertIn(
+            'args += ["--config", "check_for_update_on_startup = false"]',
+            block,
+        )
+
     def test_claude_launch_is_unchanged(self):
         start = self.source.index("def _build_launch_args(")
         end = self.source.index("def build_launch(", start)

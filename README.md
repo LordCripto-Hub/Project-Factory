@@ -132,7 +132,9 @@ filesystem, network, missing-context, timeout, silence, and crash failures
 never escalate the model. A failed forward resume rolls back to the prior exact
 session and receipt. If rollback also fails, the task and selected worker enter
 `recovery_required`; all private evidence is preserved and no fresh session is
-created. HUD model controls remain a future interface phase.
+created. The HUD exposes bounded Boss and Nightwatch model controls for the
+currently supported Sol and Luna profiles; worker orchestration remains under
+Boss control.
 
 ## Durable Docker state
 

@@ -47,7 +47,15 @@ class CodexBossContract(unittest.TestCase):
         self.assertEqual(words[words.index("--model") + 1], "gpt-5.6-sol")
         self.assertNotIn("claude", words)
         self.assertNotIn("--plugin-dir", words)
-        override = words[words.index("--config") + 1]
+        overrides = [
+            words[index + 1]
+            for index, word in enumerate(words[:-1])
+            if word == "--config"
+        ]
+        self.assertIn("check_for_update_on_startup = false", overrides)
+        override = next(
+            value for value in overrides if value.startswith("projects.")
+        )
         self.assertEqual(
             tomllib.loads(override),
             {"projects": {self.boss_dir: {"trust_level": "trusted"}}},
