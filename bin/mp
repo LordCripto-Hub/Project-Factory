@@ -11,6 +11,7 @@ from agent_session import (
     validate_resume_evidence,
 )
 from mpcommon import *
+from automatic_memory import derive_memory_query, memory_eligibility
 from memory_canary import (
     MemoryCanaryError,
     append_receipt as append_memory_canary_receipt,
@@ -127,22 +128,33 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
         profile = load_profile(profiles_dir, slug)
         profile_revision = profile.get("revision")
         canary_requested = task.get("memoryCanary") is True
+        runtime_dir = os.path.realpath(os.path.join(ROOT, "run"))
+        control = load_memory_canary_control(runtime_dir)
+        memory_mode = control.get(
+            "mode", "manual_canary" if control.get("enabled") else "off"
+        )
+        eligibility = memory_eligibility(task)
+        automatic_requested = (
+            memory_mode == "automatic"
+            and eligibility == "eligible"
+            and profile.get("memory", {}).get("enabled") is True
+        )
         comparison = task.get("experiment", {}).get("memory_comparison", {})
         comparison_baseline = (
             ENV.get("MYPEOPLE_MEMORY_COMPARISON_ENABLED") == "1"
             and isinstance(comparison, dict)
             and comparison.get("arm") == "baseline"
         )
-        if bypass_memory and not canary_requested and not comparison_baseline:
+        if bypass_memory and not canary_requested and not comparison_baseline and not automatic_requested:
             raise TaskSpecError("canary_not_requested")
-        if (
-            str(task.get("contextQuestion") or "").strip()
+        if automatic_requested or (
+            memory_mode == "manual_canary"
+            and canary_requested
+            and str(task.get("contextQuestion") or "").strip()
             and profile.get("memory", {}).get("enabled") is True
         ):
             requested_claim_count = profile.get("limits", {}).get("memoryTopK", 0)
-        if canary_requested:
-            runtime_dir = os.path.realpath(os.path.join(ROOT, "run"))
-            control = load_memory_canary_control(runtime_dir)
+        if canary_requested and memory_mode != "automatic":
             try:
                 attempt = compile_memory_canary_attempt(
                     task=task,
@@ -162,12 +174,20 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
                 raise TaskSpecError(error.code) from error
         else:
             compile_profile = profile
-            if comparison_baseline:
+            if comparison_baseline or bypass_memory or not automatic_requested:
                 compile_profile = {
                     **profile,
                     "memory": {**profile.get("memory", {}), "enabled": False},
                 }
-            spec = compile_task_spec(task, compile_profile)
+            if automatic_requested and not bypass_memory:
+                spec = compile_task_spec(
+                    task,
+                    compile_profile,
+                    memory_query=derive_memory_query(task),
+                    memory_mode="automatic",
+                )
+            else:
+                spec = compile_task_spec(task, compile_profile)
         taskspecs_dir = os.path.realpath(
             ENV.get("TASKSPECS_DIR", os.path.join(ROOT, "run", "taskspecs"))
         )
@@ -188,6 +208,12 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
             "elapsedMilliseconds": round((time.monotonic() - started) * 1000),
             "responseCharacters": 0,
             "aiUsage": "not_measured",
+            "selectedLevel": None,
+            "levelsAttempted": [],
+            "examinedCount": 0,
+            "estimatedTokens": 0,
+            "provenanceComplete": False,
+            "reasonCode": code,
         })
         if isinstance(error, (ProfileError, MemoryCanaryError)):
             raise TaskSpecError(code) from error
@@ -211,6 +237,12 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
             "elapsedMilliseconds": round((time.monotonic() - started) * 1000),
             "responseCharacters": 0,
             "aiUsage": "not_measured",
+            "selectedLevel": None,
+            "levelsAttempted": [],
+            "examinedCount": 0,
+            "estimatedTokens": 0,
+            "provenanceComplete": False,
+            "reasonCode": code,
         })
         raise TaskSpecError(code) from error
     metadata = getattr(spec, "memory_metadata", {})
@@ -235,6 +267,12 @@ def compile_owner_task_spec(task_id, *, bypass_memory=False):
         "elapsedMilliseconds": round((time.monotonic() - started) * 1000),
         "responseCharacters": metadata.get("responseCharacters", 0),
         "aiUsage": metadata.get("aiUsage", "not_measured"),
+        "selectedLevel": metadata.get("selectedLevel"),
+        "levelsAttempted": metadata.get("levelsAttempted", []),
+        "examinedCount": metadata.get("examinedCount", 0),
+        "estimatedTokens": metadata.get("estimatedTokens", 0),
+        "provenanceComplete": metadata.get("provenanceComplete", False),
+        "reasonCode": metadata.get("reasonCode"),
     })
     return taskspec_path
 

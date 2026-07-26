@@ -245,6 +245,54 @@ class TaskSpecSpawnContract(unittest.TestCase):
         self.mp.compile_owner_task_spec("task-1")
         self.assertEqual(order, ["receipt", "write"])
 
+    def test_automatic_mode_compiles_existing_card_once_with_derived_query(self):
+        calls = []
+        events = []
+        self.mp.http_json = lambda *_args, **_kwargs: {
+            "tasks": {"task-1": {
+                "id": "task-1",
+                "projectSlug": "project-factory",
+                "text": "Repair publisher continuity",
+                "doneCondition": "Preserve ownership",
+                "contextQuestion": "",
+                "memoryCanary": False,
+            }}
+        }
+        self.mp.load_profile = lambda *_args: {
+            "slug": "project-factory", "revision": 7,
+            "limits": {"memoryTopK": 3},
+            "memory": {"enabled": True},
+        }
+        self.mp.load_memory_canary_control = lambda *_args: {
+            "schemaVersion": 2, "mode": "automatic",
+            "allowedProjects": ["project-factory"], "revision": 9,
+        }
+        class Document(dict):
+            pass
+        document = Document({
+            "taskId": "task-1", "projectSlug": "project-factory",
+            "profileRevision": 7, "memoryStatus": "memory_applied",
+            "memoryClaims": [],
+        })
+        document.memory_metadata = {
+            "selectedLevel": "fast", "levelsAttempted": ["fast"],
+            "estimatedTokens": 20, "provenanceComplete": True,
+        }
+        self.mp.compile_task_spec = lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or document
+        )
+        self.mp.write_task_spec = lambda *_args: "/tmp/task-1.json"
+        self.mp.record_taskspec_event = lambda event: events.append(event)
+        self.assertEqual(self.mp.compile_owner_task_spec("task-1"), "/tmp/task-1.json")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1]["memory_mode"], "automatic")
+        self.assertEqual(
+            calls[0][1]["memory_query"],
+            "Repair publisher continuity | Preserve ownership",
+        )
+        self.assertEqual(events[0]["selectedLevel"], "fast")
+        self.assertNotIn("memory_query", events[0])
+
 
     def test_failed_compile_records_typed_metadata_without_content(self):
         events = []
