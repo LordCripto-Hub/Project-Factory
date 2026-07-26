@@ -21,6 +21,7 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
         self.assertIn("[switch]$ConfirmLiveRun", self.text)
         self.assertIn("$ConfirmedRunId", self.text)
         self.assertIn("execution_confirmation_mismatch", self.text)
+        self.assertIn("^[a-z0-9]+(?:-[a-z0-9]+)*$", self.text)
         self.assertIn("$previousPreference = $ErrorActionPreference", self.text)
         self.assertIn("$ErrorActionPreference = 'Continue'", self.text)
 
@@ -49,6 +50,14 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.text)
+
+    def test_preflight_uses_a_real_bound_profile_provider_probe(self):
+        self.assertIn("provider-bindings.json", self.text)
+        self.assertIn("/home/mp/mypeople/run/provider-homes/codex/", self.text)
+        self.assertIn("'codex', 'exec'", self.text)
+        self.assertIn("'--ephemeral'", self.text)
+        self.assertIn("'--model', $model", self.text)
+        self.assertNotIn("'codex', 'login', 'status'", self.text)
 
     def test_container_python_uses_stdin_instead_of_fragile_windows_dash_c(self):
         self.assertIn("function Invoke-DockerPython", self.text)
@@ -101,6 +110,22 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.text)
         self.assertNotIn("fabricated_result", self.text.lower())
+        self.assertIn("--dataset", self.text)
+
+    def test_worker_prompt_defines_closed_schema_without_exposing_gold(self):
+        self.assertIn("function Get-CaseContract", self.text)
+        self.assertIn("VerificationCommandIds", self.text)
+        self.assertIn("Do not call mp complete", self.text)
+        self.assertIn("Do not read comparison fixtures", self.text)
+        self.assertIn('"decision_id"', self.text)
+        self.assertIn('"selected_evidence_ids"', self.text)
+        self.assertIn('"rejected_evidence_ids"', self.text)
+        self.assertIn('"command_id"', self.text)
+        self.assertIn('"conclusion"', self.text)
+        self.assertIn(
+            '$remoteDirectory = "/home/mp/mypeople/run/memory-comparison/inbox/$RunId/$($pair.alias)-$arm"',
+            self.text,
+        )
 
     def test_cleanup_and_fail_closed_paths_are_explicit(self):
         for marker in (
@@ -122,6 +147,11 @@ class WindowsMemoryComparisonContract(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.text)
+        self.assertIn("function Test-TodoCardAbsent", self.text)
+        self.assertNotIn(
+            "(Invoke-TodoMachine -Payload @{ 'op' = 'del'; id = $CardId }).error",
+            self.text,
+        )
 
     def test_launcher_has_no_publication_or_global_memory_mutation(self):
         lowered = self.text.lower()

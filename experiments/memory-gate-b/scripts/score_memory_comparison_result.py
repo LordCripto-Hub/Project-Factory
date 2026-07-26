@@ -16,11 +16,12 @@ from comparison.scoring import canonical_score_receipt, score_result
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cases", type=Path, required=True)
+    parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--case-alias", required=True)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    cases = {case.alias: case for case in load_cases(args.cases)}
+    cases = {case.alias: case for case in load_cases(args.cases, args.dataset)}
     if args.case_alias not in cases:
         raise SystemExit("unknown_case_alias")
     result = json.loads(args.input.read_text(encoding="utf-8-sig"))

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "decision": "not_promoted",
+  "dataset": {
+    "name": "project-factory-history-039a62988625",
+    "source_sha": "039a62988625369f3f86c055cd476b0080395daa"
+  },
+  "fixture_sha256": "12d86c7eeb77aba570d80bde5a57e2751e86d1b3c9129a0ace9f8f9d740e099c",
+  "offline_digest": "6ed57f9937ee03a3dcc84289e05b2f7ad3cdd54c644fd675418f7aaa72ab2b88",
+  "configuration": {
+    "model": "gpt-5.6-luna",
+    "pair_count": 3,
+    "arms_per_pair": 2,
+    "top_k": 3
+  },
+  "aggregates": {
+    "completed_pair_count": 3,
+    "arm_count": 6,
+    "harmful_count": 0,
+    "rework_counts": {
+      "baseline": 0,
+      "memory": 0
+    },
+    "successful_counts": {
+      "baseline": 0,
+      "memory": 3
+    },
+    "scores": {
+      "baseline": [75, 65, 65],
+      "memory": [100, 90, 90]
+    },
+    "median_score": {
+      "baseline": 65,
+      "memory": 90
+    },
+    "median_wall_time_ms": {
+      "baseline": 32912,
+      "memory": 37193
+    }
+  },
+  "cases": [
+    {
+      "alias": "cmp-exact-01",
+      "arm_order": ["baseline", "memory"],
+      "scores": {"baseline": 75, "memory": 100},
+      "wall_time_ms": {"baseline": 20070, "memory": 37193}
+    },
+    {
+      "alias": "cmp-temporal-01",
+      "arm_order": ["memory", "baseline"],
+      "scores": {"baseline": 65, "memory": 90},
+      "wall_time_ms": {"baseline": 32912, "memory": 28403}
+    },
+    {
+      "alias": "cmp-contradiction-01",
+      "arm_order": ["baseline", "memory"],
+      "scores": {"baseline": 65, "memory": 90},
+      "wall_time_ms": {"baseline": 36989, "memory": 47630}
+    }
+  ],
+  "metrics": {
+    "provider_tokens": "not_measured",
+    "live_retrieval_latency_ms": "not_measured",
+    "live_memory_context_tokens": "not_measured",
+    "offline_median_retrieval_latency_ms_actual": 0.395,
+    "offline_median_memory_context_tokens_estimated": 14.0
+  },
+  "promotion_gates": {
+    "three_completed_pairs": true,
+    "zero_harmful_results": true,
+    "memory_success_not_lower": true,
+    "memory_median_not_lower": true,
+    "measurable_quality_improvement": true,
+    "live_retrieval_latency_measured": false,
+    "live_memory_context_measured": false,
+    "cleanup_complete": true,
+    "container_restart_unchanged": true
+  },
+  "safety": {
+    "cleanup_complete": true,
+    "container_restart_delta": 0,
+    "memory_write_enabled": false,
+    "provider_transcripts_retained": false
+  },
+  "decision_reason": "The bounded live comparison measured a clear quality improvement, but promotion remains fail-closed because live retrieval latency, live injected-context size, and attributable provider tokens were not captured. Offline latency and context estimates are reported separately and are not substituted for live measurements."
+}

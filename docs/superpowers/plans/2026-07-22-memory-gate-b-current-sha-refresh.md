@@ -283,22 +283,22 @@ git commit -m "docs: qualify current-SHA memory corpus offline"
 - Modify: `verify/test_memory_comparison_e2e.py`
 - Modify: `verify/run-suite.sh`
 
-- [ ] **Step 1: Write failing exact-SHA preflight tests**
+- [x] **Step 1: Write failing exact-SHA preflight tests**
 
 Require the launcher to bind the new dataset, lock, receipt, fixture hash, logical digest, and SHA. Simulate and assert refusal on wrong workspace SHA, dirty workspace, unavailable provider, disabled comparison flag, existing comparison resources, or changed restart count.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 ```powershell
 python verify\test_windows_memory_comparison.py
 python verify\test_memory_comparison_e2e.py
 ```
 
-- [ ] **Step 3: Implement minimal rebinding and clean-workspace check**
+- [x] **Step 3: Implement minimal rebinding and clean-workspace check**
 
 Preflight runs `git rev-parse HEAD` and `git status --porcelain` inside `/home/mp/workspaces/project-factory`; it proceeds only for the exact approved SHA and empty status. It checks Priorities/HUD health, provider availability without exporting credentials, zero comparison resources, and memory sidecar readiness.
 
-- [ ] **Step 4: Run disposable Docker and full isolated verification**
+- [x] **Step 4: Run disposable Docker and full isolated verification**
 
 ```powershell
 python verify\test_windows_memory_comparison.py
@@ -308,7 +308,7 @@ bash verify/run-suite.sh
 
 Expected: the exact counterbalanced schedule passes under the synthetic adapter, harmful output aborts immediately, all temporary resources are absent, and J1-J52/current suite is green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add windows/Start-MyPeopleMemoryComparison.ps1 verify/test_windows_memory_comparison.py verify/test_memory_comparison_e2e.py verify/run-suite.sh
@@ -323,7 +323,7 @@ git commit -m "test: qualify current-SHA live comparison boundary"
 - Modify: `experiments/memory-gate-b/README.md`
 - Modify: `verify/test_memory_comparison_public_artifacts.py`
 
-- [ ] **Step 1: Capture preflight evidence without creating resources**
+- [x] **Step 1: Capture preflight evidence without creating resources**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File windows\Start-MyPeopleMemoryComparison.ps1 -Action Preflight
@@ -331,7 +331,7 @@ powershell -ExecutionPolicy Bypass -File windows\Start-MyPeopleMemoryComparison.
 
 Expected: `offline_qualified`, exact source SHA, unchanged restart count, fixture hash, and logical digest. Any other result stops the task.
 
-- [ ] **Step 2: Execute exactly three counterbalanced Luna pairs**
+- [x] **Step 2: Execute exactly three counterbalanced Luna pairs**
 
 ```powershell
 $run='memory-039a-20260722'
@@ -340,11 +340,11 @@ powershell -ExecutionPolicy Bypass -File windows\Start-MyPeopleMemoryComparison.
 
 Every arm receives a fresh card, worker, provider conversation, and result directory. Baseline gets no memory block; memory gets only the approved top-three block. Never selectively rerun a failed pair.
 
-- [ ] **Step 3: Enforce promotion gates**
+- [x] **Step 3: Enforce promotion gates**
 
 Require three completed pairs, zero harmful results, memory success count and median score not below baseline, at least one measurable improvement, median retrieval latency below 2000 ms, median estimated memory context at most 300 tokens, complete cleanup, and unchanged restart count. Otherwise record `not_promoted`.
 
-- [ ] **Step 4: Sanitize, verify, and commit the report**
+- [x] **Step 4: Sanitize, verify, and commit the report**
 
 ```powershell
 python verify\test_memory_comparison_public_artifacts.py
@@ -367,7 +367,7 @@ git commit -m "docs: record current-SHA paired memory comparison"
 
 - Modify: `docs/superpowers/plans/2026-07-22-memory-gate-b-current-sha-refresh.md` only to check completed boxes
 
-- [ ] **Step 1: Run the complete evidence suite**
+- [x] **Step 1: Run the complete evidence suite**
 
 ```powershell
 python -m unittest experiments.memory-gate-b.tests.test_history_dataset -v
@@ -384,11 +384,11 @@ git diff --check
 git status --short
 ```
 
-- [ ] **Step 2: Verify safety invariants manually**
+- [x] **Step 2: Verify safety invariants manually**
 
 Confirm old hashes are unchanged, memory is off by default, no comparison resource remains, no memory write occurred, public content is English, and actual/estimated/not-measured metrics are distinct.
 
-- [ ] **Step 3: Commit plan tracking and push the existing branch**
+- [x] **Step 3: Commit plan tracking and push the existing branch**
 
 ```powershell
 git add docs/superpowers/plans/2026-07-22-memory-gate-b-current-sha-refresh.md
@@ -405,19 +405,22 @@ Update draft PR `#12`. Passing authorizes only the design of a larger statistica
   Docker E2E, and exact live preflight.
 - [x] The current-SHA preflight passed against the clean live workspace with
   unchanged restart count.
-- [x] Two full-run attempts stopped during their first baseline under the
-  fail-closed rules. No arm completed and no selective arm was rerun.
-- [x] Both aborted runs recorded complete cleanup with zero retained synthetic
-  cards, workers, conversations, or temporary result directories.
-- [x] The promotion gates were enforced. The decision is `not_promoted` because
-  production benefit was not measured.
+- [x] Infrastructure defects discovered by early fail-closed attempts were
+  repaired with focused regression tests; every invalid run retained zero arms.
+- [x] The accepted run completed three counterbalanced Luna pairs and six arms
+  with scores `75/65/65` for baseline and `100/90/90` for memory, zero harmful
+  results, zero rework, and complete per-arm cleanup.
+- [x] The promotion gates were enforced. The decision remains `not_promoted`:
+  live quality improved, but live retrieval latency and injected-context size
+  were not measured, and offline observations were not substituted.
 - [x] The corrected harness passed focused Windows/Linux tests, real disposable
   Docker E2E, the packaged isolated verifier, and J1-J52.
 - [x] The direct host `bash verify/run-suite.sh` invocation refused with exit
   `125` as designed; the same suite passed through the official isolated
   verifier during the final backup-first upgrade.
-- [x] The final live deployment has comparison flag `0`, no memory sidecar,
-  restart count `0`, HTTP `200/200`, and no synthetic comparison cards.
+- [x] The final live deployment uses image
+  `mypeople-node:memory-gate-b-20260726T144000Z`, has comparison flag `0`, no
+  memory sidecar, restart count `0`, HTTP `200/200`, and no synthetic cards.
 - [x] Public artifacts remain English-only and sanitized; actual, estimated,
   and `not_measured` metrics remain distinct.
 - [x] Draft PR #12 was updated; memory remains opt-in and globally disabled.

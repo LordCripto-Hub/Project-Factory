@@ -113,17 +113,21 @@ cost, better Boss decisions, or improved real-agent coordination.
 
 The current-SHA preflight passed with the exact workspace SHA, locked fixture,
 offline digest, healthy sidecar, available provider, and unchanged restart
-count. Two infrastructure attempts then stopped during the first baseline,
-before any provider conversation or completed arm. The first exposed a missing
-process-environment allowlist entry and an invalid baseline TaskSpec path. The
-second exposed that the baseline compiler still followed the enabled project
-memory profile instead of enforcing the explicit no-memory arm.
+count. The accepted run completed all three counterbalanced pairs and recorded
+six completed arms with fresh cards, workers, and conversations. The baseline
+scores were `75`, `65`, and `65`; the memory scores were `100`, `90`, and `90`.
+Memory improved every paired quality score, produced three successful results
+versus zero for baseline, and produced no harmful result or rework.
 
-Both attempts have zero completed arms, zero scored outputs, zero harmful
-outputs, and no provider-token measurement. Their synthetic cards and temporary
-directories were removed and no comparison worker was retained. Runtime
-cleanup was verified complete. No selective arm was rerun. The live decision is therefore
-`not_promoted`: offline retrieval remains qualified, but production benefit is
-not demonstrated. A future live comparison requires a fresh reviewed run after
-the corrected harness passes disposable end-to-end verification; this report
-does not authorize automatic activation.
+Cleanup was verified complete after every arm, no comparison worker or card was
+retained, and the container restart delta was zero. Provider tokens, live
+retrieval latency, and live injected-context size remain `not_measured`.
+The offline receipt separately records actual retrieval latency and estimated
+memory-context size; those values are not relabeled as live observations.
+
+The decision remains `not_promoted` under the fail-closed rule. The quality gate
+passed, but two required live observability gates did not: retrieval latency and
+injected-context size were not captured per live arm. The sanitized receipt is
+[`reports/comparison-live-039a62988625.json`](reports/comparison-live-039a62988625.json).
+This result authorizes design of the next measured canary; it does not authorize
+automatic or global memory activation.

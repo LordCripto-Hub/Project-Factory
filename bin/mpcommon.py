@@ -109,7 +109,7 @@ def tmux_send_message(target: str, message, runner=run_tmux, delay=.4, submit_de
     if "\n" in msg:
         time.sleep(delay)
         cap = runner(["capture-pane", "-p", "-t", target], capture=True)
-        if "[Pasted text" in (cap.stdout or ""):
+        if any(marker in (cap.stdout or "") for marker in ("[Pasted text", "[Pasted Content")):
             runner(["send-keys", "-t", target, "Enter"])
     return True
 

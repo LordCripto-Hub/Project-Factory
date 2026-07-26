@@ -84,6 +84,20 @@ print(json.dumps(http_json("/todo/update","POST",payload,base="http://127.0.0.1:
     $response.Output | ConvertFrom-Json
 }
 
+function Test-TodoCardAbsent {
+    param([Parameter(Mandatory)][string]$CardId)
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($CardId))
+    $python = @'
+import base64,os,sys
+sys.path.insert(0,"/home/mp/mypeople/bin")
+from mpcommon import ENV,http_json
+card_id=base64.b64decode(sys.argv[1]).decode("utf-8")
+board=http_json("/todo/board",base="http://127.0.0.1:9933",token=ENV.get("QUEUE_SECRET",""))
+sys.exit(0 if card_id not in (board.get("tasks") or {}) else 1)
+'@
+    (Invoke-DockerPython -Source $python -Arguments @($encoded) -AllowFailure).ExitCode -eq 0
+}
+
 function Get-ContainerSnapshot {
     $raw = Invoke-Docker -Arguments @('inspect', $Container, '--format', '{{json .State}}')
     $state = $raw.Output | ConvertFrom-Json
@@ -113,14 +127,18 @@ function Get-OfflineBinding {
     }
 }
 
-function Get-CaseQuestion {
+function Get-CaseContract {
     param([Parameter(Mandatory)][string]$CaseAlias)
     $caseDocument = Get-Content -LiteralPath $casesPath -Raw | ConvertFrom-Json
     $case = @($caseDocument.cases | Where-Object { $_.alias -eq $CaseAlias })
     if ($case.Count -ne 1 -or -not $case[0].question_id) { throw 'comparison_question_missing' }
     $question = @(Get-Content -LiteralPath $questionsPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.question_id -eq $case[0].question_id })
     if ($question.Count -ne 1 -or [string]::IsNullOrWhiteSpace($question[0].query)) { throw 'comparison_question_missing' }
-    [string]$question[0].query
+    [pscustomobject]@{
+        Query = [string]$question[0].query
+        CaseClass = [string]$case[0].class
+        VerificationCommandIds = @($case[0].verification_command_ids)
+    }
 }
 
 function Assert-Preflight {
@@ -137,7 +155,28 @@ function Assert-Preflight {
     if (-not [string]::IsNullOrWhiteSpace($workspaceStatus.Output)) { throw 'workspace_dirty' }
     $flag = Invoke-Docker -Arguments @('exec', $Container, 'printenv', 'MYPEOPLE_MEMORY_COMPARISON_ENABLED') -AllowFailure
     if ($flag.ExitCode -ne 0 -or $flag.Output.Trim() -ne '1') { throw 'MYPEOPLE_MEMORY_COMPARISON_ENABLED_required' }
-    $provider = Invoke-Docker -Arguments @('exec', $Container, 'codex', 'login', 'status') -AllowFailure
+    $providerProfileProbe = @'
+import json,pathlib,re,sys
+path=pathlib.Path("/home/mp/mypeople/run/provider-bindings.json")
+try:
+    profile=str(json.loads(path.read_text()).get("globalProfile") or "")
+except Exception:
+    sys.exit(1)
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}",profile):
+    sys.exit(1)
+print(profile)
+'@
+    $profileResult = Invoke-DockerPython -Source $providerProfileProbe -AllowFailure
+    if ($profileResult.ExitCode -ne 0) { throw 'provider_unavailable' }
+    $providerProfile = $profileResult.Output.Trim()
+    $providerHome = "/home/mp/mypeople/run/provider-homes/codex/$providerProfile"
+    $provider = Invoke-Docker -Arguments @(
+        'exec', '-e', "CODEX_HOME=$providerHome", $Container,
+        'codex', 'exec', '--ephemeral', '--ignore-user-config', '--ignore-rules',
+        '--skip-git-repo-check', '--sandbox', 'read-only', '--color', 'never',
+        '-C', '/home/mp/mypeople/run', '--model', $model,
+        'Reply exactly PROFILE_OK and do not use tools.'
+    ) -AllowFailure
     if ($provider.ExitCode -ne 0) { throw 'provider_unavailable' }
     $boss = Invoke-Docker -Arguments @('exec', $Container, 'tmux', 'has-session', '-t', 'mc-main:Boss') -AllowFailure
     if ($boss.ExitCode -ne 0) { throw 'boss_unavailable' }
@@ -167,7 +206,7 @@ function Assert-LiveConfirmation {
     if (-not $Execute -or -not $ConfirmLiveRun -or [string]::IsNullOrWhiteSpace($RunId) -or $RunId -ne $ConfirmedRunId) {
         throw 'execution_confirmation_mismatch'
     }
-    if ($RunId -notmatch '^[A-Za-z0-9_-]{1,64}$') { throw 'invalid_run_id' }
+    if ($RunId.Length -gt 64 -or $RunId -notmatch '^[a-z0-9]+(?:-[a-z0-9]+)*$') { throw 'invalid_run_id' }
 }
 
 function Wait-ComparisonResult {
@@ -194,7 +233,7 @@ function Convert-ClosedResult {
         }
         $scoreTemp = "$temp.scored.json"
         $scoreScript = Join-Path $projectRoot 'experiments\memory-gate-b\scripts\score_memory_comparison_result.py'
-        & python $scoreScript --cases $casesPath --case-alias $CaseAlias --input $temp --output $scoreTemp
+        & python $scoreScript --cases $casesPath --dataset $datasetPath --case-alias $CaseAlias --input $temp --output $scoreTemp
         if ($LASTEXITCODE -ne 0) { throw 'score_refused' }
         $score = Get-Content -LiteralPath $scoreTemp -Raw | ConvertFrom-Json
         [pscustomobject]@{
@@ -219,7 +258,7 @@ function Remove-ArmResources {
     Invoke-Docker -Arguments @('exec', $Container, 'rm', '-rf', $RemoteDirectory) | Out-Null
     $workerTab = ($WorkerId -split ':', 2)[1]
     $workerAbsent = (Invoke-Docker -Arguments @('exec',$Container,'tmux','has-session','-t',"mc-main:$workerTab") -AllowFailure).ExitCode -ne 0
-    $cardAbsent = (Invoke-TodoMachine -Payload @{ 'op' = 'del'; id = $CardId }).error -eq 'unknown_task'
+    $cardAbsent = Test-TodoCardAbsent -CardId $CardId
     $tempAbsent = (Invoke-Docker -Arguments @('exec', $Container, 'test', '!', '-e', $RemoteDirectory) -AllowFailure).ExitCode -eq 0
     if (-not ($workerAbsent -and $cardAbsent -and $tempAbsent)) { throw 'cleanup_verification_failed' }
     Invoke-Mp -Arguments @('memory-comparison','cleanup',$RunId,'--worker-absent','--card-absent','--conversation-retired','--temp-artifacts-absent') | Out-Null
@@ -244,10 +283,28 @@ function Invoke-PairedRun {
             $nonce = [guid]::NewGuid().ToString('N')
             $workerId = "node-1/main:cmp-$nonce"
             $conversationId = "conversation-$nonce"
-            $remoteDirectory = "/home/mp/mypeople/run/memory-comparison/inbox/$RunId/$($pair.alias)-$arm-$nonce"
+            $remoteDirectory = "/home/mp/mypeople/run/memory-comparison/inbox/$RunId/$($pair.alias)-$arm"
             $cardId = ''
             try {
-                $question = Get-CaseQuestion -CaseAlias $pair.alias
+                $caseContract = Get-CaseContract -CaseAlias $pair.alias
+                $question = $caseContract.Query
+                $decisionId = switch ($caseContract.CaseClass) {
+                    'exact_constraint' { 'report_exact_commit_subject' }
+                    'temporal_continuation' { 'continue_from_latest_change' }
+                    'contradiction_prevention' { 'reject_superseded_change' }
+                    default { throw 'comparison_case_class_invalid' }
+                }
+                $commandIds = @($caseContract.VerificationCommandIds) | ConvertTo-Json -Compress
+                $workerInstructions = @"
+This is a closed Gate B evaluation, not an implementation task. Answer only this question: $question
+Use decision_id "$decisionId". Approved verification command IDs: $commandIds.
+Command meanings: git_show_subject checks one commit subject; git_log_path_latest checks the latest commit for the relevant path; git_show_superseded_edge checks the preceding and superseding history edge.
+Use only evidence IDs present in your bounded memory claims or deterministically inferable from Git commit IDs. Use empty evidence arrays when no valid ID is available; never invent an ID.
+Do not read comparison fixtures, datasets, reports, other arms, or memory-comparison run state. Do not modify the repository or run unrelated project tests.
+Write one JSON object atomically to $remoteDirectory/result-envelope.json with exactly this schema:
+{"decision_id":"$decisionId","selected_evidence_ids":[],"rejected_evidence_ids":[],"commands":[{"command_id":"approved_id","exit_code":0}],"conclusion":"1 to 500 characters"}
+Include every approved command ID exactly once with its real exit code. Do not include prose, credentials, raw prompts, or private reasoning. Do not call mp complete until result-envelope.json exists.
+"@
                 $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds).ToUnixTimeSeconds()
                 $card = Invoke-TodoMachine -Payload @{
                     op = 'add'; text = "Synthetic Gate B comparison $($pair.alias) $arm"; test = $true
@@ -257,14 +314,14 @@ function Invoke-PairedRun {
                 }
                 $cardId = [string]$card.id
                 if (-not $cardId) { throw 'card_creation_failed' }
+                Invoke-TodoMachine -Payload @{ op = 'set'; id = $cardId; doneCondition = $workerInstructions } | Out-Null
                 Invoke-Docker -Arguments @('exec',$Container,'mkdir','-p',$remoteDirectory) | Out-Null
                 $spawn = @('spawn',$workerId,'--backend','codex','--model',$model,'--boss',$bossId,'--owner-task',$cardId)
                 if ($arm -eq 'baseline') { $spawn += '--without-memory' }
                 Invoke-Mp -Arguments $spawn | Out-Null # mp spawn --backend codex --owner-task --without-memory
                 Invoke-Mp -Arguments @('memory-comparison','start-arm',$RunId,'--case-alias',$pair.alias,'--arm',$arm,'--worker-id',$workerId,'--card-id',$cardId,'--conversation-id',$conversationId) | Out-Null
                 $started = [Diagnostics.Stopwatch]::StartNew()
-                $message = "Return only the closed comparison JSON envelope. Write it atomically to $remoteDirectory/result-envelope.json. Do not include prose, credentials, raw prompts, or private reasoning."
-                Invoke-Mp -Arguments @('send',$workerId,$message) | Out-Null
+                Invoke-Mp -Arguments @('send',$workerId,$workerInstructions) | Out-Null
                 $remoteResult = Wait-ComparisonResult -RemoteDirectory $remoteDirectory
                 $started.Stop()
                 $closed = Convert-ClosedResult -CaseAlias $pair.alias -RemoteResult $remoteResult -WallTimeMs $started.ElapsedMilliseconds
