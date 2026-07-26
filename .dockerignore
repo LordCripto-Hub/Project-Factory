@@ -18,5 +18,9 @@ verify/videos/
 *.pem
 *.key
 *.p12
+**/auth.json
+**/*credential*
+**/*token*
+**/portable-state.tar.gz
 .DS_Store
 Thumbs.db

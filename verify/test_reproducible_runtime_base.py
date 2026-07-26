@@ -16,6 +16,7 @@ class ReproducibleRuntimeBaseContract(unittest.TestCase):
 
     def test_pins_compatible_runtime_and_non_root_identity(self):
         for token in (
+            "ARG NODE_IMAGE=node:22-bookworm-slim@sha256:",
             "FROM debian:12-slim",
             "ARG TTYD_VERSION=1.7.7",
             "ARG CLAUDE_VERSION=2.1.205",
@@ -23,6 +24,7 @@ class ReproducibleRuntimeBaseContract(unittest.TestCase):
             "groupadd --gid 1000 mp",
             "useradd --uid 1000 --gid 1000",
             "USER mp",
+            "node --version | grep -Eq '^v22\\.'",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.text)
