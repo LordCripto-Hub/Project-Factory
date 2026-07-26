@@ -765,6 +765,17 @@ Windows owns microphone permission, language selection, transcription, and
 the dictation UI. This works in Brave and other browsers because MyPeople only
 receives the text Windows types into the focused control.
 
+## Codex Apps and memory isolation
+
+MyPeople starts Codex agents with the built-in Codex Apps integration disabled.
+This prevents an unrelated or expired Apps authentication from producing
+`codex_apps` MCP startup warnings inside agent terminals.
+
+This switch does not remove or disable MyPeople's memory code. The local,
+bounded Memory Gate B path remains available only through its explicit canary
+controls. The hosted Cloudflare memory pilot remains disabled by default and
+is never activated by a normal agent launch.
+
 ## Recommended next stage
 
 1. Add deliberate Boss stop, reconcile, revive, model, and provider-profile controls to Priorities.
