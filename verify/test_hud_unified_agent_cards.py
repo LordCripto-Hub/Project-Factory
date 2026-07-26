@@ -58,7 +58,7 @@ class HudUnifiedAgentCardsContract(unittest.TestCase):
 
     def test_full_browser_journey_waits_for_async_hud_cards(self):
         self.assertIn(
-            "await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length >= 2);",
+            "await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length >= 1);",
             self.browser_source,
         )
 

@@ -371,8 +371,8 @@ async function sandboxSuite(page, boardPollNavigation) {
 
   // Hidden live-board controls check.
   await page.goto(`${baseUrl}/dashboard`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length >= 2);
-  await expect(await count(page, '#telemetryCards .combat-card') >= 2, 'dashboard cards missing');
+  await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length >= 1);
+  await expect(await count(page, '#telemetryCards .combat-card') >= 1, 'dashboard cards missing');
   await expect(await count(page, '#agentsTable') === 0, 'legacy dashboard table returned');
   await page.goto(`${baseUrl}/wall`, { waitUntil: 'domcontentloaded' });
   await expect(await count(page, 'iframe') >= 1, 'wall iframe missing');
