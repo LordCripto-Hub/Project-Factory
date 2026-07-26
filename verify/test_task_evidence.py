@@ -14,6 +14,9 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "bin"))
+
+from evidence_validation import validate_evidence_url
 
 
 def load_script(name: str, path: Path):
@@ -58,6 +61,27 @@ class TaskEvidenceContract(unittest.TestCase):
             "", "/todo/proof/task/file.zip", "result.zip", "application/zip"
         )
         self.assertEqual(kind, "file")
+
+    def test_local_paths_are_rejected_as_link_evidence(self):
+        for value in (
+            "file:///tmp/x.png",
+            r"C:\tmp\x.png",
+            "C:/tmp/x.png",
+            r"\\host\share\x.png",
+            "/home/mp/x.png",
+        ):
+            with self.subTest(value=value):
+                result = validate_evidence_url(value)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error"], "local_evidence_path_rejected")
+                self.assertEqual(result["action"], "use_proof_file")
+        self.assertTrue(validate_evidence_url("https://example.test/x.png")["ok"])
+
+    def test_browser_exposes_broken_media_and_local_path_guidance(self):
+        priorities = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
+        self.assertIn("evidence-preview-error", priorities)
+        self.assertIn("Evidence preview could not be loaded.", priorities)
+        self.assertIn("Use --proof-file <path> to upload local evidence.", priorities)
 
     def test_proof_metadata_is_auditable(self):
         content = b"visual evidence"

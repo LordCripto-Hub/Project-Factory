@@ -2,6 +2,7 @@
 from __future__ import annotations
 import cgi, copy, hashlib, http.client, http.cookies, http.server, io, json, mimetypes, os, pathlib, re, secrets, shutil, subprocess, threading, time
 import urllib.parse, urllib.request
+from evidence_validation import validate_evidence_url
 from mpcommon import *
 from memory_canary import (
     MemoryCanaryError,
@@ -619,6 +620,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if item is not None and getattr(item,"file",None):filename=os.path.basename(item.filename or "upload");ctype=item.type or "";content=item.file.read()
         tid=str(d.get("task_id","") or "");url=str(d.get("url","") or "");body=str(d.get("body","") or "");by=str(d.get("by","") or "")
         if content is None and not body.strip() and not url.strip():return self.json({"ok":False,"error":"evidence_required"},400)
+        if content is None and url.strip():
+            validation=validate_evidence_url(url)
+            if not validation.get("ok"):return self.json(validation,400)
         with STORE_LOCK:
             b=load_board();t=b["tasks"].get(tid)
             if not t:return self.json({"ok":False,"error":"unknown_task"},404)
