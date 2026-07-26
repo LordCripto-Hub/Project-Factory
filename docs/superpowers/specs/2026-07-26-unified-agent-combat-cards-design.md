@@ -61,4 +61,4 @@ TDD contracts must prove:
 
 ## Deployment Gate
 
-Implementation occurs in `feat/hud-unified-agent-cards`. No merge, GitHub push, or live deployment occurs until focused tests and the complete packaged-source isolated Docker verifier pass and Rafa approves deployment.
+Implementation occurs in `feat/hud-unified-agent-cards`. No merge, GitHub push, or live deployment occurs until focused tests and the complete packaged-source isolated Docker verifier pass and the operator approves deployment.
