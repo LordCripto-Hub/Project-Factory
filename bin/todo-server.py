@@ -9,10 +9,13 @@ from memory_canary import (
     append_receipt as append_memory_canary_receipt,
     latest_receipt as latest_memory_canary_receipt,
     load_control as load_memory_canary_control,
+    provider_usage_snapshot,
     receipt_projection as memory_canary_receipt_projection,
     set_control as set_memory_canary_control,
 )
 import memory_comparison as memory_comparison_runtime
+from agent_session import SessionError, session_files
+from operator_telemetry import build_operator_telemetry
 from provider_health import read_health_receipts
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
@@ -29,6 +32,7 @@ PROJECT_SLUG_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MEMORY_COMPARISON_ENABLED=ENV.get("MYPEOPLE_MEMORY_COMPARISON_ENABLED","")=="1"
 MEMORY_COMPARISON_CASES={"cmp-exact-01","cmp-temporal-01","cmp-contradiction-01"}
 MEMORY_COMPARISON_ID_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+OPERATOR_TELEMETRY_MAX_BYTES=128 * 1024
 
 class MemoryComparisonAccessError(ValueError):pass
 
@@ -203,6 +207,26 @@ def proof_file_path(task_id,filename):
 
 def queue_get(path):return http_json(path,base=ENV.get("QUEUE_URL","http://127.0.0.1:9900"))
 
+def build_live_operator_telemetry():
+    roster=load_roster()
+    health=read_health_receipts(
+        os.path.join(ROOT,"run"),
+        float(ENV.get("MYPEOPLE_PROVIDER_HEALTH_STALE_SEC","300")),
+    )
+    def usage_reader(record):
+        if record.get("backend")!="codex":return {}
+        profile=str(record.get("provider_profile") or "")
+        session_id=str(record.get("session_id") or "")
+        if not profile or not session_id:return {}
+        home=os.path.realpath(os.path.join(ROOT,"run","provider-homes","codex",profile))
+        root=os.path.realpath(os.path.join(ROOT,"run","provider-homes","codex"))
+        if os.path.commonpath((root,home))!=root:return {}
+        try:paths=session_files("codex",session_id,codex_home=home)
+        except SessionError:return {}
+        if len(paths)!=1:return {}
+        return provider_usage_snapshot(paths[0],"codex",session_id)
+    return build_operator_telemetry(roster,health,usage_reader=usage_reader)
+
 def geometry():
     out={}
     try:
@@ -303,6 +327,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_bytes(open(path,"rb").read(),200,mimetypes.guess_type(path)[0] or "application/octet-stream",head=head)
         if p=="/todo/board":
             b=load_board();o=copy.deepcopy(b);o["displayOrder"]=ordered_ids(b);o["boardPath"]=BOARD_PATH;o["projectSlugs"]=available_project_slugs();return self.json(o,head=head)
+        if p=="/todo/operator-telemetry":
+            try:o=build_live_operator_telemetry()
+            except Exception:return self.json({"ok":False,"error":"telemetry_unavailable"},503,head=head)
+            if len(json.dumps(o,ensure_ascii=False).encode())>OPERATOR_TELEMETRY_MAX_BYTES:
+                return self.json({"ok":False,"error":"telemetry_too_large"},503,head=head)
+            return self.json(o,head=head)
         if p=="/todo/provider-health":
             rows=read_health_receipts(
                 os.path.join(ROOT,"run"),
