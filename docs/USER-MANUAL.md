@@ -1,6 +1,6 @@
 # MyPeople User Manual
 
-Last reviewed: July 14, 2026.
+Last reviewed: July 26, 2026.
 
 ## Active configuration
 
@@ -58,6 +58,39 @@ docker exec -it mypeople tmux attach -t mc-nightwatch
 ```
 
 Detach without stopping the session with `Ctrl+B`, then `D`.
+
+## Provider health
+
+Read the latest non-secret provider-health receipts without contacting a paid
+model:
+
+```powershell
+docker exec mypeople /home/mp/mypeople/bin/mp providers-status
+```
+
+Refresh from local process and captured-session evidence only:
+
+```powershell
+docker exec mypeople /home/mp/mypeople/bin/mp providers-status --refresh
+```
+
+Each agent is classified as `authenticated`, `expired`, `quota_exhausted`,
+`unreachable`, `unknown`, or `process_dead`. Old observations are marked
+`stale`. A network failure is never reported as an expired credential without
+an explicit authentication rejection.
+
+## Evidence portability
+
+Evidence links accept portable `http` and `https` URLs. Local `file://`, drive,
+UNC, and absolute filesystem paths are rejected because other browsers and the
+container cannot open them. Upload local artifacts instead:
+
+```bash
+mp complete "Implemented and verified" --proof-file /path/to/result.png
+```
+
+Uploads retain SHA-256, MIME type, byte count, author, and timestamp. A broken
+image or video preview shows a visible error while retaining its metadata.
 
 ## Durable control queue
 
