@@ -1,8 +1,8 @@
 # Upstream-Informed Runtime Hardening Design
 
-Date: 2026-07-26  
-Status: Draft for review  
-Branch: `feat/upstream-hardening`  
+Date: 2026-07-26
+Status: Approved and implemented in isolated branch
+Branch: `feat/upstream-hardening`
 Baseline: `origin/main` at `febf5ac2bf3c9129733847e6c6517a71232a3c7c`
 
 ## Purpose
