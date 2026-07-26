@@ -32,18 +32,18 @@ class MemoryCanaryControlContract(unittest.TestCase):
 
     def test_missing_control_defaults_disabled(self):
         control = memory_canary.load_control(self.root)
-        self.assertFalse(control["enabled"])
+        self.assertEqual(control["mode"], "off")
         self.assertEqual(control["allowedProjects"], ["project-factory"])
         self.assertEqual(control["revision"], 1)
 
     def test_enable_is_atomic_private_and_idempotent(self):
         enabled = memory_canary.set_control(
             self.root,
-            enabled=True,
+            mode="manual_canary",
             project="project-factory",
             now=lambda: 100.0,
         )
-        self.assertTrue(enabled["enabled"])
+        self.assertEqual(enabled["mode"], "manual_canary")
         self.assertEqual(enabled["revision"], 2)
         path = self.root / "memory-canary-control.json"
         if os.name != "nt":
@@ -52,7 +52,7 @@ class MemoryCanaryControlContract(unittest.TestCase):
 
         same = memory_canary.set_control(
             self.root,
-            enabled=True,
+            mode="manual_canary",
             project="project-factory",
             now=lambda: 200.0,
         )
@@ -60,10 +60,10 @@ class MemoryCanaryControlContract(unittest.TestCase):
 
         disabled = memory_canary.set_control(
             self.root,
-            enabled=False,
+            mode="off",
             now=lambda: 300.0,
         )
-        self.assertFalse(disabled["enabled"])
+        self.assertEqual(disabled["mode"], "off")
         self.assertEqual(disabled["revision"], 3)
         self.assertEqual(disabled["updatedAt"], 300.0)
 
@@ -72,37 +72,37 @@ class MemoryCanaryControlContract(unittest.TestCase):
         invalid_values = (
             "{broken",
             {
-                "schemaVersion": 1,
-                "enabled": False,
+                    "schemaVersion": 2,
+                    "mode": "off",
                 "allowedProjects": ["project-factory"],
                 "revision": 1,
                 "updatedAt": 0,
                 "extra": True,
             },
             {
-                "schemaVersion": 1,
-                "enabled": "yes",
+                "schemaVersion": 2,
+                "mode": "yes",
                 "allowedProjects": ["project-factory"],
                 "revision": 1,
                 "updatedAt": 0,
             },
             {
-                "schemaVersion": 1,
-                "enabled": False,
+                "schemaVersion": 2,
+                "mode": "off",
                 "allowedProjects": ["project-factory", "project-factory"],
                 "revision": 1,
                 "updatedAt": 0,
             },
             {
-                "schemaVersion": 1,
-                "enabled": False,
+                "schemaVersion": 2,
+                "mode": "off",
                 "allowedProjects": ["other"],
                 "revision": 1,
                 "updatedAt": 0,
             },
             {
-                "schemaVersion": 1,
-                "enabled": False,
+                "schemaVersion": 2,
+                "mode": "off",
                 "allowedProjects": ["project-factory"],
                 "revision": 0,
                 "updatedAt": 0,
@@ -141,12 +141,12 @@ class MemoryCanaryControlContract(unittest.TestCase):
             memory_canary.MemoryCanaryError,
             "canary_project_denied",
         ):
-            memory_canary.set_control(self.root, enabled=True, project="other")
+            memory_canary.set_control(self.root, mode="manual_canary", project="other")
 
     def test_task_authorization_is_explicit(self):
         control = {
             **memory_canary.DEFAULT_CONTROL,
-            "enabled": True,
+            "mode": "manual_canary",
             "revision": 2,
         }
         memory_canary.assert_task_allowed(
@@ -158,7 +158,7 @@ class MemoryCanaryControlContract(unittest.TestCase):
             control,
         )
         failures = (
-            ({**control, "enabled": False}, "canary_disabled"),
+            ({**control, "mode": "off"}, "canary_disabled"),
             (control, "canary_not_requested"),
         )
         for candidate, code in failures:

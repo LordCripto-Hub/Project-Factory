@@ -14,17 +14,18 @@ import time
 CONTROL_NAME = "memory-canary-control.json"
 CONTROL_FIELDS = {
     "schemaVersion",
-    "enabled",
+    "mode",
     "allowedProjects",
     "revision",
     "updatedAt",
 }
 ALLOWED_PROJECT = "project-factory"
+ALLOWED_MODES = {"off", "automatic", "manual_canary"}
 RECEIPT_NAME = "memory-canary-events.jsonl"
 MAX_RECEIPT_BYTES = 16_384
 DEFAULT_CONTROL = {
-    "schemaVersion": 1,
-    "enabled": False,
+    "schemaVersion": 2,
+    "mode": "off",
     "allowedProjects": [ALLOWED_PROJECT],
     "revision": 1,
     "updatedAt": 0,
@@ -42,11 +43,12 @@ def _invalid():
 
 
 def _validate_control(value):
+    value = _upgrade_control(value)
     if not isinstance(value, dict) or set(value) != CONTROL_FIELDS:
         _invalid()
-    if value.get("schemaVersion") != 1:
+    if value.get("schemaVersion") != 2:
         _invalid()
-    if not isinstance(value.get("enabled"), bool):
+    if value.get("mode") not in ALLOWED_MODES:
         _invalid()
     projects = value.get("allowedProjects")
     if (
@@ -67,11 +69,30 @@ def _validate_control(value):
     ):
         _invalid()
     return {
-        "schemaVersion": 1,
-        "enabled": value["enabled"],
+        "schemaVersion": 2,
+        "mode": value["mode"],
         "allowedProjects": [ALLOWED_PROJECT],
         "revision": revision,
         "updatedAt": updated_at,
+    }
+
+
+def _upgrade_control(value):
+    if not isinstance(value, dict):
+        return value
+    if value.get("schemaVersion") != 1:
+        return value
+    legacy_fields = {
+        "schemaVersion", "enabled", "allowedProjects", "revision", "updatedAt"
+    }
+    if set(value) != legacy_fields or not isinstance(value.get("enabled"), bool):
+        return value
+    return {
+        "schemaVersion": 2,
+        "mode": "manual_canary" if value["enabled"] else "off",
+        "allowedProjects": value.get("allowedProjects"),
+        "revision": value.get("revision"),
+        "updatedAt": value.get("updatedAt"),
     }
 
 
@@ -96,22 +117,29 @@ def load_control(runtime_dir, *, missing_ok=True):
 def set_control(
     runtime_dir,
     *,
-    enabled,
+    mode=None,
+    enabled=None,
     project=ALLOWED_PROJECT,
     now=time.time,
 ):
-    if not isinstance(enabled, bool):
-        raise MemoryCanaryError("canary_control_invalid")
+    if mode is not None and enabled is not None:
+        raise MemoryCanaryError("memory_mode_invalid")
+    if enabled is not None:
+        if not isinstance(enabled, bool):
+            raise MemoryCanaryError("canary_control_invalid")
+        mode = "manual_canary" if enabled else "off"
+    if mode not in ALLOWED_MODES:
+        raise MemoryCanaryError("memory_mode_invalid")
     if project != ALLOWED_PROJECT:
         raise MemoryCanaryError("canary_project_denied")
     root = Path(runtime_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
     current = load_control(root)
-    if current["enabled"] is enabled:
+    if current["mode"] == mode:
         return current
     updated = {
         **current,
-        "enabled": enabled,
+        "mode": mode,
         "revision": current["revision"] + 1,
         "updatedAt": now(),
     }
@@ -150,7 +178,7 @@ def assert_task_allowed(task, control):
     if not isinstance(task, dict) or task.get("memoryCanary") is not True:
         raise MemoryCanaryError("canary_not_requested")
     control = _validate_control(control)
-    if not control["enabled"]:
+    if control["mode"] != "manual_canary":
         raise MemoryCanaryError("canary_disabled")
     if (
         task.get("projectSlug") != ALLOWED_PROJECT

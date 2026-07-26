@@ -327,7 +327,11 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise MemoryError("unavailable") from error
         if (
-            control.get("enabled") is not True
+            (
+                control.get("mode") not in {"automatic", "manual_canary"}
+                if control.get("schemaVersion") == 2
+                else control.get("enabled") is not True
+            )
             or control.get("allowedProjects") != ["project-factory"]
             or profile["slug"] != "project-factory"
         ):

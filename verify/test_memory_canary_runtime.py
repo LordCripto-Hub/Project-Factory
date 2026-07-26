@@ -64,7 +64,7 @@ def task(canary=True, project="project-factory", question="Which constraint appl
 def enabled_control():
     return {
         **memory_canary.DEFAULT_CONTROL,
-        "enabled": True,
+        "mode": "manual_canary",
         "revision": 2,
         "updatedAt": 50.0,
     }
@@ -144,7 +144,7 @@ class MemoryCanaryRuntimeContract(unittest.TestCase):
         for candidate_task, control, code in (
             (
                 task(),
-                {**enabled_control(), "enabled": False},
+                {**enabled_control(), "mode": "off"},
                 "canary_disabled",
             ),
             (
@@ -171,7 +171,7 @@ class MemoryCanaryRuntimeContract(unittest.TestCase):
         result = memory_canary.compile_attempt(
             task=task(),
             profile=profile(),
-            control={**enabled_control(), "enabled": False},
+            control={**enabled_control(), "mode": "off"},
             compile_spec=project_context.compile_task_spec,
             recall=lambda request: calls.append(request),
             bypass=True,

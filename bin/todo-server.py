@@ -352,7 +352,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json({
                 "ok":True,
                 "control":{
-                    "enabled":control["enabled"],
+                    "enabled":control.get("mode", "manual_canary" if control.get("enabled") else "off")!="off",
+                    "mode":control.get("mode", "manual_canary" if control.get("enabled") else "off"),
                     "allowedProjects":control["allowedProjects"],
                     "revision":control["revision"],
                 },
@@ -496,7 +497,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except MemoryCanaryError as error:
                 return self.json({"ok":False,"error":error.code},400)
             return self.json({"ok":True,"control":{
-                "enabled":control["enabled"],
+                "enabled":control.get("mode", "manual_canary" if control.get("enabled") else "off")!="off",
+                "mode":control.get("mode", "manual_canary" if control.get("enabled") else "off"),
                 "allowedProjects":control["allowedProjects"],
                 "revision":control["revision"],
             }})

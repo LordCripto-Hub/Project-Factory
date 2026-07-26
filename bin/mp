@@ -2416,7 +2416,26 @@ def memory_canary_command(ns):
     except MemoryCanaryError as error:
         raise SystemExit(error.code) from error
     print(json.dumps({
-        "enabled":record["enabled"],
+        "enabled":record["mode"]=="manual_canary",
+        "mode":record["mode"],
+        "allowedProjects":record["allowedProjects"],
+        "revision":record["revision"],
+    },sort_keys=True))
+
+def memory_mode_command(ns):
+    runtime_dir=os.path.realpath(os.path.join(ROOT,"run"))
+    try:
+        if ns.memory_mode_action=="status":
+            record=load_memory_canary_control(runtime_dir)
+        else:
+            selected=ns.memory_mode_action.replace("-","_")
+            record=set_memory_canary_control(
+                runtime_dir,mode=selected,project="project-factory"
+            )
+    except MemoryCanaryError as error:
+        raise SystemExit(error.code) from error
+    print(json.dumps({
+        "mode":record["mode"],
         "allowedProjects":record["allowedProjects"],
         "revision":record["revision"],
     },sort_keys=True))
@@ -2489,6 +2508,11 @@ def parser():
     q=sub.add_parser("providers-pause");q.add_argument("--reason",default="operator requested");q.set_defaults(fn=providers_pause)
     q=sub.add_parser("providers-resume");q.set_defaults(fn=providers_resume)
     q=sub.add_parser("providers-status");q.add_argument("--refresh",action="store_true");q.set_defaults(fn=providers_status)
+    memory=sub.add_parser("memory")
+    memory_sub=memory.add_subparsers(dest="memory_verb",required=True)
+    memory_mode=memory_sub.add_parser("mode")
+    memory_mode.add_argument("memory_mode_action",choices=["status","off","automatic","manual-canary"])
+    memory_mode.set_defaults(fn=memory_mode_command)
     canary=sub.add_parser("memory-canary")
     canary_sub=canary.add_subparsers(dest="memory_canary_action",required=True)
     canary_sub.add_parser("status")
