@@ -83,6 +83,9 @@ class RuntimeImageContract(unittest.TestCase):
             "*.p12",
         ):
             self.assertIn(required, ignored)
+        self.assertNotIn("**/*credential*", ignored)
+        self.assertNotIn("**/*token*", ignored)
+        self.assertTrue((ROOT / "bin" / "publish-with-credential").is_file())
 
 
 if __name__ == "__main__":
