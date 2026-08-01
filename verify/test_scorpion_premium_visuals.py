@@ -57,6 +57,11 @@ class PremiumScorpionVisualContract(unittest.TestCase):
         self.assertNotIn("QUEUE_SECRET", capture)
         self.assertNotIn("OPENAI_API_KEY", capture)
 
+    def test_visual_capture_targets_the_unified_hud_cards(self):
+        capture = (ROOT / "verify" / "capture_scorpion_visuals.js").read_text(encoding="utf-8")
+        self.assertIn("#telemetryCards .combat-card", capture)
+        self.assertNotIn("#agentsTable", capture)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -282,8 +282,8 @@ async function capturePhase() {
       await page.locator('li.task[data-id="visual-alpha"] .task-text').click();
       await page.waitForSelector("body.modal-open");
     }},
-    { name: "hud-healthy", route: "/dashboard", ready: "#agentsTable tbody tr" },
-    { name: "hud-stale", route: "/dashboard", ready: "#agentsTable tbody tr", prepare: async (page) => {
+    { name: "hud-healthy", route: "/dashboard", ready: "#telemetryCards .combat-card" },
+    { name: "hud-stale", route: "/dashboard", ready: "#telemetryCards .combat-card", prepare: async (page) => {
       await page.evaluate(() => { document.querySelector("#live").textContent = "stale"; });
     }},
     { name: "wall", route: "/wall", ready: ".tile" },
