@@ -18,6 +18,7 @@ from agent_session import SessionError, session_files
 from operator_telemetry import build_operator_telemetry
 from provider_health import read_health_receipts
 from memory_observability import get_memory_projection
+from runtime_identity import read_runtime_identity
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
@@ -310,7 +311,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def route_get(self,head=False):
         u=urllib.parse.urlparse(self.path);p=u.path
         if p=="/favicon.ico":return self.send_bytes(b"",204,"image/x-icon",head=head)
-        if p=="/health":return self.json({"status":"ok","uptime":int(time.time()-START),"build":max((int(os.path.getmtime(os.path.join(ROOT,"bin",x))) for x in ("todos.html","mypeople-ui.css") if os.path.exists(os.path.join(ROOT,"bin",x))),default=0)},head=head)
+        if p=="/health":
+            identity=read_runtime_identity()
+            return self.json({"status":"ok","uptime":int(time.time()-START),"build":identity["build"],"runtimeIdentity":identity},head=head)
         if p=="/assets/mypeople-ui.css":return self.asset("mypeople-ui.css","text/css; charset=utf-8",head)
         if p=="/assets/board-polling.js":return self.asset("board-polling.js","text/javascript; charset=utf-8",head)
         if p=="/assets/visual-viewport.js":return self.asset("visual-viewport.js","text/javascript; charset=utf-8",head)

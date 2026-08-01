@@ -398,6 +398,7 @@
           <div class="meta">
             <span id="count">0 agents</span> · refreshed
             <span id="refreshed">—</span> · <span id="live">live</span>
+            · <span id="buildIdentity">build unknown</span>
           </div>
         </div>
         <a class="nav" href="/">TODO ↗</a>
@@ -437,6 +438,7 @@
         lastTelemetry = { agents: [] },
         telemetryStale = false,
         memoryTelemetry = { mode: "off", last: null },
+        runtimeIdentity = null,
         controlCapabilities = { agents: [], models: [] };
       const coreOperationState = new Map();
       async function get(path, options) {
@@ -898,6 +900,14 @@
             memoryTelemetry = await get("/todo/memory-canary");
           } catch {
             memoryTelemetry = { mode: "off", last: null };
+          }
+          try {
+            const health = await get("/health");
+            runtimeIdentity = health.runtimeIdentity || null;
+            const identity = runtimeIdentity || {};
+            $("#buildIdentity").textContent = `${identity.sha || "unknown"} · ${identity.image || "unknown"}`;
+          } catch {
+            $("#buildIdentity").textContent = "build unknown";
           }
           $("#live").textContent = telemetryStale ? "stale" : "live";
           render();

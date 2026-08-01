@@ -4,6 +4,7 @@ import http.client, http.cookies, http.server, json, os, secrets, threading, tim
 import urllib.parse
 from mpcommon import *
 import core_agent_controls
+from runtime_identity import read_runtime_identity
 
 HOST=ENV.get("BIND_ADDR","0.0.0.0"); PORT=int(ENV.get("HUD_PORT","9900")); TODO_PORT=int(ENV.get("TODO_PORT","9933"))
 SECRET=ENV["QUEUE_SECRET"]; DEAD=float(ENV.get("QUEUE_DEAD_AFTER","20")); START=time.time()
@@ -173,7 +174,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def route(self,head=False):
         path=urllib.parse.urlparse(self.path).path
         if path=="/favicon.ico":self.send_bytes(b"",204,"image/x-icon",head=head);return
-        if path=="/health":return self.json({"status":"ok","uptime":int(now()-START),"build":int(os.path.getmtime(os.path.join(ROOT,"bin","dashboard.html"))) if os.path.exists(os.path.join(ROOT,"bin","dashboard.html")) else 0},head=head)
+        if path=="/health":
+            identity=read_runtime_identity()
+            return self.json({"status":"ok","uptime":int(now()-START),"build":identity["build"],"runtimeIdentity":identity},head=head)
         if path in ("/dashboard","/dashboard/"):return self.page("dashboard.html",head)
         if path=="/" or path.startswith(("/todos","/wall","/terminal-graph","/terminal","/assets/","/voice/","/todo/","/nightwatch/")):return self.proxy(head)
         if not self.authed():return self.json({"ok":False,"error":"unauthorized"},401,head=head)
