@@ -172,6 +172,79 @@ class ProjectPublisherContract(unittest.TestCase):
                         ttl_seconds=values.get("ttl_seconds", 900),
                     )
 
+    def test_merge_when_green_transitions_to_merged_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            approval = self.create(
+                root,
+                mode="pr_merge_when_green",
+                head_branch="task/task-123-project-factory",
+                base_branch="main",
+                merge_method="squash",
+                evidence_digest="e" * 64,
+            )
+            approval_id = approval["approvalId"]
+            self.module.approve_request(approval_id, "CEO", approvals_dir=str(root / "approvals"), now=1001)
+            self.module.record_branch_push(approval_id, COMMIT, approvals_dir=str(root / "approvals"), now=1002)
+            self.module.record_pull_request(
+                approval_id, 42,
+                "https://github.com/LordCripto-Hub/Project-Factory/pull/42",
+                COMMIT,
+                approvals_dir=str(root / "approvals"), now=1003,
+            )
+            self.module.record_checks(
+                approval_id, "passed", "f" * 64,
+                approvals_dir=str(root / "approvals"), now=1004,
+            )
+            merged = self.module.record_merge(
+                approval_id, "c" * 40,
+                approvals_dir=str(root / "approvals"), now=1005,
+            )
+            self.assertEqual(merged["status"], "merged")
+            with self.assertRaises(self.module.PublisherError):
+                self.module.record_merge(
+                    approval_id, "d" * 40,
+                    approvals_dir=str(root / "approvals"), now=1006,
+                )
+
+    def test_merge_when_green_rejects_changed_head_and_failed_checks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            approval = self.create(
+                root,
+                mode="pr_merge_when_green",
+                head_branch="task/task-123-project-factory",
+                base_branch="main",
+                merge_method="squash",
+                evidence_digest="e" * 64,
+            )
+            approval_id = approval["approvalId"]
+            self.module.approve_request(approval_id, "CEO", approvals_dir=str(root / "approvals"), now=1001)
+            self.module.record_branch_push(approval_id, COMMIT, approvals_dir=str(root / "approvals"), now=1002)
+            with self.assertRaises(self.module.PublisherError):
+                self.module.record_pull_request(
+                    approval_id, 42,
+                    "https://github.com/LordCripto-Hub/Project-Factory/pull/42",
+                    "b" * 40,
+                    approvals_dir=str(root / "approvals"), now=1003,
+                )
+            self.module.record_pull_request(
+                approval_id, 42,
+                "https://github.com/LordCripto-Hub/Project-Factory/pull/42",
+                COMMIT,
+                approvals_dir=str(root / "approvals"), now=1003,
+            )
+            blocked = self.module.record_checks(
+                approval_id, "failed", "f" * 64,
+                approvals_dir=str(root / "approvals"), now=1004,
+            )
+            self.assertEqual(blocked["status"], "merge_blocked")
+            with self.assertRaises(self.module.PublisherError):
+                self.module.record_merge(
+                    approval_id, "c" * 40,
+                    approvals_dir=str(root / "approvals"), now=1005,
+                )
+
     def save_profile(self, root: pathlib.Path):
         profiles = root / "profiles"
         profiles.mkdir()
