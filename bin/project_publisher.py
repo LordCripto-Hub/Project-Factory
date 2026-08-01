@@ -318,12 +318,15 @@ def publish(
         record = load_json(path, None)
         if not isinstance(record, dict):
             raise PublisherError("approval not found")
-        if record.get("mode") == "draft_pr" and record.get("status") == "pr_created":
+        if record.get("mode") in {"draft_pr", "pr_merge_when_green"} and record.get("status") in {"pr_created", "waiting_checks", "merge_blocked"}:
             return record
         if current >= float(record.get("expiresAt") or 0):
             raise PublisherError("approval has expired")
-        if record.get("mode") == "draft_pr" and record.get("status") == "branch_pushed":
+        if record.get("mode") in {"draft_pr", "pr_merge_when_green"} and record.get("status") == "branch_pushed":
             return record
+        if record.get("mode") == "pr_merge_when_green" and record.get("status") in {"approved", "validating"}:
+            _preflight(record, load_profile(record["projectSlug"], profiles_root(profiles_dir)), runner)
+            return {**record, "status": record["status"], "validatedAt": current}
         if record.get("status") != "pending":
             raise PublisherError("approval is not pending")
         profile = load_profile(record["projectSlug"], profiles_root(profiles_dir))
