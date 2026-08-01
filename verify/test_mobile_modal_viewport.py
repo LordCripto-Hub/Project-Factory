@@ -26,6 +26,8 @@ class MobileModalViewportTests(unittest.TestCase):
         self.assertIn("100dvh", css)
         self.assertIn("min-width:24px", css.replace(" ", ""))
         self.assertIn("min-height:24px", css.replace(" ", ""))
+        self.assertIn('input[type="checkbox"]', css)
+        self.assertIn(".navlink,", css)
         self.assertIn("font-size:16px", css.replace(" ", ""))
 
 
