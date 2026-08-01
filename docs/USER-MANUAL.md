@@ -938,3 +938,20 @@ status strip on Project Factory cards. These surfaces receive only bounded
 metadata; queries, claim text, credentials, and provider transcripts are never
 projected. Provider token usage remains `not measured` unless the active
 provider exposes counters attributable to the same session.
+## Boss SSH publication workflow
+
+The publication path is intentionally asymmetric. Engineers work in isolated project workspaces and receive no SSH key, SSH agent socket, GitHub token, Git credential helper, or GitHub CLI session. They can edit, test, and commit locally, then return the exact head SHA and evidence to Boss.
+
+Boss validates the TaskSpec, project profile, clean worktree, branch, repository, SHA, and verification evidence. Boss then creates a CEO approval request in Priorities. The approval card shows the repository, task branch, abbreviated SHA, target `main`, merge method, verification state, and expiry. One approval authorizes only the exact transaction: push the approved branch, create or reconcile its PR, wait for required checks, and merge when green.
+
+The host-only broker is invoked by the Windows bridge:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Invoke-MyPeopleSshPublication.ps1 -ApprovalId <approval-id>
+```
+
+The broker extracts a temporary Git bundle from the Docker workspace, pushes the approved SHA through the host's verified `git@github.com` SSH identity, and deletes the bundle. It then uses the host GitHub CLI session only to create/reconcile the matching PR, inspect checks, and merge with `--match-head-commit`. The private key and SSH agent never enter Docker. No command accepts a free-form remote, key path, token, shell expression, force flag, or administrator bypass.
+
+Publication stops safely when approval expires, the branch head changes, the repository/base does not match, SSH or GitHub CLI is unavailable, a check fails, the PR is not mergeable, or the merge wait times out. A pushed branch or existing matching PR can be reconciled idempotently; a changed SHA always requires a new CEO approval. Priorities records only sanitized state, URLs, SHAs, check summaries, and merge results.
+
+The HUD reports only bounded broker health: `available`, `ssh_unavailable`, `github_cli_unavailable`, `authentication_failed`, `rate_limited`, or `unknown`. It never displays account details, key paths, fingerprints, tokens, or raw GitHub responses.
