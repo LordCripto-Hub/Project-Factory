@@ -14,6 +14,8 @@ class BossPublicationApprovalApiContract(unittest.TestCase):
         self.assertIn('"/todo/publication-approvals"', SERVER)
         self.assertIn('"/todo/publication-approval"', SERVER)
         self.assertIn("ceo_approval_required", SERVER)
+        self.assertIn('"/todo/publisher-health"', SERVER)
+        self.assertIn("PUBLISHER_HEALTH_STATES", SERVER)
         self.assertIn('kind!="browser"', SERVER)
         self.assertIn("repositorySlug", SERVER)
         for secret in ("transactionNonce", "workspace", "password", "private_key", "token"):
@@ -27,6 +29,13 @@ class BossPublicationApprovalApiContract(unittest.TestCase):
         self.assertIn("textContent", BOARD)
         self.assertNotIn("innerHTML", BOARD)
         self.assertTrue(re.search(r"/todo/publication-approval", BOARD))
+
+    def test_hud_exposes_only_bounded_publisher_health(self):
+        dashboard = (ROOT / "bin" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn("publisherHealth", dashboard)
+        self.assertIn("/todo/publisher-health", SERVER)
+        for secret in ("privateKey", "sshFingerprint", "GH_TOKEN", "accountEmail"):
+            self.assertNotIn(secret, dashboard)
 
 
 if __name__ == "__main__":

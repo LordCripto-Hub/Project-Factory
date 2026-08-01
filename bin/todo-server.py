@@ -47,6 +47,8 @@ PUBLIC_APPROVAL_FIELDS={
     "shortSha", "baseBranch", "mergeMethod", "expiresAt", "status",
     "verificationStatus",
 }
+PUBLISHER_HEALTH_PATH=os.path.join(ROOT,"run","publisher-health.json")
+PUBLISHER_HEALTH_STATES={"available","ssh_unavailable","github_cli_unavailable","authentication_failed","rate_limited","unknown"}
 
 class MemoryComparisonAccessError(ValueError):pass
 
@@ -77,6 +79,12 @@ def publication_approval_projection(root=None):
         }
         out.append({key:item[key] for key in PUBLIC_APPROVAL_FIELDS})
     return out
+
+def publisher_health_projection(path=PUBLISHER_HEALTH_PATH):
+    value=load_json(path,{})
+    if not isinstance(value,dict):value={}
+    state=value.get("state") if value.get("state") in PUBLISHER_HEALTH_STATES else "unknown"
+    return {"state":state,"checkedAt":value.get("checkedAt"),"reasonCode":value.get("reasonCode") if isinstance(value.get("reasonCode"),str) and len(value.get("reasonCode"))<=64 else None}
 
 def validate_project_slug(value,*,allow_empty=False):
     value=str(value or "").strip()
@@ -387,6 +395,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 float(ENV.get("MYPEOPLE_PROVIDER_HEALTH_STALE_SEC","300")),
             )
             return self.json({"ok":True,"health":rows},head=head)
+        if p=="/todo/publisher-health":
+            return self.json({"ok":True,**publisher_health_projection()},head=head)
         if p=="/todo/publication-approvals":
             return self.json({"ok":True,"approvals":publication_approval_projection()},head=head)
         if p=="/todo/memory-canary":
