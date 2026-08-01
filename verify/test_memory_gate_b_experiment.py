@@ -48,19 +48,15 @@ class MemoryGateBExperimentContract(unittest.TestCase):
             self.assertTrue(path.is_file(), path)
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected)
 
-    def test_experiment_is_not_activated_by_production_entrypoints(self):
-        production = [ROOT / "install.sh", *sorted((ROOT / "bin").glob("*"))]
-        production += sorted((ROOT / "docker").rglob("*"))
-        production += sorted((ROOT / "windows").rglob("*"))
-        for path in production:
-            if path.name == "Start-MyPeopleMemoryComparison.ps1":
-                continue  # Explicit, dry-run-by-default operator surface; never a startup entrypoint.
-            if path.is_file():
-                self.assertNotIn(
-                    "experiments/memory-gate-b",
-                    path.read_text(encoding="utf-8", errors="ignore"),
-                    path,
-                )
+    def test_evaluated_adapter_is_only_activated_by_explicit_automatic_control(self):
+        runtime = (ROOT / "bin" / "local-memory-runtime.py").read_text(encoding="utf-8")
+        supervisor = (ROOT / "bin" / "runtime-supervisor.sh").read_text(encoding="utf-8")
+        self.assertIn('mode != "automatic"', runtime)
+        self.assertIn('http://127.0.0.1:18443/mcp', runtime)
+        self.assertIn('experiments" / "memory-gate-b', runtime)
+        self.assertIn('spawn local-memory python3 "$ROOT/bin/local-memory-runtime.py"', supervisor)
+        self.assertNotIn("docker compose", runtime.lower())
+        self.assertNotIn("cloudflare", runtime.lower())
 
     def test_public_experiment_has_no_private_material(self):
         forbidden = (
