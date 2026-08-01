@@ -68,7 +68,7 @@ The following values were recorded before disposable work and matched after fina
 - Board SHA-256: `e025a45a3fe7eaaedc1c9218251568854449637ece0787e2f608d97ebff20ac4`
 - Runtime state: `running`
 
-No disposable MyPeople verifier container remained running. The candidate image was built but was not deployed.
+No disposable MyPeople verifier container remained running after verification.
 
 The plan mentioned a stable-roster SHA, but no pre-run roster digest was captured. Therefore this report does not claim a roster-digest comparison. The unchanged image, start time, restart count, Board digest, and absence of a second running MyPeople container are the available non-interference evidence.
 
@@ -76,8 +76,18 @@ The plan mentioned a stable-roster SHA, but no pre-run roster digest was capture
 
 - The initial candidate reported three vulnerabilities in the `memory-gateway` dependency tree: two moderate findings caused by `@hono/node-server` through MCP SDK 1.29.0, and one high-severity `fast-uri` finding. The approved follow-up upgraded `@modelcontextprotocol/sdk` to 1.30.0 without a major-version change; the final audit reports zero known vulnerabilities.
 - Memory readiness proves that the local supervised adapter is available; retrieval quality still depends on project controls, query relevance, and the locked dataset.
-- The implementation has passed isolated verification but has not yet been exercised against live state. Deployment requires an explicit approval and the existing backup, migration, health, and rollback gates.
+- Provider authentication and quota health remain independent from code deployment and must be monitored through the existing HUD/provider controls.
 
-## Deployment Recommendation
+## Live Deployment
 
-The candidate is technically ready for a gated live deployment. Merge, push, and deployment remain intentionally pending explicit user approval.
+The approved backup-first deployment completed successfully under transaction `20260801T194304Z`.
+
+- Deployed source SHA: `9661dfdf5d3d6051d04531df53a3d8083427a94f`
+- Live image: `mypeople-node:upgrade-20260801T194304Z`
+- Board SHA-256 remained `e025a45a3fe7eaaedc1c9218251568854449637ece0787e2f608d97ebff20ac4`.
+- Stable-roster SHA-256 remained `3896ac9e8bcf7b22925a1b80de71851537b3cd18c5039967a0e88914c072e4f8`.
+- Board, Graph, HUD, and terminal health checks passed.
+- Local hybrid-memory readiness reported `ready` in `automatic` mode.
+- The protected backup and rollback image were retained locally.
+
+GitHub publication remains a separate operation.
