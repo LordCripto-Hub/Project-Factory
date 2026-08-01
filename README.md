@@ -167,6 +167,12 @@ The live transaction retains the old container as `mypeople-pre-volumes-<timesta
 
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Cleanup of preserved containers, images, backups, or restore-test volumes is a separate human-approved operation.
 
+### Boss SSH publication broker
+
+Engineers never receive GitHub credentials. After an engineer completes a task, Boss verifies the exact commit, branch, repository, and evidence, then submits a CEO approval in Priorities. The approval is bound to one task, one repository, one task branch, one 40-character SHA, and `main` as the base.
+
+After CEO approval, the host-only publication broker uses the operator's existing SSH access to push that exact commit, create or reconcile the pull request, wait for required checks, and merge only when GitHub reports the protected PR green. The broker never copies private keys, SSH sockets, tokens, or GitHub CLI configuration into Docker. Direct pushes, force pushes, administrator bypass, changed head SHAs, and failed checks are rejected.
+
 Cloudflare memory remains disabled during this migration. A separate, local,
 read-only one-card canary may be enabled explicitly after backup, restore,
 launcher recovery, and rollback are verified; it is never part of normal startup.
