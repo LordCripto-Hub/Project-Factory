@@ -131,6 +131,34 @@ class ProjectPublisherContract(unittest.TestCase):
         values.update(overrides)
         return self.module.create_approval(**values)
 
+    def test_duplicate_retry_is_idempotent_for_same_commit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            first = self.create(root, id_factory=lambda: "b" * 24)
+            second = self.create(root, id_factory=lambda: "c" * 24, now=1001.0)
+            self.assertEqual(second["approvalId"], first["approvalId"])
+            self.assertEqual(len(list((root / "approvals").glob("[0-9a-f]" * 24 + ".json"))), 1)
+
+    def test_new_commit_supersedes_previous_attempt_for_same_task(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            first = self.create(root, id_factory=lambda: "b" * 24)
+            second = self.create(root, commit="c" * 40, id_factory=lambda: "d" * 24, now=1001.0)
+            old = json.loads((root / "approvals" / (first["approvalId"] + ".json")).read_text(encoding="utf-8"))
+            self.assertEqual(old["status"], "superseded")
+            self.assertEqual(old["supersededBy"], second["approvalId"])
+            self.assertEqual(second["status"], "pending")
+
+    def test_legacy_projection_selection_prefers_new_attempt_then_progress(self):
+        records = [
+            {"approvalId": "a" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pr_created", "createdAt": 10},
+            {"approvalId": "b" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pending", "createdAt": 11},
+            {"approvalId": "c" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "2" * 40, "status": "pending", "createdAt": 12},
+        ]
+        current = self.module.select_current_approvals(records)
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0]["approvalId"], "c" * 24)
+
     def test_merge_when_green_approval_binds_exact_actions_and_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)

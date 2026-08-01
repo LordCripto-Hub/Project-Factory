@@ -30,6 +30,20 @@ PUBLISH_MODES = {"direct_main", "draft_pr"}
 MERGE_METHODS = {"squash", "merge", "rebase"}
 APPROVED_ACTIONS = ["push_branch", "create_pr", "merge_when_green"]
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
+ACTIVE_APPROVAL_STATUSES = frozenset({
+    "pending", "pending_approval", "approved", "validating", "branch_pushed",
+    "pr_created", "waiting_checks", "merge_blocked",
+})
+_APPROVAL_PROGRESS = {
+    "pending": 0,
+    "pending_approval": 0,
+    "approved": 1,
+    "validating": 2,
+    "branch_pushed": 3,
+    "pr_created": 4,
+    "waiting_checks": 5,
+    "merge_blocked": 6,
+}
 
 
 class PublisherError(RuntimeError):
@@ -139,6 +153,53 @@ def _validate_draft_pr_fields(base_branch: str, head_branch: str, title: str, bo
         raise PublisherError("draft PR body exceeds 8000 characters")
 
 
+def approval_logical_key(record: dict) -> tuple[str, ...]:
+    """Return the publication intent identity, excluding the commit attempt."""
+    return (
+        str(record.get("taskId") or ""),
+        str(record.get("projectSlug") or ""),
+        str(record.get("repository") or ""),
+        str(record.get("mode") or "direct_main"),
+        str(record.get("branch") or ""),
+        str(record.get("baseBranch") or ""),
+        str(record.get("headBranch") or ""),
+    )
+
+
+def select_current_approvals(records: list[dict]) -> list[dict]:
+    """Collapse legacy duplicates to one visible record per publication intent.
+
+    A newer commit is a newer attempt. For duplicate records of that same attempt,
+    prefer the record furthest through the publication lifecycle.
+    """
+    groups: dict[tuple[str, ...], list[dict]] = {}
+    for record in records:
+        if not isinstance(record, dict) or record.get("status") not in ACTIVE_APPROVAL_STATUSES:
+            continue
+        groups.setdefault(approval_logical_key(record), []).append(record)
+    selected: list[dict] = []
+    for candidates in groups.values():
+        by_commit: dict[str, list[dict]] = {}
+        for record in candidates:
+            by_commit.setdefault(str(record.get("commit") or ""), []).append(record)
+        newest_commit = max(
+            by_commit,
+            key=lambda commit: max(
+                (float(item.get("createdAt") or 0), str(item.get("approvalId") or ""))
+                for item in by_commit[commit]
+            ),
+        )
+        selected.append(max(
+            by_commit[newest_commit],
+            key=lambda item: (
+                _APPROVAL_PROGRESS.get(str(item.get("status") or ""), -1),
+                float(item.get("updatedAt") or item.get("createdAt") or 0),
+                str(item.get("approvalId") or ""),
+            ),
+        ))
+    return selected
+
+
 def create_approval(
     *,
     task_id: str,
@@ -201,16 +262,9 @@ def create_approval(
         _validate_draft_pr_fields(base_branch, head_branch, pr_title, pr_body)
         if base_branch != branch:
             raise PublisherError("draft PR base branch must match the approved workspace branch")
-    approval_id = id_factory()
-    if not APPROVAL_ID.fullmatch(approval_id):
-        raise PublisherError("approval ID generator returned an invalid value")
     root = approvals_root(approvals_dir)
-    path = approval_path(approval_id, root)
-    if os.path.exists(path):
-        raise PublisherError("approval ID collision")
     record = {
         "schemaVersion": 2 if mode == "pr_merge_when_green" else 1,
-        "approvalId": approval_id,
         "status": "pending",
         "taskId": task_id,
         "projectSlug": project_slug,
@@ -242,7 +296,41 @@ def create_approval(
             "approvedActions": list(APPROVED_ACTIONS),
             "transactionNonce": secrets.token_hex(32),
         })
-    atomic_json(path, record, mode=0o600)
+    os.makedirs(root, exist_ok=True)
+    logical_key = approval_logical_key(record)
+    with json_lock(os.path.join(root, ".approvals")):
+        existing: list[tuple[dict, str]] = []
+        for name in os.listdir(root):
+            if not re.fullmatch(r"[0-9a-f]{24}\.json", name):
+                continue
+            item = load_json(os.path.join(root, name), None)
+            if isinstance(item, dict):
+                existing.append((item, os.path.join(root, name)))
+        for item, _item_path in existing:
+            if item.get("status") not in ACTIVE_APPROVAL_STATUSES:
+                continue
+            if approval_logical_key(item) != logical_key:
+                continue
+            if str(item.get("commit") or "") == commit and float(item.get("expiresAt") or 0) > current:
+                return item
+
+        approval_id = id_factory()
+        if not APPROVAL_ID.fullmatch(approval_id):
+            raise PublisherError("approval ID generator returned an invalid value")
+        path = approval_path(approval_id, root)
+        if os.path.exists(path):
+            raise PublisherError("approval ID collision")
+        record["approvalId"] = approval_id
+        for item, item_path in existing:
+            if item.get("status") not in ACTIVE_APPROVAL_STATUSES:
+                continue
+            if approval_logical_key(item) != logical_key:
+                continue
+            item["status"] = "superseded"
+            item["supersededBy"] = approval_id
+            item["supersededAt"] = current
+            atomic_json(item_path, item, mode=0o600)
+        atomic_json(path, record, mode=0o600)
     return record
 
 

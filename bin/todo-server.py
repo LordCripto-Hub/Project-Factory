@@ -20,11 +20,13 @@ from provider_health import read_health_receipts
 from memory_observability import get_memory_projection
 from runtime_identity import read_runtime_identity
 from project_publisher import (
+    ACTIVE_APPROVAL_STATUSES,
     PublisherError,
     approvals_root,
     approve_request as approve_publication_request,
     get_approval,
     reject_request as reject_publication_request,
+    select_current_approvals,
 )
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
@@ -53,7 +55,7 @@ PUBLISHER_HEALTH_STATES={"available","ssh_unavailable","github_cli_unavailable",
 class MemoryComparisonAccessError(ValueError):pass
 
 def publication_approval_projection(root=None):
-    out=[]
+    out=[]; records=[]
     directory=approvals_root(root)
     try:names=sorted(os.listdir(directory))
     except OSError:return out
@@ -61,7 +63,9 @@ def publication_approval_projection(root=None):
         if not name.endswith(".json") or not re.fullmatch(r"[0-9a-f]{24}\.json",name):continue
         try:record=get_approval(name[:-5],directory)
         except (PublisherError,OSError,ValueError):continue
-        if record.get("status") not in {"pending", "pending_approval", "approved", "validating", "branch_pushed", "pr_created", "waiting_checks", "merge_blocked"}:continue
+        if record.get("status") not in ACTIVE_APPROVAL_STATUSES:continue
+        records.append(record)
+    for record in select_current_approvals(records):
         repository=str(record.get("repository") or "")
         slug=repository.removeprefix("https://github.com/").removesuffix(".git")
         item={
