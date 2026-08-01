@@ -216,3 +216,7 @@ Completion of implementation does not authorize deployment. The final report mus
 - interactions and residual risks.
 
 Merge, GitHub publication, and live deployment require a separate explicit approval after that report.
+
+## Verification Result
+
+The isolated implementation was verified at commit `3446b2bfd66806237532018574c2e96aaa1ce37a`. Focused contracts completed with 36 passes and 3 intentionally disabled live-pilot skips. The packaged candidate passed the full disposable-Docker verifier in 256.1 seconds. Fourteen network-disabled desktop/mobile captures reported no external requests, overflow, unnamed controls, or undersized interactive targets. The live image, start time, restart count, and Board SHA-256 remained unchanged. Full evidence and residual risks are recorded in [`../../verification/operator-reliability-2026-08-01.md`](../../verification/operator-reliability-2026-08-01.md).

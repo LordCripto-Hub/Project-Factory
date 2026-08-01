@@ -1,0 +1,287 @@
+{
+  "fixture": "sanitized-scorpion-v1",
+  "sourceCommit": "039a62988625369f3f86c055cd476b0080395daa",
+  "phase": "after",
+  "captures": [
+    {
+      "phase": "after",
+      "surface": "priorities-list",
+      "route": "/",
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 900,
+      "file": "priorities-list-desktop.png",
+      "bytes": 484551,
+      "sha256": "4378417168452e060e21323b7a32fe6156d86c4bbc9a1ea4d1a01e2e4777d8ed",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 23,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "priorities-detail",
+      "route": "/",
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 900,
+      "file": "priorities-detail-desktop.png",
+      "bytes": 369423,
+      "sha256": "a484aa3752573435491be12451a6b66decbb1d5884beb026900d8aed5504eb60",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 39,
+        "unnamedControls": 0,
+        "undersizedControls": 1,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "hud-healthy",
+      "route": "/dashboard",
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 900,
+      "file": "hud-healthy-desktop.png",
+      "bytes": 125848,
+      "sha256": "d83e54faa396ad9d9d43b8d72e2d22bfcefe79168941325c83b958423f582800",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 11,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "hud-stale",
+      "route": "/dashboard",
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 900,
+      "file": "hud-stale-desktop.png",
+      "bytes": 125851,
+      "sha256": "5534562cbcc5e1e1d7300ff5480d2e21be4687f01af4342741b8fcc73ae24e50",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 11,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "terminal-graph",
+      "route": "/terminal-graph",
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 900,
+      "file": "terminal-graph-desktop.png",
+      "bytes": 156455,
+      "sha256": "6dbc2f59f6d9c80c108454e8a1d4d08be904dc3c2066b0e7f55c0c7766691d96",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 14,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "terminal-graph-detail",
+      "route": "/terminal-graph",
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 900,
+      "file": "terminal-graph-detail-desktop.png",
+      "bytes": 131858,
+      "sha256": "b2c3c5a351fee3df6f1bc23c459fa7103f573e466062aa3a2379276f41b36b46",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 26,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "terminal",
+      "route": "/terminal?agent=forge%2Fmain%3Aeng-3",
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 900,
+      "file": "terminal-desktop.png",
+      "bytes": 22044,
+      "sha256": "aa39b93ec8b0577323aa177c01f7994cb9cd05255e99705eb492123de8efc873",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 0,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "priorities-list",
+      "route": "/",
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "file": "priorities-list-mobile.png",
+      "bytes": 202661,
+      "sha256": "4a18b2dd75594ca782ee5b9372fe3fe9b51a4b3012f9d019b15d1731c8dde762",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 23,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "priorities-detail",
+      "route": "/",
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "file": "priorities-detail-mobile.png",
+      "bytes": 172204,
+      "sha256": "eb580c1020d1f64a52e3d13b97a96a97d662aa748e3fed4f3294f7b79a56aef0",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 39,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "hud-healthy",
+      "route": "/dashboard",
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "file": "hud-healthy-mobile.png",
+      "bytes": 71674,
+      "sha256": "5626bb153387a983bcc73b7db886f55f5a17c337f97c869a1329a02a9f04cd38",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 11,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "hud-stale",
+      "route": "/dashboard",
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "file": "hud-stale-mobile.png",
+      "bytes": 71570,
+      "sha256": "4f827240917457a82dc139141c6e5d9e25a251db9532c37ec642231204444e00",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 11,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "terminal-graph",
+      "route": "/terminal-graph",
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "file": "terminal-graph-mobile.png",
+      "bytes": 36865,
+      "sha256": "f8ad65bcb7e04e54a5149acfb13ef83e2b2556c15be05c79fbca8298707f0a48",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 14,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "terminal-graph-detail",
+      "route": "/terminal-graph",
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "file": "terminal-graph-detail-mobile.png",
+      "bytes": 77833,
+      "sha256": "82664e6ef202e349df1f065626c71127b87c653fcdae57872160c9d1a8819a35",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 26,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    },
+    {
+      "phase": "after",
+      "surface": "terminal",
+      "route": "/terminal?agent=forge%2Fmain%3Aeng-3",
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "file": "terminal-mobile.png",
+      "bytes": 17060,
+      "sha256": "14648eef20254c375c7679431179149820db2f56875c579fc78d4a808bc79eb5",
+      "externalRequests": [],
+      "audit": {
+        "documentLang": "en",
+        "horizontalOverflowPx": 0,
+        "visibleControls": 0,
+        "unnamedControls": 0,
+        "undersizedControls": 0,
+        "reducedMotion": true
+      }
+    }
+  ]
+}
