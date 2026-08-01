@@ -312,6 +312,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p=="/favicon.ico":return self.send_bytes(b"",204,"image/x-icon",head=head)
         if p=="/health":return self.json({"status":"ok","uptime":int(time.time()-START),"build":max((int(os.path.getmtime(os.path.join(ROOT,"bin",x))) for x in ("todos.html","mypeople-ui.css") if os.path.exists(os.path.join(ROOT,"bin",x))),default=0)},head=head)
         if p=="/assets/mypeople-ui.css":return self.asset("mypeople-ui.css","text/css; charset=utf-8",head)
+        if p=="/assets/board-polling.js":return self.asset("board-polling.js","text/javascript; charset=utf-8",head)
         if p in ("/","/todos"):return self.page("todos.html",head)
         if p=="/wall":return self.page("wall.html",head)
         if p=="/terminal-graph":return self.page("terminal-graph.html",head)
