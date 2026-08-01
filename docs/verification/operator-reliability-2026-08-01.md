@@ -73,7 +73,7 @@ The plan mentioned a stable-roster SHA, but no pre-run roster digest was capture
 
 ## Residual Risks
 
-- `npm audit` reports three vulnerabilities in the existing `memory-gateway` dependency tree: two moderate and one high. No dependency was changed automatically because a forced audit fix could alter runtime behavior and requires separate review.
+- The initial candidate reported three vulnerabilities in the `memory-gateway` dependency tree: two moderate findings caused by `@hono/node-server` through MCP SDK 1.29.0, and one high-severity `fast-uri` finding. The approved follow-up upgraded `@modelcontextprotocol/sdk` to 1.30.0 without a major-version change; the final audit reports zero known vulnerabilities.
 - Memory readiness proves that the local supervised adapter is available; retrieval quality still depends on project controls, query relevance, and the locked dataset.
 - The implementation has passed isolated verification but has not yet been exercised against live state. Deployment requires an explicit approval and the existing backup, migration, health, and rollback gates.
 
