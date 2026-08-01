@@ -11,10 +11,58 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 sys.path.insert(0, str(ROOT / "bin"))
-from memory_observability import get_memory_projection
+from memory_observability import get_memory_projection, project_memory_readiness
 
 
 class AutomaticMemoryObservabilityTests(unittest.TestCase):
+    def test_readiness_projection_is_bounded_and_independent_from_last_recall(self):
+        self.assertEqual(
+            project_memory_readiness(False, False, "ignored secret"),
+            {
+                "configured": False,
+                "adapter": "local_hybrid",
+                "readiness": "disabled",
+                "reason": "disabled",
+            },
+        )
+        self.assertEqual(
+            project_memory_readiness(True, True, "ignored secret"),
+            {
+                "configured": True,
+                "adapter": "local_hybrid",
+                "readiness": "ready",
+                "reason": "ok",
+            },
+        )
+        unavailable = project_memory_readiness(
+            True, False, "Bearer top-secret failed at http://127.0.0.1:18443/mcp"
+        )
+        self.assertEqual(unavailable["readiness"], "unavailable")
+        self.assertEqual(unavailable["reason"], "adapter_unavailable")
+        self.assertNotIn("secret", json.dumps(unavailable).lower())
+
+    def test_projection_reads_only_sanitized_local_adapter_readiness(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = Path(temp)
+            (runtime / "memory-canary-control.json").write_text(
+                json.dumps({
+                    "schemaVersion": 2,
+                    "mode": "automatic",
+                    "allowedProjects": ["project-factory"],
+                    "revision": 9,
+                    "updatedAt": 1,
+                }),
+                encoding="utf-8",
+            )
+            (runtime / "local-memory-ready.json").write_text(
+                json.dumps({"schema": 1, "ready": True, "pid": 99, "token": "must-not-leak"}),
+                encoding="utf-8",
+            )
+            projection = get_memory_projection(runtime)
+            self.assertEqual(projection["readiness"]["readiness"], "ready")
+            self.assertNotIn("pid", json.dumps(projection).lower())
+            self.assertNotIn("token", json.dumps(projection).lower())
+
     def test_public_projection_has_bounded_metadata_only(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime = Path(temp)
@@ -58,9 +106,10 @@ class AutomaticMemoryObservabilityTests(unittest.TestCase):
 
     def test_hud_renders_mode_level_latency_and_token_state(self):
         page = (ROOT / "bin" / "dashboard.html").read_text(encoding="utf-8")
-        for label in ("Memory mode", "Recall level", "Latency", "Memory tokens"):
+        for label in ("Memory mode", "Memory readiness", "Recall level", "Latency", "Memory tokens"):
             self.assertIn(label, page)
         self.assertIn('/todo/memory-canary', page)
+        self.assertIn('memoryTelemetry.readiness', page)
 
 
 if __name__ == "__main__":

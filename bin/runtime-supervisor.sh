@@ -5,6 +5,7 @@ ROOT=${INSTALL_DIR:-$HOME/mypeople}
 export INSTALL_DIR="$ROOT"
 export PATH="$HOME/.local/bin:$ROOT/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
+export MYPEOPLE_MEMORY_ALLOW_HTTP=1
 
 . "$HOME/.config/mypeople/queue.env"
 mkdir -p "$ROOT/run"
@@ -92,6 +93,7 @@ while (( ! stopping )); do
   spawn queue-client python3 "$ROOT/bin/queue-client.py"
   spawn board-export python3 "$ROOT/bin/board-export.py"
   spawn workspace-supervisor python3 "$ROOT/bin/workspace-supervisor.py"
+  spawn local-memory python3 "$ROOT/bin/local-memory-runtime.py"
   spawn ttyd-write ttyd -i 0.0.0.0 -W -a -p "$TTYD_PORT" -t disableLeaveAlert=true "$ROOT/bin/attach-helper.sh"
   spawn ttyd-read ttyd -i 0.0.0.0 -a -p "$TTYD_RO_PORT" -t disableLeaveAlert=true "$ROOT/bin/attach-ro-helper.sh"
   spawn boss-supervisor bash "$ROOT/bin/boss-supervisor.sh"

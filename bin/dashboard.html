@@ -95,7 +95,7 @@
       }
       .memory-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(130px, 1fr));
+        grid-template-columns: repeat(5, minmax(130px, 1fr));
         gap: 12px;
         padding: 16px 22px 22px;
       }
@@ -418,6 +418,7 @@
         </div>
         <div class="memory-grid">
           <div class="memory-datum">Memory mode<strong id="memoryMode" class="memory-mode">off</strong></div>
+          <div class="memory-datum">Memory readiness<strong id="memoryReadiness">disabled</strong></div>
           <div class="memory-datum">Recall level<strong><span id="memoryHealth" class="memory-health"></span><span id="memoryLevel">not run</span></strong></div>
           <div class="memory-datum">Latency<strong id="memoryLatency">not measured</strong></div>
           <div class="memory-datum">Memory tokens<strong id="memoryTokens">not measured</strong></div>
@@ -858,10 +859,12 @@
       }
       function renderMemory() {
         const last = memoryTelemetry.last || {};
+        const readiness = memoryTelemetry.readiness || { readiness: "unavailable" };
         const mode = memoryTelemetry.mode || "off";
         const applied = last.status === "memory_applied";
         const failed = ["memory_unavailable", "memory_invalid_response", "memory_budget_exceeded", "error"].includes(last.status);
         $("#memoryMode").textContent = mode.replaceAll("_", " ");
+        $("#memoryReadiness").textContent = readiness.readiness || "unavailable";
         $("#memoryState").textContent = mode === "off" ? "OFF" : "LIVE";
         $("#memoryLevel").textContent = last.level || last.status || "not run";
         $("#memoryLatency").textContent = Number.isSafeInteger(last.latencyMs) ? last.latencyMs + " ms" : "not measured";

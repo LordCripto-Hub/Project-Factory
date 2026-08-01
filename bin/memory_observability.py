@@ -16,6 +16,30 @@ PUBLIC_MEMORY_STATUSES = {
 PUBLIC_MEMORY_LEVELS = {"fast", "deep", "exhaustive", "emergency"}
 
 
+def project_memory_readiness(configured, reachable, reason=""):
+    """Return an allow-listed adapter state without transport or secret details."""
+    if not configured:
+        return {
+            "configured": False,
+            "adapter": "local_hybrid",
+            "readiness": "disabled",
+            "reason": "disabled",
+        }
+    if reachable:
+        return {
+            "configured": True,
+            "adapter": "local_hybrid",
+            "readiness": "ready",
+            "reason": "ok",
+        }
+    return {
+        "configured": True,
+        "adapter": "local_hybrid",
+        "readiness": "unavailable",
+        "reason": "adapter_unavailable",
+    }
+
+
 def _public_count(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
@@ -66,9 +90,22 @@ def get_memory_projection(runtime_dir, task_id=""):
         except (OSError, UnicodeError, json.JSONDecodeError):
             latest = None
     mode = control.get("mode", "manual_canary" if control.get("enabled") else "off")
+    ready = False
+    ready_file = runtime / "local-memory-ready.json"
+    if mode == "automatic" and ready_file.exists() and not ready_file.is_symlink():
+        try:
+            ready_value = json.loads(ready_file.read_text(encoding="utf-8"))
+            ready = (
+                isinstance(ready_value, dict)
+                and ready_value.get("schema") == 1
+                and ready_value.get("ready") is True
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            ready = False
     return {
         "mode": mode,
         "enabled": mode != "off",
         "controlRevision": control["revision"],
+        "readiness": project_memory_readiness(mode == "automatic", ready),
         "last": latest,
     }
