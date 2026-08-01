@@ -423,6 +423,7 @@
           <div class="memory-datum">Recall level<strong><span id="memoryHealth" class="memory-health"></span><span id="memoryLevel">not run</span></strong></div>
           <div class="memory-datum">Latency<strong id="memoryLatency">not measured</strong></div>
           <div class="memory-datum">Memory tokens<strong id="memoryTokens">not measured</strong></div>
+          <div class="memory-datum">GitHub publisher<strong id="publisherHealth">unknown</strong></div>
         </div>
       </section>
       <details id="retiredAgents" class="retired-agents">
@@ -438,6 +439,7 @@
         lastTelemetry = { agents: [] },
         telemetryStale = false,
         memoryTelemetry = { mode: "off", last: null },
+        publisherHealth = { state: "unknown" },
         runtimeIdentity = null,
         controlCapabilities = { agents: [], models: [] };
       const coreOperationState = new Map();
@@ -875,10 +877,17 @@
         $("#memoryTokens").textContent = Number.isSafeInteger(last.estimatedTokens) ? "~" + last.estimatedTokens + " injected · provider " + (last.providerTokens === "not_measured" ? "not measured" : "measured") : "not measured";
         $("#memoryHealth").className = "memory-health" + (applied ? " ok" : failed ? " error" : "");
       }
+      function renderPublisherHealth() {
+        const state = publisherHealth.state || "unknown";
+        const node = $("#publisherHealth");
+        node.textContent = state.replaceAll("_", " ");
+        node.className = "health " + state;
+      }
       function render() {
         renderAgentCards();
         renderRetired();
         renderMemory();
+        renderPublisherHealth();
         $("#refreshed").textContent = new Date().toLocaleTimeString();
       }
       async function poll() {
@@ -902,6 +911,11 @@
             memoryTelemetry = await get("/todo/memory-canary");
           } catch {
             memoryTelemetry = { mode: "off", last: null };
+          }
+          try {
+            publisherHealth = await get("/todo/publisher-health");
+          } catch {
+            publisherHealth = { state: "unknown" };
           }
           try {
             const health = await get("/health");

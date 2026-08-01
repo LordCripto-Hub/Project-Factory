@@ -19,6 +19,13 @@ from operator_telemetry import build_operator_telemetry
 from provider_health import read_health_receipts
 from memory_observability import get_memory_projection
 from runtime_identity import read_runtime_identity
+from project_publisher import (
+    PublisherError,
+    approvals_root,
+    approve_request as approve_publication_request,
+    get_approval,
+    reject_request as reject_publication_request,
+)
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
@@ -35,8 +42,49 @@ MEMORY_COMPARISON_ENABLED=ENV.get("MYPEOPLE_MEMORY_COMPARISON_ENABLED","")=="1"
 MEMORY_COMPARISON_CASES={"cmp-exact-01","cmp-temporal-01","cmp-contradiction-01"}
 MEMORY_COMPARISON_ID_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 OPERATOR_TELEMETRY_MAX_BYTES=128 * 1024
+PUBLIC_APPROVAL_FIELDS={
+    "approvalId", "taskId", "projectSlug", "repositorySlug", "headBranch",
+    "shortSha", "baseBranch", "mergeMethod", "expiresAt", "status",
+    "verificationStatus",
+}
+PUBLISHER_HEALTH_PATH=os.path.join(ROOT,"run","publisher-health.json")
+PUBLISHER_HEALTH_STATES={"available","ssh_unavailable","github_cli_unavailable","authentication_failed","rate_limited","unknown"}
 
 class MemoryComparisonAccessError(ValueError):pass
+
+def publication_approval_projection(root=None):
+    out=[]
+    directory=approvals_root(root)
+    try:names=sorted(os.listdir(directory))
+    except OSError:return out
+    for name in names:
+        if not name.endswith(".json") or not re.fullmatch(r"[0-9a-f]{24}\.json",name):continue
+        try:record=get_approval(name[:-5],directory)
+        except (PublisherError,OSError,ValueError):continue
+        if record.get("status") not in {"pending", "pending_approval", "approved", "validating", "branch_pushed", "pr_created", "waiting_checks", "merge_blocked"}:continue
+        repository=str(record.get("repository") or "")
+        slug=repository.removeprefix("https://github.com/").removesuffix(".git")
+        item={
+            "approvalId":record.get("approvalId"),
+            "taskId":record.get("taskId"),
+            "projectSlug":record.get("projectSlug"),
+            "repositorySlug":slug,
+            "headBranch":record.get("headBranch") or record.get("branch"),
+            "shortSha":str(record.get("commit") or "")[:12],
+            "baseBranch":record.get("baseBranch") or "main",
+            "mergeMethod":record.get("mergeMethod") or "squash",
+            "expiresAt":record.get("expiresAt"),
+            "status":record.get("status"),
+            "verificationStatus":"verified" if record.get("evidenceDigest") else "legacy",
+        }
+        out.append({key:item[key] for key in PUBLIC_APPROVAL_FIELDS})
+    return out
+
+def publisher_health_projection(path=PUBLISHER_HEALTH_PATH):
+    value=load_json(path,{})
+    if not isinstance(value,dict):value={}
+    state=value.get("state") if value.get("state") in PUBLISHER_HEALTH_STATES else "unknown"
+    return {"state":state,"checkedAt":value.get("checkedAt"),"reasonCode":value.get("reasonCode") if isinstance(value.get("reasonCode"),str) and len(value.get("reasonCode"))<=64 else None}
 
 def validate_project_slug(value,*,allow_empty=False):
     value=str(value or "").strip()
@@ -347,6 +395,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 float(ENV.get("MYPEOPLE_PROVIDER_HEALTH_STALE_SEC","300")),
             )
             return self.json({"ok":True,"health":rows},head=head)
+        if p=="/todo/publisher-health":
+            return self.json({"ok":True,**publisher_health_projection()},head=head)
+        if p=="/todo/publication-approvals":
+            return self.json({"ok":True,"approvals":publication_approval_projection()},head=head)
         if p=="/todo/memory-canary":
             task_id=urllib.parse.parse_qs(u.query).get("task_id",[""])[0]
             if task_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",task_id):
@@ -396,6 +448,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if guard:return self.json(guard[1],guard[0])
         if p=="/todo/update":return self.update(kind,body)
         if p=="/todo/memory-canary":return self.memory_canary(kind,body)
+        if p=="/todo/publication-approval":return self.publication_approval(kind,body)
         if p=="/todo/memory-comparison":return self.memory_comparison(kind,body,self.client_address[0])
         if p=="/todo/comment":return self.comment(kind,body)
         if p=="/todo/status":return self.status(kind,body)
@@ -404,6 +457,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p=="/nightwatch/inbound":return self.inbound(kind,body)
         if p=="/nightwatch/outbound":return self.outbound(kind,body)
         self.json({"error":"not_found"},404)
+    def publication_approval(self,kind,body):
+        if kind!="browser" or body.get("by")!="CEO":
+            return self.json({"ok":False,"error":"ceo_approval_required"},403)
+        if set(body)-{"op","approvalId","by"} or body.get("op") not in {"approve","reject"}:
+            return self.json({"ok":False,"error":"invalid_publication_approval"},400)
+        try:
+            fn=approve_publication_request if body["op"]=="approve" else reject_publication_request
+            record=fn(str(body["approvalId"]),"CEO")
+        except (PublisherError,ValueError) as error:
+            return self.json({"ok":False,"error":str(error)},400)
+        return self.json({"ok":True,"status":record.get("status"),"approvalId":record.get("approvalId")})
     def memory_comparison(self,kind,d,client_host=None):
         if not MEMORY_COMPARISON_ENABLED:
             return self.json({"ok":False,"error":"memory_comparison_disabled"},403)

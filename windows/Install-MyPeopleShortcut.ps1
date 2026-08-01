@@ -9,7 +9,8 @@ foreach ($name in @(
     'Set-MyPeopleMemoryCredential.ps1',
     'Set-MyPeopleMemoryActivation.ps1',
     'Test-MyPeopleMemoryPilot.ps1',
-    'Publish-MyPeopleProject.ps1'
+    'Publish-MyPeopleProject.ps1',
+    'Invoke-MyPeopleSshPublication.ps1'
 )) {
     $source = Join-Path $PSScriptRoot $name
     if (-not (Test-Path -LiteralPath $source)) { throw "Launcher file missing: $source" }
