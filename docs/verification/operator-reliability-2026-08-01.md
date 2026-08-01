@@ -2,7 +2,7 @@
 
 Date: 2026-08-01  
 Branch: `feat/operator-reliability-consolidation`  
-Verified commit: `3446b2bfd66806237532018574c2e96aaa1ce37a`
+Verified implementation commit: `a64c3c9b8d649f64194c20a54b1e0e8c3a583b5c`
 
 ## Scope
 
@@ -23,8 +23,9 @@ Final focused result:
 ## Disposable Docker Verification
 
 Candidate image: `mypeople-node:operator-reliability-candidate`  
-Embedded source SHA: `3446b2bfd66806237532018574c2e96aaa1ce37a`  
-Build ID: `20260801T192114Z`
+Embedded source SHA: `a64c3c9b8d649f64194c20a54b1e0e8c3a583b5c`
+
+Build ID: `20260801T193556Z`
 
 Command:
 
