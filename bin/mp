@@ -51,6 +51,7 @@ from task_routing import (
     validate_policy as validate_routing_policy,
     write_decision,
 )
+from recording_policy import recording_mode, reconcile_recorder
 from routing_escalation import (
     ELIGIBLE_FAILURES,
     EscalationError,
@@ -600,13 +601,9 @@ def queue_register(rec):
     try: http_json("/agents/register", "POST", rec)
     except Exception as e: print(f"warning: register deferred: {e}", file=sys.stderr)
 
-def recorder(session, tab):
-    name = "rec-" + tab
-    if run_tmux(["has-session", "-t", name], check=False).returncode == 0: return
-    os.makedirs(os.path.expanduser("~/recordings"), exist_ok=True)
+def recorder(session, tab, mode="off"):
     cast = os.path.expanduser(f"~/recordings/{ENV.get('HOST_ID')}-{tab}.cast")
-    command = f"asciinema rec --quiet --append -c {shlex.quote(f'TMUX= tmux attach -rt mc-{session}:{tab}')} {shlex.quote(cast)}"
-    run_tmux(["new-session", "-d", "-s", name, command], check=False)
+    return reconcile_recorder(run_tmux, session, tab, mode, cast)
 
 def wait_for_composer(target, timeout=30):
     """Wait for the selected backend's interactive composer before the first turn."""
@@ -880,7 +877,7 @@ def spawn(
         )
         payload={"backend":ns.backend,"backend_resolution_source":backend_resolution_source,"cwd":ns.cwd,"boss":raw_boss,"is_master":ns.master,"model":model,
                  "owner_task_id":ns.owner_task or "","temporary":ns.temporary,
-                 "without_memory":bool(getattr(ns,"without_memory",False))}
+                 "without_memory":bool(getattr(ns,"without_memory",False)),"recording":getattr(ns,"recording",None)}
         result=http_json("/task/submit","POST",{"type":"spawn","target_agent":aid,"payload":payload})
         print(result["task_id"]); return
     boss = full_agent_id(raw_boss) if raw_boss is not None else ""
@@ -924,6 +921,9 @@ def spawn(
         model,
         ns.model is not None or fresh_owner_route,
     )
+    profiles = load_provider_json(os.environ.get("PROVIDER_PROFILES_PATH",os.path.join(ROOT,"run","provider-profiles.json")),{})
+    profile = profiles.get(profile_id,{}) if profile_id and isinstance(profiles,dict) else {}
+    recording = recording_mode({"recording":getattr(ns,"recording",None)},profile,os.environ)
     routing_decision = None
     routing_path = ""
     routing_sha256 = ""
@@ -1134,9 +1134,11 @@ def spawn(
     if ns.owner_task:audit += ["--owner-task",ns.owner_task]
     if getattr(ns,"without_memory",False):audit += ["--without-memory"]
     if ns.temporary:audit += ["--temporary"]
+    if recording == "on":audit += ["--recording","on"]
     rec={**previous,"agent_id":aid,"host":host,"session":session,"tab":tab,"backend":ns.backend,"backend_resolution_source":backend_resolution_source,"state":"alive",
          "boss_id":boss,"is_master":bool(ns.master),"cwd":cwd,"spawn_cmd":shlex.join(audit),"retired":False,
          "lifecycle":lifecycle,"owner_task_id":ns.owner_task or "","model":model or "","created":previous.get("created",time.time()),
+         "recording":recording,"recording_state":"off",
          "stop_intent":"","retired_reason":"","retired_at":0,**session_identity}
     if taskspec_path:
         rec["taskspec_path"] = taskspec_path
@@ -1177,7 +1179,8 @@ def spawn(
             "spawn",
         ),
     )
-    queue_register(rec); recorder(session,tab)
+    rec["recording_state"]=recorder(session,tab,recording)
+    update_roster(rec);queue_register(rec)
     if fresh_owner_route and routing_decision is not None:
         try:
             ensure_routing_comment(
@@ -2058,6 +2061,7 @@ def namespace_from_record(rec):
         owner_task=rec.get("owner_task_id") if rec.get("lifecycle")=="owner" else None,
         temporary=rec.get("lifecycle")=="temporary",
         without_memory=False,
+        recording=rec.get("recording","off"),
     )
 
 def validate_record_receipt(rec,path_field,digest_field,error_code):
@@ -2525,7 +2529,7 @@ def memory_comparison_command(ns):
 
 def parser():
     p=argparse.ArgumentParser(prog="mp"); sub=p.add_subparsers(dest="verb",required=True)
-    q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.add_argument("--without-memory",action="store_true");q.set_defaults(fn=spawn)
+    q=sub.add_parser("spawn");q.add_argument("agent_id");q.add_argument("--backend",default="",choices=["claude","codex"]);q.add_argument("--cwd");q.add_argument("--boss");q.add_argument("--master",action="store_true");q.add_argument("--model");g=q.add_mutually_exclusive_group();g.add_argument("--owner-task");g.add_argument("--temporary",action="store_true");q.add_argument("--without-memory",action="store_true");q.add_argument("--recording",choices=["on","off"]);q.set_defaults(fn=spawn)
     q=sub.add_parser("send");q.add_argument("agent_id");q.add_argument("message",nargs="+");q.set_defaults(fn=send)
     q=sub.add_parser("complete");q.add_argument("summary",nargs="+");q.add_argument("--proof",action="append",default=[]);q.add_argument("--proof-file",action="append",default=[]);q.add_argument("--proof-url",action="append",default=[]);q.set_defaults(fn=complete)
     q=sub.add_parser("fail");q.add_argument("--failure",required=True,choices=sorted(ELIGIBLE_FAILURES));q.add_argument("--summary",nargs="+",required=True);q.add_argument("--proof",action="append",default=[],required=True);q.set_defaults(fn=fail)

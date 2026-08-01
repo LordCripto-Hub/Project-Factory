@@ -827,6 +827,8 @@
               : "not measured",
             "combat-usage",
           );
+          const recordingState = ["recording", "off", "unknown"].includes(row.recording_state) ? row.recording_state : "unknown";
+          addDatum(data, "recording", recordingState);
           const actions = el("div", "card-actions");
           bindCardAttach(card, attachUrl(row));
           if (card.dataset.attachUrl) actions.append(attachAction(card));
