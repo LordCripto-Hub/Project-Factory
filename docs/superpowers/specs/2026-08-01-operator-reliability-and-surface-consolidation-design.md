@@ -32,11 +32,17 @@ The sequence is:
 
 The HUD can report automatic memory mode while the latest retrieval status is `memory_unavailable`. The status is valid fail-open behavior, but an enabled local mode must not silently depend on a stopped or missing adapter. Cloudflare memory and `codex_apps` remain disabled; this work concerns only MyPeople's existing local hybrid Gate B path.
 
+### Implementation diagnosis
+
+The automatic control file and ProjectProfile are valid, but the profile still targets the experimental hostname `http://memory-gate-b:18443/mcp`. The only implementation providing that hostname is the opt-in live-canary Compose project. It is stopped and belongs to a separate internal Docker network, while the production container belongs only to `mypeople_default`. The Windows launcher rehydrates the legacy Cloudflare pilot module, whose persistent activation intentionally fails closed, and therefore cannot make the local Gate B adapter ready. The UI is accurately reporting the resulting transport failure.
+
+The repair will promote the already-tested local hybrid adapter into the main runtime supervisor as an opt-in, loopback-only child process. This keeps normal MyPeople operation to one container, uses the immutable dataset shipped in the runtime image, generates only an ephemeral internal bearer capability, and does not activate Cloudflare, `codex_apps`, or a second memory store. Disabled mode starts no adapter. Automatic mode reconciles the local ProjectProfile to a loopback URL and exposes adapter readiness separately from the last retrieval outcome.
+
 ### Design
 
 - Trace availability from the Windows launcher and Docker deployment configuration through the memory gateway transport and TaskSpec compilation.
 - Keep `memory_unavailable` as a typed runtime outcome for genuine adapter failures.
-- When local automatic memory is configured, launch or reconnect only the approved local adapter and expose its readiness independently from the last retrieval result.
+- When local automatic memory is configured, launch or reconnect only the approved loopback local adapter under the existing runtime supervisor and expose its readiness independently from the last retrieval result.
 - Never start Cloudflare, `codex_apps`, or another memory store as a fallback.
 - Fail open for task execution, but make the reason visible and actionable in HUD health.
 - Preserve bounded top-k retrieval, provenance, deep escalation, exhaustive fallback limits, and all existing token budgets.
