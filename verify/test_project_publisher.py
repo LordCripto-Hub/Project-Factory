@@ -131,6 +131,47 @@ class ProjectPublisherContract(unittest.TestCase):
         values.update(overrides)
         return self.module.create_approval(**values)
 
+    def test_merge_when_green_approval_binds_exact_actions_and_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            approval = self.create(
+                root,
+                mode="pr_merge_when_green",
+                head_branch="task/task-123-project-factory",
+                base_branch="main",
+                merge_method="squash",
+                evidence_digest="e" * 64,
+            )
+            self.assertEqual(approval["schemaVersion"], 2)
+            self.assertEqual(approval["baseBranch"], "main")
+            self.assertEqual(approval["mergeMethod"], "squash")
+            self.assertEqual(approval["evidenceDigest"], "e" * 64)
+            self.assertEqual(
+                approval["approvedActions"],
+                ["push_branch", "create_pr", "merge_when_green"],
+            )
+            self.assertEqual(len(approval["transactionNonce"]), 64)
+
+    def test_merge_when_green_rejects_unsafe_bounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            for values in (
+                {"base_branch": "release"},
+                {"merge_method": "admin"},
+                {"evidence_digest": "bad"},
+                {"ttl_seconds": 30},
+            ):
+                with self.assertRaises(self.module.PublisherError):
+                    self.create(
+                        root,
+                        mode="pr_merge_when_green",
+                        head_branch="task/task-123-project-factory",
+                        base_branch=values.get("base_branch", "main"),
+                        merge_method=values.get("merge_method", "squash"),
+                        evidence_digest=values.get("evidence_digest", "e" * 64),
+                        ttl_seconds=values.get("ttl_seconds", 900),
+                    )
+
     def save_profile(self, root: pathlib.Path):
         profiles = root / "profiles"
         profiles.mkdir()

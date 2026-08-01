@@ -27,6 +27,9 @@ APPROVAL_ID = re.compile(r"^[0-9a-f]{24}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 PR_URL = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/pull/([1-9][0-9]*)$")
 PUBLISH_MODES = {"direct_main", "draft_pr"}
+MERGE_METHODS = {"squash", "merge", "rebase"}
+APPROVED_ACTIONS = ["push_branch", "create_pr", "merge_when_green"]
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
 class PublisherError(RuntimeError):
@@ -155,6 +158,8 @@ def create_approval(
     head_branch: str | None = None,
     pr_title: str | None = None,
     pr_body: str | None = None,
+    merge_method: str = "squash",
+    evidence_digest: str | None = None,
 ) -> dict:
     current = time.time() if now is None else float(now)
     commit = commit.lower()
@@ -172,12 +177,23 @@ def create_approval(
         raise PublisherError("commit must be a full 40-character SHA")
     if not _valid_branch(branch):
         raise PublisherError("invalid publication branch")
-    if mode not in PUBLISH_MODES:
+    if mode not in PUBLISH_MODES | {"pr_merge_when_green"}:
         raise PublisherError("invalid publication mode")
     if not 60 <= int(ttl_seconds) <= 3600:
         raise PublisherError("approval TTL must be between 60 and 3600 seconds")
     _validate_profile(profile, project_slug, branch)
-    if mode == "draft_pr":
+    if mode == "pr_merge_when_green":
+        base_branch = base_branch or "main"
+        if base_branch != "main" or branch != "main":
+            raise PublisherError("merge-when-green base branch must be main")
+        if not evidence_digest or not DIGEST.fullmatch(evidence_digest.lower()):
+            raise PublisherError("merge-when-green evidence digest is invalid")
+        if merge_method not in MERGE_METHODS:
+            raise PublisherError("invalid merge method")
+        base_branch = "main"
+        head_branch = head_branch or default_head_branch(task_id, project_slug)
+        _validate_draft_pr_fields(base_branch, head_branch, pr_title or str(task.get("text") or task_id), pr_body or "")
+    elif mode == "draft_pr":
         base_branch = base_branch or branch
         head_branch = head_branch or default_head_branch(task_id, project_slug)
         pr_title = (pr_title or str(task.get("text") or f"Task {task_id}")).strip()
@@ -193,7 +209,7 @@ def create_approval(
     if os.path.exists(path):
         raise PublisherError("approval ID collision")
     record = {
-        "schemaVersion": 1,
+        "schemaVersion": 2 if mode == "pr_merge_when_green" else 1,
         "approvalId": approval_id,
         "status": "pending",
         "taskId": task_id,
@@ -214,6 +230,17 @@ def create_approval(
             "headBranch": head_branch,
             "prTitle": pr_title,
             "prBody": pr_body,
+        })
+    elif mode == "pr_merge_when_green":
+        record.update({
+            "baseBranch": "main",
+            "headBranch": head_branch,
+            "prTitle": (pr_title or str(task.get("text") or task_id)).strip(),
+            "prBody": pr_body if pr_body is not None else f"Authorized by Boss for MyPeople task `{task_id}`.",
+            "mergeMethod": merge_method,
+            "evidenceDigest": evidence_digest.lower(),
+            "approvedActions": list(APPROVED_ACTIONS),
+            "transactionNonce": secrets.token_hex(32),
         })
     atomic_json(path, record, mode=0o600)
     return record
