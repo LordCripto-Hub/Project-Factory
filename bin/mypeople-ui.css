@@ -26,6 +26,8 @@
   --space-7: 48px;
   --radius-control: 8px;
   --radius-panel: 14px;
+  --mp-visible-height: 100dvh;
+  --mp-visible-offset: 0px;
   --midnight: var(--soot);
   --dark-bg: var(--soot);
   --dark: var(--soot);
@@ -786,7 +788,9 @@ body > header {
 
   #modal {
     width: calc(100vw - 16px) !important;
-    height: calc(100vh - 16px) !important;
+    height: calc(var(--mp-visible-height, 100dvh) - 16px) !important;
+    max-height: calc(var(--mp-visible-height, 100dvh) - 16px) !important;
+    margin-top: var(--mp-visible-offset, 0px) !important;
     overflow: auto;
   }
 
@@ -849,8 +853,27 @@ body > header {
 
   .panel {
     width: calc(100vw - 16px) !important;
-    height: calc(100vh - 16px) !important;
+    height: calc(var(--mp-visible-height, 100dvh) - 16px) !important;
+    max-height: calc(var(--mp-visible-height, 100dvh) - 16px) !important;
+    margin-top: var(--mp-visible-offset, 0px) !important;
     padding: 12px !important;
+  }
+
+  #modal input,
+  #modal textarea,
+  #modal select,
+  .panel input,
+  .panel textarea,
+  .panel select {
+    font-size: 16px !important;
+  }
+
+  #modal button,
+  #modal a,
+  .panel button,
+  .panel a {
+    min-width: 24px;
+    min-height: 24px;
   }
 
   .panel .row {
