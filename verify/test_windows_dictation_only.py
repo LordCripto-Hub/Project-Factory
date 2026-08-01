@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 OPERATOR_PAGES = (
     "todos.html",
     "dashboard.html",
-    "wall.html",
     "terminal.html",
     "terminal-graph.html",
 )

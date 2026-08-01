@@ -500,7 +500,7 @@ def assert_live_health():
     check((ROOT / "bin" / "mp").is_file(), "mp missing")
     check((ROOT / "bin" / "todos.html").is_file(), "todos.html missing")
     check((ROOT / "bin" / "dashboard.html").is_file(), "dashboard.html missing")
-    check((ROOT / "bin" / "wall.html").is_file(), "wall.html missing")
+    check(not (ROOT / "bin" / "wall.html").exists(), "retired wall.html remains")
     check((ROOT / "bin" / "terminal-graph.html").is_file(), "terminal-graph.html missing")
 
 

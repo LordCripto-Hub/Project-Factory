@@ -299,6 +299,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:data=open(os.path.join(ROOT,"bin",name),"rb").read()
         except FileNotFoundError:return self.json({"error":"asset_missing"},404)
         self.send_bytes(data,200,ctype,head=head)
+    def redirect(self,location,head=False):
+        self.send_bytes(b"",302,"text/plain; charset=utf-8",headers=[("Location",location)],head=head)
     def proxy_hud(self,head=False):
         conn=http.client.HTTPConnection("127.0.0.1",HUD,timeout=20);headers={k:v for k,v in self.headers.items() if k.lower() not in ("host","content-length","connection")};headers["X-Queue-Secret"]=SECRET;body=None
         if self.command=="POST":body=self.rfile.read(int(self.headers.get("Content-Length","0") or 0));headers["Content-Length"]=str(len(body))
@@ -318,7 +320,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p=="/assets/board-polling.js":return self.asset("board-polling.js","text/javascript; charset=utf-8",head)
         if p=="/assets/visual-viewport.js":return self.asset("visual-viewport.js","text/javascript; charset=utf-8",head)
         if p in ("/","/todos"):return self.page("todos.html",head)
-        if p=="/wall":return self.page("wall.html",head)
+        if p=="/wall":return self.redirect("/",head)
         if p=="/terminal-graph":return self.page("terminal-graph.html",head)
         if p=="/dashboard" or p.startswith("/dashboard/") or p in ("/agents","/roster","/clients","/control-capabilities"):return self.proxy_hud(head)
         if not self.auth_kind():return self.json({"ok":False,"error":"unauthorized"},401,head=head)
@@ -370,7 +372,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if p=="/todo/attach":return self.json({"ok":True,"target":target,"base":base,"direct":direct,"agent":aid})
                 return self.page("terminal.html",head)
             except Exception:return self.json({"ok":False,"error":"invalid_agent"},400)
-        if p=="/todo/wall":return self.json(wall_data(),head=head)
         if p=="/todo/terminal-graph":return self.json(wall_data(True),head=head)
         self.json({"error":"not_found"},404,head=head)
     def read_body(self):

@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 UI_FILES = (
     "todos.html",
     "dashboard.html",
-    "wall.html",
     "terminal-graph.html",
     "terminal.html",
 )

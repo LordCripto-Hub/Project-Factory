@@ -213,7 +213,6 @@ const server = http.createServer((req, res) => {
   const pages = {
     "/": "todos.html",
     "/todos": "todos.html",
-    "/wall": "wall.html",
     "/terminal-graph": "terminal-graph.html",
     "/dashboard": "dashboard.html",
     "/terminal": "terminal.html",
@@ -224,6 +223,9 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === "/assets/mypeople-ui.css") {
     return send(res, 200, "text/css; charset=utf-8", fs.readFileSync(path.join(BIN, "mypeople-ui.css")));
+  }
+  if (url.pathname === "/assets/board-polling.js" || url.pathname === "/assets/visual-viewport.js") {
+    return send(res, 200, "application/javascript; charset=utf-8", fs.readFileSync(path.join(BIN, path.basename(url.pathname))));
   }
   if (url.pathname === "/assets/voice-dock.js") {
     return send(res, 200, "application/javascript; charset=utf-8", fs.readFileSync(path.join(BIN, "voice-dock.js")));
@@ -240,13 +242,6 @@ const server = http.createServer((req, res) => {
   }]);
   if (url.pathname === "/todo/board") return json(res, board());
   if (url.pathname === "/todo/status") return json(res, { ok: true });
-  if (url.pathname === "/todo/wall") {
-    return json(res, agents.map((agent) => ({
-      ...agent,
-      read_port: server.address().port,
-      write_port: server.address().port,
-    })));
-  }
   if (url.pathname === "/todo/terminal-graph") return json(res, graph());
   if (url.pathname === "/todo/attach") {
     return json(res, {
@@ -286,7 +281,6 @@ async function capturePhase() {
     { name: "hud-stale", route: "/dashboard", ready: "#telemetryCards .combat-card", prepare: async (page) => {
       await page.evaluate(() => { document.querySelector("#live").textContent = "stale"; });
     }},
-    { name: "wall", route: "/wall", ready: ".tile" },
     { name: "terminal-graph", route: "/terminal-graph", ready: ".node" },
     { name: "terminal-graph-detail", route: "/terminal-graph", ready: ".task-node", prepare: async (page) => {
       await page.locator('.task-node[data-task-id="visual-alpha"]').click();

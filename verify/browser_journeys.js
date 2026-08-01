@@ -229,10 +229,6 @@ async function liveCore(page) {
   await assertUnifiedHudCards(page);
   await page.click('a.nav[href="/"]');
   await page.waitForURL(/\/$/);
-  await page.click('a.navlink[href="/wall"]');
-  await page.waitForURL(/\/wall$/);
-  await page.waitForSelector('iframe');
-  await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   await page.click('a.navlink[href="/terminal-graph"]');
   await page.waitForURL(/\/terminal-graph$/);
   await page.waitForSelector('iframe');
@@ -404,8 +400,8 @@ async function sandboxSuite(page, boardPollNavigation) {
   await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length >= 1);
   await expect(await count(page, '#telemetryCards .combat-card') >= 1, 'dashboard cards missing');
   await expect(await count(page, '#agentsTable') === 0, 'legacy dashboard table returned');
-  await page.goto(`${baseUrl}/wall`, { waitUntil: 'domcontentloaded' });
-  await expect(await count(page, 'iframe') >= 1, 'wall iframe missing');
+  const retiredWall = await page.goto(`${baseUrl}/wall`, { waitUntil: 'domcontentloaded' });
+  await expect(retiredWall.url().endsWith('/'), 'retired wall did not redirect to board');
   await page.goto(`${baseUrl}/terminal-graph`, { waitUntil: 'domcontentloaded' });
   await expect(await count(page, 'iframe') >= 1, 'graph iframe missing');
   await saveShot(page, `sandbox-${browserName}`);
