@@ -4,6 +4,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "windows" / "Invoke-MyPeopleSshPublication.ps1").read_text(encoding="utf-8")
+MP = (ROOT / "bin" / "mp").read_text(encoding="utf-8")
+INSTALLER = (ROOT / "windows" / "Install-MyPeopleShortcut.ps1").read_text(encoding="utf-8")
 
 
 class SshPublicationBrokerContract(unittest.TestCase):
@@ -13,6 +15,7 @@ class SshPublicationBrokerContract(unittest.TestCase):
         self.assertIn("refs/heads/$($preflight.headBranch)", SCRIPT)
         self.assertIn("publish-branch-complete", SCRIPT)
         self.assertIn("publish-pr-complete", SCRIPT)
+        self.assertIn("--head-sha", SCRIPT)
         self.assertIn("publish-checks", SCRIPT)
         self.assertIn("publish-merge-complete", SCRIPT)
         self.assertIn("--match-head-commit", SCRIPT)
@@ -32,6 +35,14 @@ class SshPublicationBrokerContract(unittest.TestCase):
         self.assertIn("$pr.baseRefName -ne 'main'", SCRIPT)
         self.assertIn("Assert-SafeSlug", SCRIPT)
         self.assertIn("Assert-SafeBranch", SCRIPT)
+
+    def test_runtime_receives_merge_pr_sha_and_can_publish_broker_health(self):
+        self.assertIn('q.add_argument("--head-sha",default="")', MP)
+        self.assertIn("publish_broker_health", MP)
+        self.assertIn('q=sub.add_parser("publish-broker-health")', MP)
+
+    def test_shortcut_installs_publication_broker(self):
+        self.assertIn("Invoke-MyPeopleSshPublication.ps1", INSTALLER)
 
 
 if __name__ == "__main__":

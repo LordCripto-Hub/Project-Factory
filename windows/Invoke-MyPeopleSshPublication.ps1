@@ -22,6 +22,20 @@ function Invoke-Checked {
     return $output
 }
 
+function Set-BrokerHealth([string]$State, [string]$ReasonCode) {
+    try {
+        & docker exec mypeople /home/mp/mypeople/bin/mp publish-broker-health --state $State --reason-code $ReasonCode *> $null
+    } catch { }
+}
+
+function Get-FailureState([string]$Message) {
+    if ($Message -match '(?i)github_pr_|gh ') { return 'github_cli_unavailable' }
+    if ($Message -match '(?i)authentication|permission denied|could not read username|publickey') { return 'authentication_failed' }
+    if ($Message -match '(?i)rate.?limit|api rate') { return 'rate_limited' }
+    if ($Message -match '(?i)ssh|git@github\.com') { return 'ssh_unavailable' }
+    return 'unknown'
+}
+
 function Assert-SafeSlug([string]$Value) {
     if ($Value -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'repository_slug_invalid' }
     return $Value
@@ -48,6 +62,8 @@ function Get-Preflight {
 
 try {
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { Set-BrokerHealth 'github_cli_unavailable' 'gh_missing'; throw 'github_cli_unavailable' }
+    Set-BrokerHealth 'available' 'broker_started'
     $preflight = Get-Preflight
     if ($preflight.status -in @('approved', 'validating')) {
         Invoke-Checked 'docker' @('exec', 'mypeople', 'git', '-C', [string]$preflight.workspace, 'bundle', 'create', $bundleInContainer, [string]$preflight.commit) | Out-Null
@@ -96,7 +112,9 @@ try {
     }
     @{ status = 'published_and_merged'; approvalId = $ApprovalId; repository = $preflight.repositorySlug; branch = $preflight.headBranch } | ConvertTo-Json -Compress
 } catch {
-    Write-Error ('publication_failed:' + $_.Exception.Message)
+    $message = $_.Exception.Message
+    Set-BrokerHealth (Get-FailureState $message) 'publication_failed'
+    Write-Error ('publication_failed:' + $message)
     exit 1
 } finally {
     Remove-Item -LiteralPath $bundlePath -Force -ErrorAction SilentlyContinue
