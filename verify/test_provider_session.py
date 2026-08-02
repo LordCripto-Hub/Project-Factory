@@ -204,6 +204,26 @@ class ProviderSessionContract(unittest.TestCase):
             {},
         )
         self.assertEqual(state["targetProfile"], "codex-secondary")
+        self.assertEqual(state["targetProfiles"], {agent_id: "codex-secondary"})
+
+    def test_global_profile_switch_preserves_agent_overrides_and_excludes_other_providers(self):
+        boss = {"agent_id": "node-1/main:Boss", "backend": "codex", "state": "alive", "retired": False}
+        nightwatch = {"agent_id": "node-1/nightwatch:Nightwatch", "backend": "codex", "state": "alive", "retired": False}
+        claude = {"agent_id": "node-1/main:Claude", "backend": "claude", "state": "alive", "retired": False}
+        transactions = self.root / "transactions"
+        bindings = self.root / "provider-bindings.json"
+        module.atomic_json(str(bindings), {"globalProfile": "codex-old", "agentProfiles": {boss["agent_id"]: "codex-primary"}})
+        args = module.argparse.Namespace(transaction="tx-global", agent="", backend="", model="", profile="codex-current")
+        with mock.patch.object(module, "TRANSACTIONS_ROOT", str(transactions)), \
+             mock.patch.object(module, "LOCK_PATH", self.lock), \
+             mock.patch.object(module, "BINDINGS_PATH", str(bindings)), \
+             mock.patch.object(module, "load_roster", return_value=[boss, nightwatch, claude]), \
+             mock.patch.object(module, "_capture_tail", return_value=""):
+            module.command_prepare(args)
+        state = module.load_json(str(transactions / "tx-global" / "state.json"), {})
+        active = module.load_json(str(transactions / "tx-global" / "active-roster.json"), [])
+        self.assertEqual(state["targetProfiles"], {boss["agent_id"]: "codex-primary", nightwatch["agent_id"]: "codex-current"})
+        self.assertEqual([row["agent_id"] for row in active], [boss["agent_id"], nightwatch["agent_id"]])
 
     def test_forward_revive_uses_transaction_authorized_fresh_handoff(self):
         transaction_dir = self.root / "transactions" / "tx-forward"

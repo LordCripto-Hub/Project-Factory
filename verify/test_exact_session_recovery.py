@@ -887,6 +887,25 @@ class ExactSessionSpawnContract(unittest.TestCase):
                 self.mp.fresh_handoff(namespace)
         forbidden_spawn.assert_not_called()
 
+        authorized["state"]["targetProfiles"] = {
+            record["agent_id"]: "codex-primary"
+        }
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PROVIDER_BINDINGS_PATH": str(self.bindings),
+                "PROVIDER_PROFILES_PATH": str(self.profiles),
+                "PROVIDER_HOMES_DIR": str(self.homes),
+            },
+            clear=False,
+        ), mock.patch.object(
+            self.mp,
+            "validate_fresh_handoff",
+            return_value=authorized,
+        ), mock.patch.object(self.mp, "spawn") as mapped_spawn:
+            self.mp.fresh_handoff(namespace)
+        mapped_spawn.assert_called_once()
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(

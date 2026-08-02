@@ -495,7 +495,12 @@ def validate_fresh_handoff(
         if target_backend and target_backend not in {"codex", "claude"}:
             raise SessionError("fresh_handoff_not_authorized")
         effective_backend = target_backend or record.get("backend")
-        target_profile = str(state.get("targetProfile") or "")
+        target_profiles = state.get("targetProfiles") or {}
+        if not isinstance(target_profiles, dict):
+            raise SessionError("fresh_handoff_not_authorized")
+        target_profile = str(
+            target_profiles.get(agent_id) or state.get("targetProfile") or ""
+        )
         if effective_backend == "codex":
             _safe_component(target_profile)
         elif target_profile:

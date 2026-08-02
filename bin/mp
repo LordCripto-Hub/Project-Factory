@@ -2205,7 +2205,10 @@ def fresh_handoff(ns):
     if runtime.backend not in {"codex", "claude"}:
         raise SystemExit("fresh_handoff_not_authorized")
     _, _, tab = parse_agent_id(aid)
-    target_profile = str(state.get("targetProfile") or "")
+    target_profiles = state.get("targetProfiles") or {}
+    if not isinstance(target_profiles,dict):
+        raise SystemExit("fresh_handoff_not_authorized")
+    target_profile = str(target_profiles.get(aid) or state.get("targetProfile") or "")
     if runtime.backend == "codex":
         _model, effective_profile, _home = resolve_provider_runtime(
             aid,

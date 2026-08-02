@@ -323,11 +323,16 @@ def command_prepare(args) -> None:
         complete_roster = load_roster()
         roster = active_provider_roster(complete_roster)
         selected = _selected(roster, args.agent)
+        if target_profile:
+            if args.agent and any(row.get("backend") != "codex" for row in selected):
+                raise RuntimeError("Codex provider profile requires a Codex agent")
+            if not args.agent:
+                selected = [row for row in selected if row.get("backend") == "codex"]
         bindings = load_json(BINDINGS_PATH, {})
         snapshot(transaction_dir, complete_roster, bindings)
         atomic_json(
             os.path.join(transaction_dir, "active-roster.json"),
-            roster,
+            selected,
             mode=0o600,
         )
         write_handoffs(transaction_dir, selected)
@@ -343,6 +348,15 @@ def command_prepare(args) -> None:
             state["targetModel"] = args.model
         if target_profile:
             state["targetProfile"] = validate_profile_id(target_profile)
+            overrides = bindings.get("agentProfiles") or {}
+            state["targetProfiles"] = {
+                row["agent_id"]: validate_profile_id(
+                    target_profile
+                    if args.agent
+                    else overrides.get(row["agent_id"]) or target_profile
+                )
+                for row in selected
+            }
         atomic_json(os.path.join(transaction_dir, "state.json"), state, mode=0o600)
     except Exception:
         release_lock(LOCK_PATH, args.transaction)
