@@ -126,7 +126,10 @@ def joined_agents():
         z["attach_base"]=base; z["attach_url"]=(f"{base}/?arg=-t&arg={urllib.parse.quote(z['tmux_target'],safe=':-')}" if base else "")
         z["spawn_cmd"]=r.get("spawn_cmd",z.get("spawn_cmd","")); z["revive_cmd"]="mp revive "+a["agent_id"]
         st=load_json(status_path(a["agent_id"]),{})
-        if st:z["summary"]=st.get("summary") or z.get("summary","");z["status"]=st.get("status","idle")
+        if st:
+            z["summary"]=st.get("summary") or z.get("summary","");z["status"]=st.get("status","idle")
+            for key in ("timestamp","activity_updated_at","activity_event"):
+                if key in st:z[key]=st[key]
         else:z["status"]="idle"
         out.append(z)
     return sorted(out,key=lambda x:(not x.get("is_master",False),x["agent_id"]))
