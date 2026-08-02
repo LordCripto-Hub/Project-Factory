@@ -31,7 +31,8 @@ class Ledger:
   now=time.time() if now is None else now; state=classify(task,owner,now); ctx=context(task,owner); payload={"event":event,"state":state,"context":ctx}; digest=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest();os.makedirs(os.path.dirname(self.path),exist_ok=True)
   with open(self.path+".lock","a+") as lock:
    fcntl.flock(lock,fcntl.LOCK_EX)
-   try:data=json.load(open(self.path))
+   try:
+    with open(self.path,encoding="utf-8") as source:data=json.load(source)
    except (OSError,ValueError):data={}
    prior=data.get(task["id"],{});data[task["id"]]={"digest":digest,"state":state,"updated":now}
    fd,tmp=tempfile.mkstemp(dir=os.path.dirname(self.path),prefix=".fleet-");
