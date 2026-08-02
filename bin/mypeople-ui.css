@@ -54,6 +54,19 @@
   --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
 }
 
+.lightbox-actions {
+  flex-wrap: wrap;
+}
+
+.lightbox-stage {
+  touch-action: none;
+}
+
+.lightbox-stage.panning img {
+  transition: none;
+  cursor: grabbing;
+}
+
 * {
   scrollbar-color: var(--gold-line) var(--soot);
 }

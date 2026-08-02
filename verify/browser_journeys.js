@@ -341,6 +341,27 @@ async function sandboxSuite(page, boardPollNavigation) {
   await page.waitForFunction(n => document.querySelectorAll('.evidence-card').length > n, beforeEvidence);
   await page.waitForFunction(() => document.querySelector('#evidenceStatus')?.textContent.includes('Uploaded'));
   await expect(await count(page, '.evidence-meta') >= 1, 'evidence metadata missing');
+  const imageTrigger = page.locator('.evidence-image-trigger').last();
+  await imageTrigger.click();
+  await page.waitForSelector('#lightbox:not([hidden])');
+  await expect(await page.locator('#lightboxImage').getAttribute('alt') === 'browser-evidence.png', 'lightbox image alt missing');
+  await page.click('#zoomIn');
+  await expect(await page.locator('#zoomReset').textContent() === '125%', 'lightbox zoom control failed');
+  await page.mouse.move(120, 320);
+  await page.mouse.down();
+  await page.mouse.move(160, 350);
+  await page.mouse.up();
+  await expect((await page.locator('#lightboxImage').getAttribute('style') || '').includes('translate('), 'lightbox pan transform missing');
+  await page.click('#zoomReset');
+  await expect(await page.locator('#zoomReset').textContent() === '100%', 'lightbox reset failed');
+  await expect(await page.locator('#fullscreenLightbox').isVisible(), 'lightbox fullscreen control missing');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('#lightbox[hidden]');
+  await expect(await page.evaluate(() => document.activeElement?.classList.contains('evidence-image-trigger')), 'lightbox did not return focus');
+  const media = await page.evaluate(() => [...document.querySelectorAll('#modal video')].map(video => ({ controls: video.controls, preload: video.preload, fullscreen: typeof video.requestFullscreen === 'function' })));
+  await expect(media.every(video => video.controls && video.preload === 'metadata' && video.fullscreen), 'video native controls/fullscreen unavailable');
+  const links = await page.evaluate(() => [...document.querySelectorAll('#modal .proof a[href]')].map(link => ({ target: link.target, rel: link.rel })));
+  await expect(links.every(link => link.target === '_blank' && link.rel.includes('noopener') && link.rel.includes('noreferrer')), 'evidence link safety attrs missing');
   await closeCard(page);
 
   // Cross-nav by real clicks.
