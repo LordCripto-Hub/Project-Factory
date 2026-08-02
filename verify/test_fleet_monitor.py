@@ -59,4 +59,27 @@ class TestFleet(unittest.TestCase):
     self.assertEqual((status,payload["error"]),(403,"nightwatch_cannot_create"));self.assertEqual(todo.TOKENS,{})
    finally:
     os.environ.clear();os.environ.update(old);sys.modules.pop("mpcommon",None)
+ def test_monitor_discards_observation_when_task_changes_during_roster_query(self):
+  with tempfile.TemporaryDirectory() as d:
+   old=os.environ.copy();os.environ.update({"INSTALL_DIR":d,"QUEUE_SECRET":"test","HOST_ID":"h","BOSS_AGENT":"main:Boss"})
+   try:
+    loader=importlib.machinery.SourceFileLoader("todo_monitor_race",str(ROOT/"bin"/"todo-server.py"));spec=importlib.util.spec_from_loader(loader.name,loader);todo=importlib.util.module_from_spec(spec);loader.exec_module(todo)
+    todo.BOARD_PATH=d+"/board.json";todo.TODOS_DIR=d;todo.FLEET=Ledger(d+"/race.json")
+    board=todo.blank_board();board["tasks"]["a"]=self.task(state="blocked",updated=10);board["order"]=["a"];todo.save_board(board,allow_shrink=True)
+    def mutate_during_roster():
+     with todo.STORE_LOCK:
+      current=todo.load_board();task=current["tasks"]["a"];task.update({"state":"done","assignee":"h/main:Other","updated":11,"ownerNeedsReplacement":True});task["ownerHistory"].append({"action":"replace","agent_id":"h/main:Other","ts":11});todo.save_board(current)
+     return {"h/main:W":self.owner(status="blocked")}
+    todo.roster_map=mutate_during_roster
+    sent=[];todo.mp_send=lambda agent,msg,**_kwargs:sent.append(agent) or 0
+    queued=[];todo.queue_fleet=lambda task,event:queued.append((task["id"],event)) or True
+    result=todo.process_fleet_event("a","fail")
+    self.assertEqual(result,{"discarded":"task_changed","task_id":"a"})
+    self.assertEqual(sent,[])
+    self.assertEqual(queued,[("a","task_changed")])
+    current=todo.load_board()["tasks"]["a"]
+    self.assertEqual((current["monitorState"],current["monitorAction"],current["monitorUpdated"]),("","",0))
+    self.assertFalse(Path(d+"/race.json").exists())
+   finally:
+    os.environ.clear();os.environ.update(old);sys.modules.pop("mpcommon",None)
 if __name__=='__main__':unittest.main()

@@ -254,18 +254,27 @@ def queue_fleet(task,event):
     if task.get("test"):return False
     try:FLEET_EVENTS.put_nowait((task["id"],event));return True
     except queue.Full:append_log(f"FLEET_MONITOR_QUEUE_FULL card={task.get('id','')} event={event}");return False
+def fleet_task_revision(task):
+    assignee=str(task.get("assignee") or "")
+    epochs=[float(item.get("ts",0)) for item in task.get("ownerHistory",[]) if item.get("agent_id")==assignee and item.get("action") in {"assign","replace","reopen","migrated_existing_owner"}]
+    return (task.get("updated"),task.get("state"),assignee,bool(task.get("ownerNeedsReplacement")),max(epochs) if epochs else None)
 def process_fleet_event(task_id,event):
     with STORE_LOCK:
         task=copy.deepcopy(load_board()["tasks"].get(task_id))
     if not task or task.get("test"):return None
-    observation=FLEET.observe(task,roster_map().get(task.get("assignee","")),event)
+    revision=fleet_task_revision(task);owner=roster_map().get(task.get("assignee",""));replacement=None
+    with STORE_LOCK:
+        board=load_board();current=board["tasks"].get(task_id)
+        if not current or current.get("test"):return None
+        if fleet_task_revision(current)!=revision:
+            replacement=copy.deepcopy(current);observation=None
+        else:
+            observation=FLEET.observe(current,owner,event)
+            if observation and observation.get("changed"):save_board(board)
+    if replacement:
+        queue_fleet(replacement,"task_changed")
+        return {"discarded":"task_changed","task_id":task_id}
     if not observation:return None
-    if observation.get("changed"):
-        with STORE_LOCK:
-            board=load_board();current=board["tasks"].get(task_id)
-            if current and not current.get("test"):
-                for key in ("monitorState","monitorUpdated","monitorAction"):current[key]=task[key]
-                save_board(board)
     delivery={"nightwatch":(NW_AGENT,message(observation)),"boss":(BOSS_FULL,"[fleet-monitor] "+observation["boss_action"]+" card="+observation["task_id"])}
     for target in observation.get("pending",[]):
         agent,payload=delivery[target]
