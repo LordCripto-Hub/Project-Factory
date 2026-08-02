@@ -32,6 +32,8 @@ Default interfaces:
 - Writable terminal: <http://localhost:7681/>
 - Read-only terminal: <http://localhost:7682/>
 
+Terminal Graph is the MyPeople Command Canvas: Boss and Nightwatch remain the command/oversight anchors, live workers keep their embedded terminal previews, and tasks are projected as priority, evidence, review, blocked, or delivered cards. Layers, views, typed connectors, inspector, and minimap are local projection controls over the existing roster and board; the Graph does not add rooms, invitations, presence, chat, external agents, or a second graph store.
+
 The standard Compose deployment binds these ports to **127.0.0.1**, does not
 request **NET_ADMIN** or **/dev/net/tun**, and never starts Tailscale. To
 dictate text, focus a MyPeople text box or writable terminal and press

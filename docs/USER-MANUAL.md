@@ -23,6 +23,10 @@ Open these addresses from Windows:
 - Writable web terminal: <http://localhost:7681/>
 - Read-only web terminal: <http://localhost:7682/>
 
+The Terminal Graph is the Command Canvas view. `Graph` is the default projection; `Mission`, `Fleet`, `Attention`, and `Execution` are local camera/filter views. The left layer rail controls Agents, Tasks, Evidence, Decisions, and Terminals. Selecting an agent or task opens the inspector, and `Open full task` continues into the existing task modal for edits, comments, and proofs. The minimap and Fit/Boss tools only change local canvas navigation. `Connect` is intentionally visual-only until a canonical relation-mutation API exists.
+
+The Command Canvas reads the existing roster and board through `/todo/terminal-graph` and `/todo/board`. It does not create rooms, invitations, presence, chat, external-agent integrations, or a second graph store.
+
 Normal flow:
 
 1. Create a card with a concrete objective and acceptance criteria.
