@@ -28,6 +28,7 @@ from project_publisher import (
     reject_request as reject_publication_request,
     select_current_approvals,
 )
+from fleet_monitor import Ledger, heartbeat_minutes, message
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
@@ -38,6 +39,7 @@ MEMORY_COMPARISON_RUNTIME_DIR=os.path.realpath(ENV.get("MEMORY_COMPARISON_RUNTIM
 TODOS_DIR=os.path.dirname(BOARD_PATH);PROOFS_DIR=os.path.join(TODOS_DIR,"proofs");INBOX_LOG=os.path.join(TODOS_DIR,"boss-inbox.log")
 os.makedirs(os.path.join(ROOT,"run"),exist_ok=True)
 SESSIONS=set();TOKENS={};START=time.time();STORE_LOCK=threading.RLock()
+FLEET=Ledger(os.path.join(ROOT,"run","fleet-monitor.json"))
 VALID_STATES={"needs_brainstorm","working","review","done","blocked","cancelled","recurring"};TERMINAL={"done","cancelled"}
 PROJECT_SLUG_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MEMORY_COMPARISON_ENABLED=ENV.get("MYPEOPLE_MEMORY_COMPARISON_ENABLED","")=="1"
@@ -241,6 +243,10 @@ def roster_map():
 def valid_owner(task,aid):
     r=roster_map().get(aid)
     return bool(r and r.get("state")=="alive" and not r.get("retired") and r.get("boss_id")==BOSS_FULL and r.get("lifecycle")=="owner" and r.get("owner_task_id")==task["id"])
+def observe_fleet(task,event):
+    if task.get("test"):return
+    observation=FLEET.observe(task,roster_map().get(task.get("assignee","")),event)
+    if observation:mp_send(NW_AGENT,message(observation),label="FLEET_MONITOR");ping_boss("[fleet-monitor] "+observation["boss_action"]+" card="+observation["task_id"])
 
 def classify_media(kind,url,filename="",ctype=""):
     probe=(filename or urllib.parse.urlparse(url or "").path).lower();ct=(ctype or "").lower()
@@ -325,15 +331,12 @@ def wall_data(graph=False):
     return {"agents":rows,"edges":edges,"tasks":tasks,"states":sorted(VALID_STATES)}
 
 def idle_watch():
-    fired=set();minutes=float(ENV.get("NIGHTWATCH_IDLE_MIN","30"))
+    minutes=heartbeat_minutes()
     while True:
-        time.sleep(min(30,max(2,minutes*15)))
+        time.sleep(minutes*60)
         try:
             b=load_board()
-            for tid,t in b["tasks"].items():
-                if t.get("test") or t.get("state") in TERMINAL:continue
-                if time.time()-float(t.get("updated",0))>=minutes*60 and tid not in fired:
-                    mp_send(NW_AGENT,f"[nightwatch] idle task {tid} \"{safe_title(t)}\"");fired.add(tid)
+            for t in b["tasks"].values():observe_fleet(t,"heartbeat")
         except Exception:pass
 threading.Thread(target=idle_watch,daemon=True).start()
 
@@ -696,6 +699,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if old!=desired and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {desired}",d.get("by",d.get("actor","")))
             else:return self.json({"ok":False,"error":"invalid_op"},400)
             if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
+            if op=="set":observe_fleet(t,"card_state")
             return self.json({"ok":True,"id":tid})
     def close_reopen(self,t,old,new,by):
         if by!="CEO":return
@@ -719,7 +723,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if by=="CEO" and t.get("assignee") and not t.get("ownerNeedsReplacement"):
                     # The Boss remains authoritative; this explicit owner detail makes same-owner routing deterministic.
                     append_log(f"OWNER_ROUTE {tid} -> {t['assignee']}")
-            save_board(b);return self.json({"ok":True,"comment":c})
+            save_board(b);observe_fleet(t,"worker_handoff" if text.startswith("Worker handoff") else "comment");return self.json({"ok":True,"comment":c})
     def status(self,kind,d):
         if kind=="nightwatch" and d.get("state")=="done":return self.json({"ok":False,"error":"nightwatch_cannot_done"},403)
         tid=d.get("task_id",d.get("id",""));state=d.get("state")
@@ -733,6 +737,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if err:return self.json({"ok":False,"error":err},409)
             t["state"]=state;t["verified"]=verified;t["updated"]=time.time();self.close_reopen(t,old,state,d.get("by",d.get("actor","")));save_board(b)
             if old!=state and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {state}",d.get("by",d.get("actor","")))
+            observe_fleet(t,"card_state")
             return self.json({"ok":True})
     def proof(self,kind,d,raw):
         filename="";ctype="";content=None
@@ -780,6 +785,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 t["state"]="working";t["verified"]=False
             t["ownerHistory"].append(owner_event(action,aid,prev if prev!=aid else "",BOSS_FULL));t["updated"]=time.time()
             if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
+            observe_fleet(t,"owner_assigned")
             return self.json({"ok":True,"assignee":aid,"previous":prev,"state":t["state"]})
     def inbound(self,kind,d):
         if kind!="machine":return self.json({"ok":False,"error":"unauthorized"},401)
