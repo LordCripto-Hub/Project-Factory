@@ -6,6 +6,7 @@ import base64
 import copy
 import hashlib
 import json
+import mimetypes
 import os
 import pathlib
 import shutil
@@ -377,10 +378,11 @@ def sandbox_api(path, method="GET", body=None, headers=None, timeout=20):
 def sandbox_upload(task_id: str, file_path: Path):
     boundary = "mypeople-core-verify-upload"
     content = file_path.read_bytes()
+    content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
     body = (
         f"--{boundary}\r\nContent-Disposition: form-data; name=\"task_id\"\r\n\r\n{task_id}\r\n"
         f"--{boundary}\r\nContent-Disposition: form-data; name=\"by\"\r\n\r\nCEO\r\n"
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_path.name}\"\r\nContent-Type: image/png\r\n\r\n"
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_path.name}\"\r\nContent-Type: {content_type}\r\n\r\n"
     ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
     req = request.Request(
         f"{sandbox.todo_url}/todo/proof",
