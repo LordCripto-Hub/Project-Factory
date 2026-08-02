@@ -906,6 +906,21 @@ class ExactSessionSpawnContract(unittest.TestCase):
             self.mp.fresh_handoff(namespace)
         mapped_spawn.assert_called_once()
 
+        authorized["state"] = {
+            "targetBackend": "codex",
+            "targetProfile": "codex-primary",
+            "targetProfiles": [],
+            "targetModel": "gpt-test",
+        }
+        with mock.patch.object(
+            self.mp,
+            "validate_fresh_handoff",
+            return_value=authorized,
+        ), mock.patch.object(self.mp, "spawn") as malformed_spawn:
+            with self.assertRaisesRegex(SystemExit, "fresh_handoff_not_authorized"):
+                self.mp.fresh_handoff(namespace)
+        malformed_spawn.assert_not_called()
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(

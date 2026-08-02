@@ -264,16 +264,29 @@ def rollback(transaction_dir: str) -> None:
     bindings = load_json(os.path.join(transaction_dir, "bindings.json"), {})
     try:
         current_roster = load_roster()
-        if has_active_snapshot:
-            current_roster = active_provider_roster(current_roster)
-        if selected_agent:
-            current_roster = [
-                row for row in current_roster if row.get("agent_id") == selected_agent
-            ]
-        if current_roster:
-            stop_agents(current_roster, selected_agent)
+        target_ids = {row.get("agent_id") for row in active_roster}
+        current_selected = [
+            row for row in current_roster if row.get("agent_id") in target_ids
+        ]
+        if current_selected:
+            stop_agents(current_selected, selected_agent)
         atomic_json(BINDINGS_PATH, bindings, mode=0o600)
-        save_roster(roster)
+        snapshot_by_id = {row.get("agent_id"): row for row in roster}
+        if any(agent_id not in snapshot_by_id for agent_id in target_ids):
+            raise RuntimeError("provider rollback snapshot is incomplete")
+        restored = []
+        restored_ids = set()
+        for row in current_roster:
+            agent_id = row.get("agent_id")
+            if agent_id in target_ids:
+                restored.append(snapshot_by_id[agent_id])
+                restored_ids.add(agent_id)
+            else:
+                restored.append(row)
+        for row in active_roster:
+            if row.get("agent_id") not in restored_ids:
+                restored.append(snapshot_by_id[row["agent_id"]])
+        save_roster(restored)
         revive_agents(active_roster, selected_agent)
         state["phase"] = "rolled-back"
         state["updated"] = time.time()

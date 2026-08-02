@@ -440,6 +440,30 @@ class ProviderSessionContract(unittest.TestCase):
         save.assert_called_once_with(roster)
         revive.assert_called_once_with(roster, agent_id)
 
+    def test_global_codex_rollback_preserves_unrelated_claude_runtime(self):
+        transaction_dir = self.root / "tx-hybrid"
+        codex_old = {"agent_id": "node-1/main:Boss", "backend": "codex", "state": "alive", "model": "old"}
+        claude_old = {"agent_id": "node-1/main:Claude", "backend": "claude", "state": "alive", "model": "old-claude"}
+        codex_current = {**codex_old, "model": "new"}
+        claude_current = {**claude_old, "model": "current-claude", "runtime_note": "preserve"}
+        bindings = {"globalProfile": "codex-old", "agentProfiles": {}}
+        module.snapshot(str(transaction_dir), [codex_old, claude_old], bindings)
+        module.atomic_json(str(transaction_dir / "active-roster.json"), [codex_old])
+        module.atomic_json(str(transaction_dir / "state.json"), {"transaction": "tx-hybrid", "selectedAgent": ""})
+        bindings_path = str(self.root / "provider-bindings.json")
+        module.atomic_json(bindings_path, {"globalProfile": "broken"})
+        module.acquire_lock(self.lock, "tx-hybrid")
+        with mock.patch.object(module, "BINDINGS_PATH", bindings_path), \
+             mock.patch.object(module, "LOCK_PATH", self.lock), \
+             mock.patch.object(module, "load_roster", return_value=[codex_current, claude_current]), \
+             mock.patch.object(module, "stop_agents") as stop, \
+             mock.patch.object(module, "save_roster") as save, \
+             mock.patch.object(module, "revive_agents") as revive:
+            module.rollback(str(transaction_dir))
+        stop.assert_called_once_with([codex_current], "")
+        save.assert_called_once_with([codex_old, claude_current])
+        revive.assert_called_once_with([codex_old], "")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

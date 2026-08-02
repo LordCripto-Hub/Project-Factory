@@ -433,6 +433,17 @@ class AgentSessionContract(unittest.TestCase):
             "bounded progress",
         )
 
+    def test_fresh_handoff_rejects_present_malformed_target_profile_map(self):
+        roots, lock_path, handoff_path, record = self.fresh_handoff_fixture()
+        for malformed in (None, [], ""):
+            state_path = roots / "tx-one" / "state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["targetProfiles"] = malformed
+            state_path.write_text(json.dumps(state) + "\n", encoding="utf-8")
+            os.chmod(state_path, 0o600)
+            with self.subTest(malformed=malformed), self.assertRaisesRegex(runtime.SessionError, "fresh_handoff_not_authorized"):
+                runtime.validate_fresh_handoff(str(roots), str(lock_path), "tx-one", str(handoff_path), record["agent_id"])
+
     def test_fresh_handoff_rejects_wrong_lock_or_non_stopped_phase(self):
         roots, lock_path, handoff_path, record = self.fresh_handoff_fixture()
         lock_path.write_text(
