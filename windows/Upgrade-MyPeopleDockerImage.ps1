@@ -91,6 +91,12 @@ function Restore-StoppedLiveContainer {
         if ($actualImage -ne $expectedImage) {
             throw "Refusing to restart unexpected image: $actualImage"
         }
+        $actualImageId = (Invoke-MyPeopleDocker -Arguments @(
+            'inspect', 'mypeople', '--format', '{{.Image}}'
+        ) -Capture).Trim()
+        if ($actualImageId -ne $script:state.rollbackImageId) {
+            throw 'Refusing to restart an unexpected immutable image ID.'
+        }
         Invoke-MyPeopleDocker -Arguments @('start', 'mypeople')
         Wait-MyPeopleControlPlane
         $running = (Invoke-MyPeopleDocker -Arguments @(

@@ -128,5 +128,16 @@ if ($finallyBody -notmatch [regex]::Escape('Restore-StoppedLiveContainer')) {
 if ($finallyBody -match [regex]::Escape("& docker start mypeople")) {
     throw 'Finally must not use an unchecked native Docker restart.'
 }
+$restartStart = $upgrade.IndexOf('function Restore-StoppedLiveContainer')
+$restartEnd = $upgrade.IndexOf('function Get-LiveState')
+if ($restartStart -lt 0 -or $restartEnd -le $restartStart) {
+    throw 'Unable to isolate the checked restart implementation.'
+}
+$restartBody = $upgrade.Substring($restartStart, $restartEnd - $restartStart)
+foreach ($required in @('{{.Image}}', 'rollbackImageId')) {
+    if ($restartBody -notmatch [regex]::Escape($required)) {
+        throw "Checked restart does not validate immutable image identity: $required"
+    }
+}
 
 Write-Output 'PASS provider-independent Docker image upgrade contract'
