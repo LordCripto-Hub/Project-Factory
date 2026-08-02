@@ -16,9 +16,9 @@ def context(task,owner):
 def classify(task,owner,now=None):
     now=time.time() if now is None else now;c=context(task,owner)
     if task.get("state") in TERMINAL or task.get("ownerNeedsReplacement"):return BENIGN
+    if not task.get("assignee") or (owner or {}).get("state") in {"missing","dead","retired"} or (owner or {}).get("retired") is True:return STALE
     if task.get("state")=="review" and c["handoff"]:return REVIEW_READY
     if task.get("state")=="blocked" or c["ownerState"]=="blocked":return BLOCKED
-    if not task.get("assignee") or c["ownerState"] in {"missing","dead","retired"}:return STALE
     raw_active=(owner or {}).get("activity_updated_at")
     if raw_active is None:raw_active=(owner or {}).get("timestamp")
     if raw_active is None:return BENIGN if c["ownerState"] in {"starting","working"} else STALE

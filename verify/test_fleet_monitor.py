@@ -14,6 +14,8 @@ class TestFleet(unittest.TestCase):
   self.assertEqual((heartbeat_minutes(1),heartbeat_minutes(9)),(2,5))
   self.assertEqual(classify(self.task(),{"state":"alive","status":"working","activity_updated_at":998},999),BENIGN)
   self.assertEqual(classify(self.task(),{"state":"alive","status":"working","activity_updated_at":0},999),STALE)
+  self.assertEqual(classify(self.task(),{"state":"dead","status":"idle","activity_updated_at":998},999),STALE)
+  self.assertEqual(classify(self.task(),{"state":"alive","retired":True,"status":"idle","activity_updated_at":998},999),STALE)
   self.assertEqual(classify(self.task(comments=[{"by":"CEO","ts":999}]),{"state":"alive","status":"idle","activity_updated_at":998},999),WAITING)
   with tempfile.TemporaryDirectory() as d:
    l=Ledger(d+"/l.json");t=self.task(state="blocked");self.assertIsNotNone(l.observe(t,self.owner(),"fail",1));self.assertIsNone(l.observe(t,self.owner(),"fail",2));self.assertEqual(t["monitorState"],BLOCKED);self.assertEqual(t["monitorAction"],"resolve_blocker")
