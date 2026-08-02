@@ -1,6 +1,6 @@
 # MyPeople Graph Command Canvas
 
-Date: 2026-08-02  
+Date: 2026-08-02
 Status: visual direction selected; implementation plan ready
 
 ## Outcome
@@ -72,4 +72,3 @@ Derived `card_kind` values are `PRIORITY`, `EVIDENCE`, `REVIEW`, `BLOCKED`, and 
 - The canvas works with zero workers, one worker, and many workers without the main hierarchy becoming unreadable.
 - The interface contains no multi-user or external-agent concepts.
 - Static contracts and Playwright coverage protect the semantic labels, projection fields, interaction surfaces, and stable terminal geometry.
-

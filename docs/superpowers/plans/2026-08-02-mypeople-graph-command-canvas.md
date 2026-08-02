@@ -216,4 +216,3 @@ Run `git diff --check`, `git status --short`, and `git diff --stat`. Confirm tha
 - **Spec coverage:** projection fields are covered by Task 1; shell and token preservation by Task 2; hierarchy/card layout by Task 3; typed edges/inspector/layers/views by Task 4; minimap/camera/accessibility by Task 5; docs and verification by Task 6.
 - **Placeholder scan:** the plan contains no `TBD`, empty TODO, or unspecified edge-case step; each task names exact files, commands, and expected outcomes.
 - **Type consistency:** the projection uses `role`, `kind`, `card_kind`, `proof_count`, `evidence_policy`, `done_condition`, and `project_slug`; the UI reads those names and falls back to current fields for compatibility. Local keys are `mp_graph_canvas_v1`, `mp_graph_layers_v1`, and `mp_graph_camera_v1`.
-
