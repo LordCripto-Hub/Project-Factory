@@ -237,14 +237,35 @@ function Clear-MyPeopleMemoryCredentialInContainer {
     if ($LASTEXITCODE -ne 0) { throw 'Unable to clear the MyPeople memory tmpfs credential.' }
 }
 
+function Get-MyPeopleLocalMemoryMode {
+    param([string]$Container = 'mypeople')
+    $safeContainer = Test-MyPeopleMemoryContainerName -Container $Container
+    try {
+        $output = (& docker exec $safeContainer /home/mp/mypeople/bin/mp memory mode status 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($output)) {
+            return 'unknown'
+        }
+        $status = $output | ConvertFrom-Json
+        if ($status.mode -in @('off', 'manual_canary', 'automatic')) {
+            return [string]$status.mode
+        }
+    } catch {
+        return 'unknown'
+    }
+    return 'unknown'
+}
+
 function Sync-MyPeopleMemoryActivation {
     param([string]$Container = 'mypeople')
+    $safeContainer = Test-MyPeopleMemoryContainerName -Container $Container
+    if ((Get-MyPeopleLocalMemoryMode -Container $safeContainer) -eq 'automatic') {
+        return 'local-automatic'
+    }
     $settings = Get-MyPeopleMemorySettings
     if ($null -eq $settings) {
-        Clear-MyPeopleMemoryCredentialInContainer -Container $Container
+        Clear-MyPeopleMemoryCredentialInContainer -Container $safeContainer
         return 'disabled'
     }
-    $safeContainer = Test-MyPeopleMemoryContainerName -Container $Container
     if ($settings.enabled) {
         Clear-MyPeopleMemoryCredentialInContainer -Container $safeContainer
         throw 'Persistent memory activation is blocked until the credential broker is isolated from workers.'

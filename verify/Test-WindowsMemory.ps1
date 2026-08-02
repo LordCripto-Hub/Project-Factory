@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $previousLocalAppData = $env:LOCALAPPDATA
 $previousPath = $env:PATH
 $previousDockerLog = $env:MYPEOPLE_MEMORY_DOCKER_LOG
+$previousFakeMode = $env:MYPEOPLE_MEMORY_FAKE_MODE
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('mypeople-memory-test-' + [Guid]::NewGuid().ToString('N'))
 
 try {
@@ -43,6 +44,11 @@ try {
     $fakeDocker = @'
 @echo off
 echo %*>>"%MYPEOPLE_MEMORY_DOCKER_LOG%"
+echo %* | findstr /c:"memory mode status" >nul
+if not errorlevel 1 (
+  if "%MYPEOPLE_MEMORY_FAKE_MODE%"=="automatic" echo {"mode":"automatic","revision":1,"allowedProjects":["project-factory"]}
+  exit /b 0
+)
 echo %* | findstr /c:"memory-profile disable" >nul
 if not errorlevel 1 exit /b 7
 exit /b 0
@@ -54,6 +60,17 @@ exit /b 0
     )
     $env:MYPEOPLE_MEMORY_DOCKER_LOG = $dockerLog
     $env:PATH = $fakeBin + [IO.Path]::PathSeparator + $previousPath
+    $env:MYPEOPLE_MEMORY_FAKE_MODE = 'automatic'
+    $syncResult = Sync-MyPeopleMemoryActivation -Container 'mypeople-test'
+    if ($syncResult -ne 'local-automatic') {
+        throw 'Automatic local memory was not recognized by the Windows launcher.'
+    }
+    $automaticCalls = [IO.File]::ReadAllText($dockerLog)
+    if ($automaticCalls.Contains('memory-profile disable') -or $automaticCalls.Contains('unlink')) {
+        throw 'Automatic local memory credentials were modified by legacy pilot rehydration.'
+    }
+    [IO.File]::WriteAllText($dockerLog, '', [Text.Encoding]::ASCII)
+    $env:MYPEOPLE_MEMORY_FAKE_MODE = 'off'
     $failedClosed = $false
     try {
         Sync-MyPeopleMemoryActivation -Container 'mypeople-test' | Out-Null
@@ -72,6 +89,7 @@ exit /b 0
     $env:LOCALAPPDATA = $previousLocalAppData
     $env:PATH = $previousPath
     $env:MYPEOPLE_MEMORY_DOCKER_LOG = $previousDockerLog
+    $env:MYPEOPLE_MEMORY_FAKE_MODE = $previousFakeMode
     if (Test-Path -LiteralPath $temporaryRoot) {
         Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
     }

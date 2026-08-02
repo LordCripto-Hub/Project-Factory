@@ -79,6 +79,16 @@ class WindowsMemoryContract(unittest.TestCase):
         self.assertNotIn("Write-Output $token", credential)
         self.assertNotIn("Write-Host $token", credential)
 
+    def test_standard_launcher_preserves_supervised_local_memory(self):
+        module = (ROOT / "windows" / "MyPeople.Memory.psm1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Get-MyPeopleLocalMemoryMode", module)
+        self.assertIn("'local-automatic'", module)
+        guard = module.index("Get-MyPeopleLocalMemoryMode")
+        legacy_settings = module.index("Get-MyPeopleMemorySettings", guard)
+        self.assertLess(guard, legacy_settings)
+
     def test_live_pilot_runner_always_clears_the_tmpfs_credential(self):
         pilot = ROOT / "windows" / "Test-MyPeopleMemoryPilot.ps1"
         self.assertTrue(pilot.is_file())
