@@ -70,6 +70,7 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         mp.load_roster = lambda: [current["record"]]
         mp.update_roster = lambda row: current.update(record=dict(row))
         mp.window_exists = lambda _target: alive["value"]
+        mp.require_matching_agent = lambda _target, expected: {"ok": True, "expected": expected}
         mp.http_json = lambda *_args, **_kwargs: {"tasks": {"task-1": {"state": "working", "assignee": aid}}, "deletedTasks": {}}
         mp.validate_resume_evidence = lambda *_args, **_kwargs: "/private/session.jsonl"
         def spawn(ns, resume_session="", receipt_record=None):
@@ -135,6 +136,7 @@ class ReviewResumeAndReviveTests(unittest.TestCase):
         mp.load_roster = lambda: [current["record"]]
         mp.update_roster = lambda row: current.update(record=dict(row))
         mp.window_exists = lambda _target: alive["value"]
+        mp.require_matching_agent = lambda _target, expected: {"ok": True, "expected": expected}
         mp.validate_resume_evidence = lambda *_args, **_kwargs: "/private/session.jsonl"
         def spawn(ns, resume_session="", receipt_record=None):
             sent.append((ns, resume_session, receipt_record))
