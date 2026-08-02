@@ -464,6 +464,27 @@ class ProviderSessionContract(unittest.TestCase):
         save.assert_called_once_with([codex_old, claude_current])
         revive.assert_called_once_with([codex_old], "")
 
+    def test_corrupt_rollback_snapshot_fails_before_any_mutation(self):
+        transaction_dir = self.root / "tx-corrupt"
+        ghost = {"agent_id": "node-1/main:Ghost", "backend": "codex", "state": "alive"}
+        module.snapshot(str(transaction_dir), [], {"globalProfile": "codex-old"})
+        module.atomic_json(str(transaction_dir / "active-roster.json"), [ghost])
+        module.atomic_json(str(transaction_dir / "state.json"), {"transaction": "tx-corrupt", "selectedAgent": ""})
+        bindings_path = str(self.root / "provider-bindings.json")
+        broken = {"globalProfile": "broken"}
+        module.atomic_json(bindings_path, broken)
+        module.acquire_lock(self.lock, "tx-corrupt")
+        with mock.patch.object(module, "BINDINGS_PATH", bindings_path), \
+             mock.patch.object(module, "LOCK_PATH", self.lock), \
+             mock.patch.object(module, "load_roster", return_value=[ghost]), \
+             mock.patch.object(module, "stop_agents") as stop, \
+             mock.patch.object(module, "save_roster") as save, \
+             mock.patch.object(module, "revive_agents") as revive:
+            with self.assertRaisesRegex(RuntimeError, "snapshot is incomplete"):
+                module.rollback(str(transaction_dir))
+        stop.assert_not_called();save.assert_not_called();revive.assert_not_called()
+        self.assertEqual(module.load_json(bindings_path, {}), broken)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

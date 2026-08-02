@@ -263,17 +263,17 @@ def rollback(transaction_dir: str) -> None:
     active_roster = load_json(active_path, []) if has_active_snapshot else roster
     bindings = load_json(os.path.join(transaction_dir, "bindings.json"), {})
     try:
-        current_roster = load_roster()
         target_ids = {row.get("agent_id") for row in active_roster}
+        snapshot_by_id = {row.get("agent_id"): row for row in roster}
+        if any(agent_id not in snapshot_by_id for agent_id in target_ids):
+            raise RuntimeError("provider rollback snapshot is incomplete")
+        current_roster = load_roster()
         current_selected = [
             row for row in current_roster if row.get("agent_id") in target_ids
         ]
         if current_selected:
             stop_agents(current_selected, selected_agent)
         atomic_json(BINDINGS_PATH, bindings, mode=0o600)
-        snapshot_by_id = {row.get("agent_id"): row for row in roster}
-        if any(agent_id not in snapshot_by_id for agent_id in target_ids):
-            raise RuntimeError("provider rollback snapshot is incomplete")
         restored = []
         restored_ids = set()
         for row in current_roster:
