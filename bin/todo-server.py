@@ -156,7 +156,7 @@ def blank_board():return default_board()
 def owner_event(action,agent_id="",previous="",by="system"):
     return {"id":secrets.token_hex(6),"action":action,"kind":action,"agent_id":agent_id,"previous":previous,"by":by,"ts":time.time()}
 def normalize_task(t):
-    defaults={"text":"","state":"needs_brainstorm","assignee":"","doneCondition":"","projectSlug":"","contextQuestion":"","memoryCanary":False,"evidencePolicy":"optional","workToDone":False,"comments":[],"proofs":[],"unread":0,"verified":False,"pingsToBoss":0,"pinned":False,"pinRank":None,"test":False,"ownerHistory":[],"ownerNeedsReplacement":False,"updated":time.time()}
+    defaults={"text":"","state":"needs_brainstorm","assignee":"","doneCondition":"","projectSlug":"","contextQuestion":"","memoryCanary":False,"evidencePolicy":"optional","workToDone":False,"comments":[],"proofs":[],"unread":0,"verified":False,"pingsToBoss":0,"pinned":False,"pinRank":None,"test":False,"ownerHistory":[],"ownerNeedsReplacement":False,"monitorState":"","monitorUpdated":0,"monitorAction":"","updated":time.time()}
     for k,v in defaults.items():
         if k not in t or t[k] is None:t[k]=copy.deepcopy(v)
     if t.get("evidencePolicy") not in ("required","optional"):t["evidencePolicy"]="optional"
@@ -709,8 +709,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 t["updated"]=time.time();self.close_reopen(t,old,desired,d.get("by",d.get("actor","")))
                 if old!=desired and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {desired}",d.get("by",d.get("actor","")))
             else:return self.json({"ok":False,"error":"invalid_op"},400)
-            if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
             if op=="set":observe_fleet(t,"card_state")
+            if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
             return self.json({"ok":True,"id":tid})
     def close_reopen(self,t,old,new,by):
         if by!="CEO":return
@@ -734,7 +734,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if by=="CEO" and t.get("assignee") and not t.get("ownerNeedsReplacement"):
                     # The Boss remains authoritative; this explicit owner detail makes same-owner routing deterministic.
                     append_log(f"OWNER_ROUTE {tid} -> {t['assignee']}")
-            save_board(b);observe_fleet(t,"worker_handoff" if text.startswith("Worker handoff") else "comment");return self.json({"ok":True,"comment":c})
+            observe_fleet(t,"worker_handoff" if text.startswith("Worker handoff") else "comment");save_board(b);return self.json({"ok":True,"comment":c})
     def status(self,kind,d):
         if kind=="nightwatch" and d.get("state")=="done":return self.json({"ok":False,"error":"nightwatch_cannot_done"},403)
         tid=d.get("task_id",d.get("id",""));state=d.get("state")
@@ -746,9 +746,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.json({"ok":False,"error":"stale_task_version"},409)
             old=t["state"];verified=transition_verified(old,state,d.get("verified"),t.get("verified",False));err=done_transition_error(t,state,verified)
             if err:return self.json({"ok":False,"error":err},409)
-            t["state"]=state;t["verified"]=verified;t["updated"]=time.time();self.close_reopen(t,old,state,d.get("by",d.get("actor","")));save_board(b)
+            t["state"]=state;t["verified"]=verified;t["updated"]=time.time();self.close_reopen(t,old,state,d.get("by",d.get("actor","")))
             if old!=state and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {state}",d.get("by",d.get("actor","")))
             observe_fleet(t,"card_state")
+            save_board(b)
             return self.json({"ok":True})
     def proof(self,kind,d,raw):
         filename="";ctype="";content=None
@@ -795,8 +796,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if t.get("state") in ("needs_brainstorm","review"):
                 t["state"]="working";t["verified"]=False
             t["ownerHistory"].append(owner_event(action,aid,prev if prev!=aid else "",BOSS_FULL));t["updated"]=time.time()
-            if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
             observe_fleet(t,"owner_assigned")
+            if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
             return self.json({"ok":True,"assignee":aid,"previous":prev,"state":t["state"]})
     def inbound(self,kind,d):
         if kind!="machine":return self.json({"ok":False,"error":"unauthorized"},401)
