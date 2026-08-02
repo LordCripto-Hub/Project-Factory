@@ -304,6 +304,43 @@ async function capturePhase() {
       if (target.ready) await page.waitForSelector(target.ready);
       if (target.prepare) await target.prepare(page);
       await settle(page);
+      if (target.name === "priorities-detail") {
+        const mobileContract = await page.evaluate(() => {
+          const selectors = ["#modalTitle", "#modalId", "#ownerLine", "#thread", "#commentInput", "#postComment"];
+          const boxes = Object.fromEntries(selectors.map((selector) => {
+            const r = document.querySelector(selector).getBoundingClientRect();
+            return [selector, { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }];
+          }));
+          const intersects = (r) => r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.x < innerWidth && r.y < innerHeight;
+          const shell = document.querySelector("#modalShell");
+          return { boxes, intersects: selectors.every((selector) => intersects(boxes[selector])), detailsHidden: document.querySelector("#detailsPanel").hidden, overflowX: shell.scrollWidth - shell.clientWidth, overflowY: shell.scrollHeight - shell.clientHeight, threadHeight: boxes["#thread"].height };
+        });
+        if (viewportName === "mobile") {
+          if (!mobileContract.intersects || !mobileContract.detailsHidden || mobileContract.overflowX > 1 || mobileContract.overflowY > 1 || mobileContract.threadHeight < 120) throw new Error(`mobile modal contract failed: ${JSON.stringify(mobileContract)}`);
+          const trigger = page.locator('li.task[data-id="visual-alpha"] .task-text');
+          await page.click("#closeModal");
+          await page.waitForFunction(() => !document.body.classList.contains("modal-open"));
+          await trigger.focus();
+          await trigger.click();
+          await page.waitForSelector("body.modal-open");
+          await page.click("#detailsToggle");
+          await page.waitForFunction(() => !document.querySelector("#detailsPanel").hidden && document.querySelector("#detailsPanel").scrollHeight >= document.querySelector("#detailsPanel").clientHeight);
+          await trigger.focus();
+          await page.click("#closeModal");
+          await page.waitForFunction(() => !document.body.classList.contains("modal-open"));
+          if (!(await trigger.evaluate((node) => document.activeElement === node))) throw new Error("mobile modal did not restore focus");
+          await trigger.focus();
+          await trigger.click();
+          await page.waitForSelector("body.modal-open");
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.body.classList.contains("modal-open"));
+          if (!(await trigger.evaluate((node) => document.activeElement === node))) throw new Error("mobile ESC did not restore focus");
+          await trigger.focus();
+          await trigger.click();
+          await page.waitForSelector("body.modal-open");
+          await settle(page);
+        }
+      }
       const audit = await page.evaluate(() => {
         const visible = (element) => {
           const style = getComputedStyle(element);
