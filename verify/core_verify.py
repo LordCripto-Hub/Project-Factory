@@ -898,6 +898,16 @@ def build_sandbox_fixtures():
     img = TMP / "proof.png"
     img.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO94W9kAAAAASUVORK5CYII="))
     sandbox_upload(proof_id, img)
+    video_bytes = subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=royalblue:s=320x180:d=1", "-c:v", "libvpx-vp9", "-crf", "42", "-b:v", "0", "-an", "-f", "webm", "pipe:1"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    check(len(video_bytes) < 1024 * 1024, "video fixture exceeded 1 MiB")
+    video = TMP / "viewer-fixture.webm"
+    video.write_bytes(video_bytes)
+    sandbox_upload(proof_id, video)
+    sandbox_api("/todo/proof", "POST", {"task_id": proof_id, "kind": "link", "url": "https://example.com/viewer-fixture", "by": "CEO"})
     # Optional inline text proof for completeness.
     sandbox_api("/todo/proof", "POST", {"task_id": proof_id, "kind": "text", "body": "proof text"})
     # Owner history fixture for attach clicks.

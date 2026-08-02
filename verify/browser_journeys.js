@@ -341,6 +341,14 @@ async function sandboxSuite(page, boardPollNavigation) {
   await page.waitForFunction(n => document.querySelectorAll('.evidence-card').length > n, beforeEvidence);
   await page.waitForFunction(() => document.querySelector('#evidenceStatus')?.textContent.includes('Uploaded'));
   await expect(await count(page, '.evidence-meta') >= 1, 'evidence metadata missing');
+  await page.evaluate(() => {
+    window.__fullscreenCalls = 0;
+    HTMLElement.prototype.requestFullscreen = function () { window.__fullscreenCalls += 1; return Promise.resolve(); };
+    document.exitFullscreen = () => Promise.resolve();
+    const originalPlay = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () { window.__playCalls = (window.__playCalls || 0) + 1; return Promise.resolve(); };
+    window.__restoreMedia = () => { HTMLMediaElement.prototype.play = originalPlay; };
+  });
   const imageTrigger = page.locator('.evidence-image-trigger').last();
   await imageTrigger.click();
   await page.waitForSelector('#lightbox:not([hidden])');
@@ -355,13 +363,24 @@ async function sandboxSuite(page, boardPollNavigation) {
   await page.click('#zoomReset');
   await expect(await page.locator('#zoomReset').textContent() === '100%', 'lightbox reset failed');
   await expect(await page.locator('#fullscreenLightbox').isVisible(), 'lightbox fullscreen control missing');
+  await page.click('#fullscreenLightbox');
+  await expect(await page.evaluate(() => window.__fullscreenCalls) === 1, 'fullscreen control did not invoke requestFullscreen');
   await page.keyboard.press('Escape');
   await page.waitForSelector('#lightbox[hidden]');
   await expect(await page.evaluate(() => document.activeElement?.classList.contains('evidence-image-trigger')), 'lightbox did not return focus');
-  const media = await page.evaluate(() => [...document.querySelectorAll('#modal video')].map(video => ({ controls: video.controls, preload: video.preload, fullscreen: typeof video.requestFullscreen === 'function' })));
-  await expect(media.every(video => video.controls && video.preload === 'metadata' && video.fullscreen), 'video native controls/fullscreen unavailable');
+  const media = await page.evaluate(async () => { const videos = [...document.querySelectorAll('#modal video')]; for (const video of videos) await video.play(); return { items: videos.map(video => ({ controls: video.controls, preload: video.preload, fullscreen: typeof video.requestFullscreen === 'function' })), playCalls: window.__playCalls || 0 }; });
+  await expect(media.items.length >= 1, 'video fixture missing');
+  await expect(media.items.every(video => video.controls && video.preload === 'metadata' && video.fullscreen), 'video native controls/fullscreen unavailable');
+  await expect(media.playCalls >= media.items.length, 'video play() was not attempted');
   const links = await page.evaluate(() => [...document.querySelectorAll('#modal .proof a[href]')].map(link => ({ target: link.target, rel: link.rel })));
+  await expect(links.length >= 1, 'link fixture missing');
   await expect(links.every(link => link.target === '_blank' && link.rel.includes('noopener') && link.rel.includes('noreferrer')), 'evidence link safety attrs missing');
+  const linkPopupEvent = page.waitForEvent('popup');
+  await page.locator('#modal .proof a[target="_blank"]').first().click();
+  const linkPopup = await linkPopupEvent;
+  await expect(linkPopup.url().startsWith('https://example.com/viewer-fixture'), 'safe evidence link did not open a new tab');
+  await linkPopup.close();
+  await page.evaluate(() => window.__restoreMedia?.());
   await closeCard(page);
 
   // Cross-nav by real clicks.
