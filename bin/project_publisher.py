@@ -201,12 +201,23 @@ def select_current_approvals(records: list[dict]) -> list[dict]:
     return selected
 
 
-def select_actionable_approvals(records: list[dict]) -> list[dict]:
+def select_actionable_approvals(records: list[dict], *, now: float | None = None) -> list[dict]:
     """Return only publication records that still require CEO action."""
+    current = time.time() if now is None else float(now)
+
+    def unexpired(record: dict) -> bool:
+        value = record.get("expiresAt")
+        if value in (None, ""):
+            return True
+        try:
+            return float(value) > current
+        except (TypeError, ValueError):
+            return False
+
     return [
         record
         for record in select_current_approvals(records)
-        if record.get("status") in CEO_ACTIONABLE_APPROVAL_STATUSES
+        if record.get("status") in CEO_ACTIONABLE_APPROVAL_STATUSES and unexpired(record)
     ]
 
 

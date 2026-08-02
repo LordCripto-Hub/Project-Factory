@@ -175,6 +175,37 @@ class ProjectPublisherContract(unittest.TestCase):
         ]
         self.assertEqual(self.module.select_actionable_approvals(records), [])
 
+    def test_actionable_projection_hides_expired_pending_records(self):
+        record = {
+            "approvalId": "a" * 24,
+            "taskId": "t",
+            "projectSlug": "p",
+            "repository": "repo",
+            "mode": "direct_main",
+            "branch": "main",
+            "commit": "1" * 40,
+            "status": "pending",
+            "expiresAt": 99,
+        }
+        self.assertEqual(self.module.select_actionable_approvals([record], now=100), [])
+
+    def test_actionable_projection_keeps_unexpired_pending_records(self):
+        record = {
+            "approvalId": "a" * 24,
+            "taskId": "t",
+            "projectSlug": "p",
+            "repository": "repo",
+            "mode": "direct_main",
+            "branch": "main",
+            "commit": "1" * 40,
+            "status": "pending",
+            "expiresAt": 101,
+        }
+        self.assertEqual(
+            [item["approvalId"] for item in self.module.select_actionable_approvals([record], now=100)],
+            ["a" * 24],
+        )
+
     def test_merge_when_green_approval_binds_exact_actions_and_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)

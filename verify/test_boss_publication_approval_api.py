@@ -19,6 +19,7 @@ class BossPublicationApprovalApiContract(unittest.TestCase):
         self.assertIn('kind!="browser"', SERVER)
         self.assertIn("repositorySlug", SERVER)
         self.assertIn("select_actionable_approvals", SERVER)
+        self.assertIn("expiresAt", SERVER)
         for secret in ("transactionNonce", "workspace", "password", "private_key", "token"):
             self.assertNotIn(f'"{secret}"', SERVER.split("publication_approval_projection", 1)[1].split("class Handler", 1)[0])
 
@@ -29,6 +30,7 @@ class BossPublicationApprovalApiContract(unittest.TestCase):
         self.assertIn("Reject", BOARD)
         self.assertIn("textContent", BOARD)
         self.assertNotIn("innerHTML", BOARD)
+        self.assertIn("finally", BOARD)
         self.assertTrue(re.search(r"/todo/publication-approval", BOARD))
 
     def test_hud_exposes_only_bounded_publisher_health(self):
