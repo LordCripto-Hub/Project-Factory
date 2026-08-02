@@ -67,10 +67,6 @@ def heartbeat():
     http_json("/heartbeat","POST",{"hostname":HOST,"attach_base":base,"substrate_ready":True,
       "purpose":ENV.get("NODE_PURPOSE","mypeople"),"node_type":ENV.get("NODE_TYPE","system-agent"),
       "recording_url":ENV.get("NODE_RECORDING_URL",""),"state":load_json(os.path.join(ROOT,"run","hydration.json"),{}).get("state","ready"),"agents":live_roster()})
-    for row in live_roster():
-        if row.get("lifecycle")=="owner" and row.get("owner_task_id"):
-            try:http_json("/todo/monitor-event","POST",{"task_id":row["owner_task_id"],"event":"heartbeat"})
-            except Exception:pass
 
 def execute(task):
     typ=task.get("type") or task.get("action");aid=task.get("target_agent","");p=task.get("payload") or {}

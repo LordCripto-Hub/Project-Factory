@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import cgi, copy, hashlib, http.client, http.cookies, http.server, io, json, mimetypes, os, pathlib, re, secrets, shutil, subprocess, threading, time
+import cgi, copy, hashlib, http.client, http.cookies, http.server, io, json, mimetypes, os, pathlib, queue, re, secrets, shutil, subprocess, threading, time
 import urllib.parse, urllib.request
 from evidence_validation import validate_evidence_url
 from mpcommon import *
@@ -40,6 +40,7 @@ TODOS_DIR=os.path.dirname(BOARD_PATH);PROOFS_DIR=os.path.join(TODOS_DIR,"proofs"
 os.makedirs(os.path.join(ROOT,"run"),exist_ok=True)
 SESSIONS=set();TOKENS={};START=time.time();STORE_LOCK=threading.RLock()
 FLEET=Ledger(os.path.join(ROOT,"run","fleet-monitor.json"))
+FLEET_EVENTS=queue.Queue(maxsize=2048)
 VALID_STATES={"needs_brainstorm","working","review","done","blocked","cancelled","recurring"};TERMINAL={"done","cancelled"}
 PROJECT_SLUG_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MEMORY_COMPARISON_ENABLED=ENV.get("MYPEOPLE_MEMORY_COMPARISON_ENABLED","")=="1"
@@ -249,10 +250,33 @@ def roster_map():
 def valid_owner(task,aid):
     r=roster_map().get(aid)
     return bool(r and r.get("state")=="alive" and not r.get("retired") and r.get("boss_id")==BOSS_FULL and r.get("lifecycle")=="owner" and r.get("owner_task_id")==task["id"])
-def observe_fleet(task,event):
-    if task.get("test"):return
+def queue_fleet(task,event):
+    if task.get("test"):return False
+    try:FLEET_EVENTS.put_nowait((task["id"],event));return True
+    except queue.Full:append_log(f"FLEET_MONITOR_QUEUE_FULL card={task.get('id','')} event={event}");return False
+def process_fleet_event(task_id,event):
+    with STORE_LOCK:
+        task=copy.deepcopy(load_board()["tasks"].get(task_id))
+    if not task or task.get("test"):return None
     observation=FLEET.observe(task,roster_map().get(task.get("assignee","")),event)
-    if observation:mp_send(NW_AGENT,message(observation),label="FLEET_MONITOR");ping_boss("[fleet-monitor] "+observation["boss_action"]+" card="+observation["task_id"])
+    if not observation:return None
+    if observation.get("changed"):
+        with STORE_LOCK:
+            board=load_board();current=board["tasks"].get(task_id)
+            if current and not current.get("test"):
+                for key in ("monitorState","monitorUpdated","monitorAction"):current[key]=task[key]
+                save_board(board)
+    delivery={"nightwatch":(NW_AGENT,message(observation)),"boss":(BOSS_FULL,"[fleet-monitor] "+observation["boss_action"]+" card="+observation["task_id"])}
+    for target in observation.get("pending",[]):
+        agent,payload=delivery[target]
+        if mp_send(agent,payload,label="FLEET_MONITOR")==0:FLEET.ack(task_id,observation["digest"],target)
+    return observation
+def fleet_worker():
+    while True:
+        task_id,event=FLEET_EVENTS.get()
+        try:process_fleet_event(task_id,event)
+        except Exception as error:append_log(f"FLEET_MONITOR_ERROR card={task_id} event={event} error={type(error).__name__}")
+        finally:FLEET_EVENTS.task_done()
 
 def classify_media(kind,url,filename="",ctype=""):
     probe=(filename or urllib.parse.urlparse(url or "").path).lower();ct=(ctype or "").lower()
@@ -341,9 +365,10 @@ def idle_watch():
     while True:
         time.sleep(minutes*60)
         try:
-            b=load_board()
-            for t in b["tasks"].values():observe_fleet(t,"heartbeat")
+            with STORE_LOCK:tasks=list(load_board()["tasks"].values())
+            for task in tasks:queue_fleet(task,"heartbeat")
         except Exception:pass
+threading.Thread(target=fleet_worker,daemon=True).start()
 threading.Thread(target=idle_watch,daemon=True).start()
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -496,8 +521,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             b=load_board();t=b["tasks"].get(tid)
             if not t:return self.json({"ok":False,"error":"unknown_task"},404)
             if t.get("state") in TERMINAL or t.get("ownerNeedsReplacement"):return self.json({"ok":True,"ignored":"terminal_or_replacement"})
-            observe_fleet(t,event);save_board(b)
-            return self.json({"ok":True,"monitorState":t.get("monitorState"),"monitorAction":t.get("monitorAction")})
+            queued=queue_fleet(t,event)
+            return self.json({"ok":True,"queued":queued,"monitorState":t.get("monitorState"),"monitorAction":t.get("monitorAction")})
     def publication_approval(self,kind,body):
         if kind!="browser" or body.get("by")!="CEO":
             return self.json({"ok":False,"error":"ceo_approval_required"},403)
@@ -715,7 +740,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 t["updated"]=time.time();self.close_reopen(t,old,desired,d.get("by",d.get("actor","")))
                 if old!=desired and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {desired}",d.get("by",d.get("actor","")))
             else:return self.json({"ok":False,"error":"invalid_op"},400)
-            if op=="set":observe_fleet(t,"card_state")
+            if op=="set":queue_fleet(t,"card_state")
             if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
             return self.json({"ok":True,"id":tid})
     def close_reopen(self,t,old,new,by):
@@ -740,7 +765,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if by=="CEO" and t.get("assignee") and not t.get("ownerNeedsReplacement"):
                     # The Boss remains authoritative; this explicit owner detail makes same-owner routing deterministic.
                     append_log(f"OWNER_ROUTE {tid} -> {t['assignee']}")
-            observe_fleet(t,"worker_handoff" if text.startswith("Worker handoff") else "comment");save_board(b);return self.json({"ok":True,"comment":c})
+            queue_fleet(t,"worker_handoff" if text.startswith("Worker handoff") else "comment");save_board(b);return self.json({"ok":True,"comment":c})
     def status(self,kind,d):
         if kind=="nightwatch" and d.get("state")=="done":return self.json({"ok":False,"error":"nightwatch_cannot_done"},403)
         tid=d.get("task_id",d.get("id",""));state=d.get("state")
@@ -754,7 +779,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if err:return self.json({"ok":False,"error":err},409)
             t["state"]=state;t["verified"]=verified;t["updated"]=time.time();self.close_reopen(t,old,state,d.get("by",d.get("actor","")))
             if old!=state and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {state}",d.get("by",d.get("actor","")))
-            observe_fleet(t,"card_state")
+            queue_fleet(t,"card_state")
             save_board(b)
             return self.json({"ok":True})
     def proof(self,kind,d,raw):
@@ -802,7 +827,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if t.get("state") in ("needs_brainstorm","review"):
                 t["state"]="working";t["verified"]=False
             t["ownerHistory"].append(owner_event(action,aid,prev if prev!=aid else "",BOSS_FULL));t["updated"]=time.time()
-            observe_fleet(t,"owner_assigned")
+            queue_fleet(t,"owner_assigned")
             if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
             return self.json({"ok":True,"assignee":aid,"previous":prev,"state":t["state"]})
     def inbound(self,kind,d):

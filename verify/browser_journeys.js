@@ -374,7 +374,7 @@ async function sandboxSuite(page, boardPollNavigation) {
   await expect(await page.evaluate(() => document.activeElement?.classList.contains('evidence-image-trigger')), 'lightbox did not return focus');
   const media = await page.evaluate(async () => { const videos = [...document.querySelectorAll('#modal video')]; for (const video of videos) await video.play(); return { items: videos.map(video => ({ controls: video.controls, preload: video.preload, fullscreen: typeof video.requestFullscreen === 'function' })), playCalls: window.__playCalls || 0 }; });
   await expect(media.items.length >= 1, 'video fixture missing');
-  await expect(media.items.every(video => video.controls && video.preload === 'metadata' && video.fullscreen), 'video native controls/fullscreen unavailable');
+  await expect(media.items.every(video => video.controls && video.preload === 'metadata' && video.fullscreen), 'video controls/fullscreen wiring unavailable');
   await expect(media.playCalls >= media.items.length, 'video play() was not attempted');
   const links = await page.evaluate(() => [...document.querySelectorAll('#modal .proof a[href]')].map(link => ({ href: link.href, target: link.target, rel: link.rel })));
   await expect(links.length >= 1, 'link fixture missing');
