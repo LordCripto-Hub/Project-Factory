@@ -79,4 +79,32 @@ foreach ($forbidden in @(
     }
 }
 
+$backupStart = $upgrade.IndexOf('function Write-PortableBackup')
+$backupEnd = $upgrade.IndexOf('function Assert-Preflight')
+if ($backupStart -lt 0 -or $backupEnd -le $backupStart) {
+    throw 'Unable to isolate the portable-backup implementation.'
+}
+$backupBody = $upgrade.Substring($backupStart, $backupEnd - $backupStart)
+foreach ($required in @(
+    'backupBoardSha256',
+    'backupStableRosterSha256',
+    '/src/mypeople-todos/board.v2.json',
+    '/src/mypeople-run/roster.json'
+)) {
+    if ($backupBody -notmatch [regex]::Escape($required)) {
+        throw "Backup does not capture frozen durable state: $required"
+    }
+}
+if ($backupBody -match [regex]::Escape("Invoke-MyPeopleDocker -Arguments @('start', 'mypeople')")) {
+    throw 'The old runtime must remain stopped between backup and candidate deployment.'
+}
+foreach ($required in @(
+    '$script:state.beforeBoardSha256 = $script:state.backupBoardSha256',
+    '$script:state.beforeStableRosterSha256 = $script:state.backupStableRosterSha256'
+)) {
+    if ($upgrade -notmatch [regex]::Escape($required)) {
+        throw "Upgrade does not compare against the frozen backup state: $required"
+    }
+}
+
 Write-Output 'PASS provider-independent Docker image upgrade contract'

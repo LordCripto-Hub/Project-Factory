@@ -194,6 +194,13 @@ tar -tzf /tmp/portable-state.tar.gz >/dev/null
     if ((Get-Item -LiteralPath $archivePath).Length -lt 1024) { throw 'Portable archive is unexpectedly small.' }
     $script:state.archiveSha256 = $hostHash
     $script:state.archiveBytes = (Get-Item -LiteralPath $archivePath).Length
+    $script:state.backupBoardSha256 = ((Invoke-MyPeopleDocker -Arguments @(
+        'exec', $helper, 'sha256sum', '/src/mypeople-todos/board.v2.json'
+    ) -Capture).Trim() -split '\s+')[0]
+    $backupRosterJson = Invoke-MyPeopleDocker -Arguments @(
+        'exec', $helper, 'cat', '/src/mypeople-run/roster.json'
+    ) -Capture
+    $script:state.backupStableRosterSha256 = Get-MyPeopleStableRosterHash -Json $backupRosterJson
     $script:state.excludedAuthPatterns = @(
         '*auth*', '*credential*', '*token*', '*.key', '.env', '.env.*',
         '.npmrc', '.pypirc', '*.pem', '*.p12'
@@ -202,9 +209,6 @@ tar -tzf /tmp/portable-state.tar.gz >/dev/null
 
     Invoke-MyPeopleDocker -Arguments @('rm', '-f', $helper)
     $script:helperCreated = $false
-    Invoke-MyPeopleDocker -Arguments @('start', 'mypeople')
-    $script:liveStopped = $false
-    Wait-MyPeopleControlPlane
 }
 
 function Assert-Preflight {
@@ -272,13 +276,15 @@ try {
     if ($verifiedImageId -ne $script:state.candidateImageId) { throw 'Candidate image changed during isolated verification.' }
     Set-UpgradeStage 'candidate-verified'
 
-    $before = Get-LiveState
-    $script:state.beforeBoardSha256 = $before.boardSha256
-    $script:state.beforeStableRosterSha256 = $before.stableRosterSha256
-    Write-MyPeopleTransaction -Path $transactionPath -State $script:state
-
     Set-UpgradeStage 'portable-backup'
     Write-PortableBackup
+    $script:state.beforeBoardSha256 = $script:state.backupBoardSha256
+    $script:state.beforeStableRosterSha256 = $script:state.backupStableRosterSha256
+    $before = [ordered]@{
+        boardSha256 = $script:state.beforeBoardSha256
+        stableRosterSha256 = $script:state.beforeStableRosterSha256
+    }
+    Write-MyPeopleTransaction -Path $transactionPath -State $script:state
 
     $oldEnvironment = Get-Content -Raw -LiteralPath $environmentPath
     $oldCompose = Get-Content -Raw -LiteralPath $composePath
@@ -302,6 +308,7 @@ try {
     if ($pinnedCandidateId -ne $script:state.candidateImageId) { throw 'Pinned candidate image changed before deployment.' }
     $deploymentMutationStarted = $true
     Invoke-PinnedCompose
+    $script:liveStopped = $false
     Assert-LiveRuntimeContract
 
     $after = Get-LiveState
