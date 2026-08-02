@@ -12,6 +12,7 @@ class TestFleet(unittest.TestCase):
   self.assertEqual(classify(self.task(),None,1),STALE)
   self.assertEqual(classify(self.task(state="done"),None,999),BENIGN)
   self.assertEqual((heartbeat_minutes(1),heartbeat_minutes(9)),(2,5))
+  self.assertEqual(classify(self.task(),{"state":"alive","status":"working","activity_updated_at":0},999),BENIGN)
   with tempfile.TemporaryDirectory() as d:
    l=Ledger(d+"/l.json");t=self.task(state="blocked");self.assertIsNotNone(l.observe(t,self.owner(),"fail",1));self.assertIsNone(l.observe(t,self.owner(),"fail",2));self.assertEqual(t["monitorState"],BLOCKED);self.assertEqual(t["monitorAction"],"resolve_blocker")
  def test_mocked_lifecycle_wake_once_and_retirement_wins(self):

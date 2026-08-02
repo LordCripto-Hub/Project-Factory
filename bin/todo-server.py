@@ -239,7 +239,13 @@ def roster_map():
         rows=queue_get("/roster")
     except Exception:
         rows=load_roster()
-    return {r.get("agent_id"):r for r in rows if isinstance(r,dict)}
+    out={r.get("agent_id"):r for r in rows if isinstance(r,dict)}
+    try:
+        for live in queue_get("/agents"):
+            if isinstance(live,dict) and live.get("agent_id") in out:
+                out[live["agent_id"]]={**out[live["agent_id"]],**{k:live[k] for k in ("status","ts") if k in live}}
+    except Exception:pass
+    return out
 def valid_owner(task,aid):
     r=roster_map().get(aid)
     return bool(r and r.get("state")=="alive" and not r.get("retired") and r.get("boss_id")==BOSS_FULL and r.get("lifecycle")=="owner" and r.get("owner_task_id")==task["id"])
