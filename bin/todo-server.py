@@ -24,9 +24,9 @@ from project_publisher import (
     PublisherError,
     approvals_root,
     approve_request as approve_publication_request,
+    select_actionable_approvals,
     get_approval,
     reject_request as reject_publication_request,
-    select_current_approvals,
 )
 from fleet_monitor import Ledger, heartbeat_minutes, message
 
@@ -68,7 +68,7 @@ def publication_approval_projection(root=None):
         except (PublisherError,OSError,ValueError):continue
         if record.get("status") not in ACTIVE_APPROVAL_STATUSES:continue
         records.append(record)
-    for record in select_current_approvals(records):
+    for record in select_actionable_approvals(records):
         repository=str(record.get("repository") or "")
         slug=repository.removeprefix("https://github.com/").removesuffix(".git")
         item={

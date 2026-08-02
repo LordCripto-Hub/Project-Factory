@@ -624,12 +624,24 @@ def wait_for_composer(target, timeout=30):
         resumed_codex_prompt = (
             "\u203a " in text and "gpt-" in text and " \u00b7 " in text
         )
+        prompt_lines = [line.strip() for line in text.splitlines()]
+        interactive_prompt = any(
+            line in {">", "\u203a", "\u276f"}
+            or line.startswith(("\u203a ", "\u276f "))
+            for line in prompt_lines
+        )
+        initial_codex_prompt = (
+            "OpenAI Codex" in text
+            and interactive_prompt
+        )
+        claude_prompt = (
+            ("Claude Code" in text or "bypass permissions on" in text)
+            and interactive_prompt
+        )
         if pane.returncode == 0 and (
             resumed_codex_prompt
-            or any(marker in text for marker in (
-                "bypass permissions on", "Claude Code", "OpenAI Codex",
-                "How can I help", "Try",
-            ))
+            or initial_codex_prompt
+            or claude_prompt
         ):
             return True
         time.sleep(.5)

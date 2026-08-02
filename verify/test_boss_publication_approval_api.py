@@ -18,6 +18,7 @@ class BossPublicationApprovalApiContract(unittest.TestCase):
         self.assertIn("PUBLISHER_HEALTH_STATES", SERVER)
         self.assertIn('kind!="browser"', SERVER)
         self.assertIn("repositorySlug", SERVER)
+        self.assertIn("select_actionable_approvals", SERVER)
         for secret in ("transactionNonce", "workspace", "password", "private_key", "token"):
             self.assertNotIn(f'"{secret}"', SERVER.split("publication_approval_projection", 1)[1].split("class Handler", 1)[0])
 

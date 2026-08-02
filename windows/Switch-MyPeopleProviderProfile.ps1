@@ -81,11 +81,21 @@ function Invoke-ProviderSession {
         [Parameter(Mandatory)][string]$Operation,
         [Parameter(Mandatory)][string]$Transaction,
         [string]$SelectedAgent = '',
-        [string]$TargetProfile = ''
+        [string]$TargetProfile = '',
+        [int]$PhaseTimeoutSeconds = 0
     )
+    $effectiveTimeoutSeconds = if ($PhaseTimeoutSeconds -gt 0) {
+        $PhaseTimeoutSeconds
+    } else {
+        $TimeoutSeconds
+    }
     $arguments = @(
         'exec',
         $container,
+        'timeout',
+        '--signal=TERM',
+        '--kill-after=5',
+        "${effectiveTimeoutSeconds}s",
         $sessionTool,
         $Operation,
         '--transaction',
@@ -113,7 +123,7 @@ function Invoke-ProviderSession {
         }
         $process = Start-Process @startArguments
         $null = $process.Handle
-        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        if (-not $process.WaitForExit(($effectiveTimeoutSeconds + 15) * 1000)) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             throw "Provider session phase timed out: $Operation"
         }
@@ -202,6 +212,13 @@ try {
     if ($Agent -and ($selectedAgentIds.Count -ne 1 -or $selectedAgentIds[0] -ne $Agent)) {
         throw 'Prepared provider transaction selected the wrong agent.'
     }
+    if ($selectedAgentIds.Count -gt 64) {
+        throw 'Prepared provider transaction selected too many agents.'
+    }
+    $reviveTimeoutSeconds = $TimeoutSeconds * [Math]::Max(
+        1,
+        $selectedAgentIds.Count
+    )
 
     $profilesToActivate = @(
         Get-HostTargetProfiles -Bindings $newBindings -SelectedAgentIds $selectedAgentIds -AllowEmptySelection:(-not [bool]$Agent)
@@ -251,7 +268,7 @@ try {
 
     $phase = 'provider-session revive'
     Write-SwitchLog $phase
-    Invoke-ProviderSession -Operation 'revive' -Transaction $transactionId | Out-Null
+    Invoke-ProviderSession -Operation 'revive' -Transaction $transactionId -PhaseTimeoutSeconds $reviveTimeoutSeconds | Out-Null
 
     $phase = 'provider-session verify'
     Write-SwitchLog $phase
@@ -281,7 +298,7 @@ try {
         Write-SwitchLog $phase
         try {
             if ($agentsStopped) {
-                Invoke-ProviderSession -Operation 'rollback' -Transaction $transactionId | Out-Null
+                Invoke-ProviderSession -Operation 'rollback' -Transaction $transactionId -PhaseTimeoutSeconds $reviveTimeoutSeconds | Out-Null
             } else {
                 Invoke-ProviderSession -Operation 'abort' -Transaction $transactionId | Out-Null
             }

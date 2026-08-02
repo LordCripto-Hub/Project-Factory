@@ -34,6 +34,7 @@ ACTIVE_APPROVAL_STATUSES = frozenset({
     "pending", "pending_approval", "approved", "validating", "branch_pushed",
     "pr_created", "waiting_checks", "merge_blocked",
 })
+CEO_ACTIONABLE_APPROVAL_STATUSES = frozenset({"pending", "pending_approval"})
 _APPROVAL_PROGRESS = {
     "pending": 0,
     "pending_approval": 0,
@@ -198,6 +199,13 @@ def select_current_approvals(records: list[dict]) -> list[dict]:
             ),
         ))
     return selected
+
+
+def select_actionable_approvals(records: list[dict]) -> list[dict]:
+    """Return only publication records that still require CEO action."""
+    return select_current_approvals(
+        [record for record in records if record.get("status") in CEO_ACTIONABLE_APPROVAL_STATUSES]
+    )
 
 
 def create_approval(

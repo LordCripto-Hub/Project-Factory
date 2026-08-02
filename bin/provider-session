@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -39,6 +40,10 @@ from provider_transaction import (
 RUN_ROOT = os.path.realpath(
     os.environ.get("MYPEOPLE_RUN_DIR", os.path.join(ROOT, "run"))
 )
+
+
+def raise_termination(_signum, _frame) -> None:
+    raise RuntimeError("provider switch terminated")
 LOCK_PATH = os.path.realpath(
     os.environ.get("PROVIDER_SWITCH_LOCK", os.path.join(RUN_ROOT, "provider-switch.lock"))
 )
@@ -494,6 +499,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    signal.signal(signal.SIGTERM, raise_termination)
     args = parser().parse_args(argv)
     try:
         args.function(args)

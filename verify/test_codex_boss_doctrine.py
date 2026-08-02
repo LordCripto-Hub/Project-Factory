@@ -85,8 +85,8 @@ class CodexDoctrineContract(unittest.TestCase):
 
     def test_wait_for_composer_accepts_codex_trust_gate(self):
         panes = iter([
-            "Do you trust the contents of this directory?\\n1. Yes, continue",
-            "OpenAI Codex v0.144.3\\n> ",
+            "Do you trust the contents of this directory?\n1. Yes, continue",
+            "OpenAI Codex v0.144.3\n> ",
         ])
         events = []
 
@@ -107,6 +107,29 @@ class CodexDoctrineContract(unittest.TestCase):
     def test_wait_for_composer_recognizes_codex_prompt(self):
         self.mp.run_tmux = lambda *_args, **_kwargs: Result("OpenAI Codex v0.144.3\n> ")
         self.assertTrue(self.mp.wait_for_composer("mc-main:Boss", timeout=0.1))
+
+    def test_wait_for_composer_rejects_codex_splash_without_prompt(self):
+        self.mp.run_tmux = lambda *_args, **_kwargs: Result(
+            "OpenAI Codex v0.144.3\nLoading workspace"
+        )
+        self.mp.time.sleep = lambda _seconds: None
+        self.assertFalse(self.mp.wait_for_composer("mc-main:Boss", timeout=0.01))
+
+    def test_wait_for_composer_rejects_generic_try_splash(self):
+        self.mp.run_tmux = lambda *_args, **_kwargs: Result(
+            "OpenAI Codex v0.144.3\nTry /help to get started"
+        )
+        self.mp.time.sleep = lambda _seconds: None
+        self.assertFalse(self.mp.wait_for_composer("mc-main:Boss", timeout=0.01))
+
+    def test_wait_for_composer_rejects_claude_splash_without_prompt(self):
+        self.mp.run_tmux = lambda *_args, **_kwargs: Result(
+            "Claude Code\nHow can I help?"
+        )
+        self.mp.time.sleep = lambda _seconds: None
+        self.assertFalse(
+            self.mp.wait_for_composer("mc-nightwatch:Nightwatch", timeout=0.01)
+        )
 
     def test_wait_for_composer_recognizes_resumed_codex_status_bar(self):
         pane = (

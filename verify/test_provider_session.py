@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import stat
 import tempfile
 import unittest
@@ -38,6 +39,10 @@ class ProviderSessionContract(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_sigterm_handler_raises_for_cleanup_unwinding(self):
+        with self.assertRaisesRegex(RuntimeError, "provider switch terminated"):
+            module.raise_termination(signal.SIGTERM, None)
 
     def test_handoff_is_bounded_and_redacts_secrets(self):
         handoff = module.build_handoff(
