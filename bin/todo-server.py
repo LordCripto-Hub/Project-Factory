@@ -476,11 +476,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if p=="/todo/memory-comparison":return self.memory_comparison(kind,body,self.client_address[0])
         if p=="/todo/comment":return self.comment(kind,body)
         if p=="/todo/status":return self.status(kind,body)
+        if p=="/todo/monitor-event":return self.monitor_event(kind,body)
         if p=="/todo/proof":return self.proof(kind,body,raw)
         if p=="/todo/owner":return self.owner(kind,body)
         if p=="/nightwatch/inbound":return self.inbound(kind,body)
         if p=="/nightwatch/outbound":return self.outbound(kind,body)
         self.json({"error":"not_found"},404)
+    def monitor_event(self,kind,d):
+        if kind!="machine":return self.json({"ok":False,"error":"machine_only"},403)
+        tid=str(d.get("task_id","") or ""); event=str(d.get("event","") or "")
+        if event not in {"complete","fail","stop","activity","heartbeat"}:return self.json({"ok":False,"error":"invalid_monitor_event"},400)
+        with STORE_LOCK:
+            b=load_board();t=b["tasks"].get(tid)
+            if not t:return self.json({"ok":False,"error":"unknown_task"},404)
+            if t.get("state") in TERMINAL or t.get("ownerNeedsReplacement"):return self.json({"ok":True,"ignored":"terminal_or_replacement"})
+            observe_fleet(t,event);save_board(b)
+            return self.json({"ok":True,"monitorState":t.get("monitorState"),"monitorAction":t.get("monitorAction")})
     def publication_approval(self,kind,body):
         if kind!="browser" or body.get("by")!="CEO":
             return self.json({"ok":False,"error":"ceo_approval_required"},403)

@@ -1378,6 +1378,8 @@ def fail(ns):
         "Structured routing escalation queued.",
         activity_event="routing_escalation_queued",
     )
+    try:http_json("/todo/monitor-event","POST",{"task_id":task_id,"event":"fail"})
+    except Exception:pass
     print(result.get("task_id") or request["requestId"])
 
 
@@ -1999,6 +2001,8 @@ def complete(ns):
     for url in urls:http_json("/todo/proof","POST",{"task_id":task_id,"kind":"link","url":url,"by":actor})
     for file_path in files:http_multipart("/todo/proof",{"task_id":task_id,"by":actor},file_path)
     http_json("/todo/status","POST",{"task_id":task_id,"state":"review","verified":False,"by":actor})
+    try:http_json("/todo/monitor-event","POST",{"task_id":task_id,"event":"complete"})
+    except Exception:pass
     runtime_record=next((row for row in load_roster() if row.get("agent_id")==actor),{})
     attempt_id=str(runtime_record.get("memory_canary_attempt_id") or "")
     if attempt_id:
@@ -2051,6 +2055,9 @@ def kill(ns):
     run_tmux(["kill-window","-t",f"mc-{s}:{t}"],check=False); run_tmux(["kill-session","-t",f"rec-{t}"],check=False)
     final={**stopping,"state":"dead","recovery_state":"stopped"}
     update_roster(final)
+    if rec.get("lifecycle")=="owner" and rec.get("owner_task_id"):
+        try:http_json("/todo/monitor-event","POST",{"task_id":rec["owner_task_id"],"event":"stop"})
+        except Exception:pass
     rows=load_roster()
     atomic_json(agents_path(),[r for r in rows if not r.get("retired") and window_exists(f"mc-{r.get('session')}:{r.get('tab')}")])
     try:http_json("/agents/unregister","POST",{"agent_id":aid})
