@@ -45,6 +45,30 @@ def enabled_profile():
 
 
 class MemoryGatewayBoundary(unittest.TestCase):
+    def test_explicit_loopback_opt_in_reaches_the_gateway_process(self):
+        observed = {}
+
+        def runner(command, **kwargs):
+            observed.update(command=command, **kwargs)
+            response = {
+                "ok": True,
+                "claims": [],
+                "truncated": False,
+                "responseChars": 0,
+                "aiUsage": "not_measured",
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+        with patch.dict(os.environ, {
+            "MYPEOPLE_MEMORY_TOKEN": "fixture-secret",
+            "MYPEOPLE_MEMORY_ALLOW_HTTP": "1",
+        }, clear=True):
+            project_context.call_memory_gateway(
+                enabled_profile(), "Which constraint applies?", runner=runner
+            )
+
+        self.assertEqual(observed["env"]["MYPEOPLE_MEMORY_ALLOW_HTTP"], "1")
+
     def test_secret_is_only_in_child_environment(self):
         observed = {}
 

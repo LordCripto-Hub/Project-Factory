@@ -315,7 +315,7 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
         for key in (
             "PATH", "PATHEXT", "SystemRoot", "WINDIR", "HOME", "USERPROFILE",
             "TMP", "TEMP", "LANG", "LC_ALL", "NODE_EXTRA_CA_CERTS",
-            "SSL_CERT_FILE", "SSL_CERT_DIR",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "MYPEOPLE_MEMORY_ALLOW_HTTP",
         )
         if key in os.environ
     }

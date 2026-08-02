@@ -312,6 +312,11 @@ The reviewed local canary uses the public, SHA-locked Project Factory history
 dataset and an internal, portless Docker sidecar. It is disabled by default and
 does not activate Cloudflare or any hosted memory provider.
 
+This sidecar is an experimental manual-canary surface only. Normal automatic
+memory is supervised inside the main `mypeople` container on loopback and is
+rehydrated by the standard one-click startup; it does not require a second
+Docker container.
+
 ```powershell
 $source = (Resolve-Path .\experiments\memory-gate-b).Path
 $dataset = (Resolve-Path .\experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632).Path

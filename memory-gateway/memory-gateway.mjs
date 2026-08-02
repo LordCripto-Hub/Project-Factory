@@ -235,7 +235,9 @@ async function readStdin() {
 
 export async function main() {
   const request = await readStdin();
-  const result = await executeRecall(request);
+  const result = await executeRecall(request, {
+    allowHttpLoopback: process.env.MYPEOPLE_MEMORY_ALLOW_HTTP === '1',
+  });
   process.stdout.write(`${JSON.stringify({ok: true, ...result})}\n`);
 }
 

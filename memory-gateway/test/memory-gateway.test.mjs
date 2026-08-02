@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
 import test from 'node:test';
+import {fileURLToPath} from 'node:url';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -29,6 +31,27 @@ const claim = {
   updatedAt: 1,
   status: 'canonical',
 };
+
+function runGatewayCli(request, environment) {
+  const gatewayPath = fileURLToPath(new URL('../memory-gateway.mjs', import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [gatewayPath], {
+      env: {...process.env, ...environment},
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', chunk => stdout.push(chunk));
+    child.stderr.on('data', chunk => stderr.push(chunk));
+    child.on('error', reject);
+    child.on('close', code => resolve({
+      code,
+      stdout: Buffer.concat(stdout).toString('utf8'),
+      stderr: Buffer.concat(stderr).toString('utf8'),
+    }));
+    child.stdin.end(JSON.stringify(request));
+  });
+}
 
 test('accepts only the bounded recall contract', () => {
   assert.equal(validateInput(input).projectSlug, 'mypeople');
@@ -237,6 +260,48 @@ test('uses the official Streamable HTTP client against a local recall-only serve
       hops: 0,
     });
     assert.equal(result.claims[0].sourceUri, 'task://fixture-1');
+  } finally {
+    await new Promise(resolve => listener.close(resolve));
+  }
+});
+
+test('CLI honors the explicit loopback-only runtime opt-in', async () => {
+  const app = createMcpExpressApp({host: '127.0.0.1', allowedHosts: ['127.0.0.1']});
+  app.post('/mcp', async (req, res) => {
+    const server = new McpServer({name: 'fixture-memory', version: '0.1.0'});
+    server.registerTool('recall', {
+      inputSchema: {
+        projectSlug: z.string(),
+        query: z.string(),
+        limit: z.number().int(),
+        hops: z.number().int(),
+      },
+    }, async () => ({
+      content: [{type: 'text', text: 'synthetic'}],
+      structuredContent: {claims: [claim]},
+    }));
+    const transport = new StreamableHTTPServerTransport({sessionIdGenerator: undefined});
+    res.on('close', () => {
+      transport.close().catch(() => {});
+      server.close().catch(() => {});
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  });
+  const listener = await new Promise(resolve => {
+    const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+  try {
+    const address = listener.address();
+    const result = await runGatewayCli({
+      ...input,
+      serverUrl: `http://127.0.0.1:${address.port}/mcp`,
+    }, {
+      MYPEOPLE_MEMORY_TOKEN: 'fixture-token',
+      MYPEOPLE_MEMORY_ALLOW_HTTP: '1',
+    });
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.equal(JSON.parse(result.stdout).ok, true);
   } finally {
     await new Promise(resolve => listener.close(resolve));
   }

@@ -322,7 +322,7 @@ Install the desktop shortcut once:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Install-MyPeopleShortcut.ps1
 ```
 
-The installer copies the required launcher files to `%LOCALAPPDATA%\MyPeople\launcher`. The shortcut starts Docker Desktop when required, runs the pinned Compose deployment when it exists, rehydrates the selected provider profile, checks Priorities, queue/HUD, terminal readiness, and that Boss and Nightwatch are alive, then opens Priorities. It never deletes a volume or changes the pinned image.
+The installer copies the required launcher files to `%LOCALAPPDATA%\MyPeople\launcher`. The shortcut starts Docker Desktop when required, runs the pinned Compose deployment when it exists, rehydrates the selected provider profile, checks Priorities, queue/HUD, terminal readiness, and that Boss and Nightwatch are alive, then opens Priorities. It never deletes a volume or changes the pinned image. When automatic local memory is selected, the main runtime supervisor also reconciles its loopback-only Gate B adapter inside the same `mypeople` container. Normal startup does not require a second memory container.
 
 ### Ready degraded
 
@@ -790,10 +790,12 @@ MyPeople starts Codex agents with the built-in Codex Apps integration disabled.
 This prevents an unrelated or expired Apps authentication from producing
 `codex_apps` MCP startup warnings inside agent terminals.
 
-This switch does not remove or disable MyPeople's memory code. The local,
-bounded Memory Gate B sidecar remains off by default and can run in explicit
-manual-canary or automatic mode. The hosted Cloudflare memory pilot remains
-disabled by default and is never activated by a normal agent launch.
+This switch does not remove or disable MyPeople's memory code. Automatic local
+memory runs as a bounded, loopback-only child of the main `mypeople` runtime.
+The separate Docker sidecar is retained only for the explicit experimental
+manual-canary workflow below and remains off during normal operation. The
+hosted Cloudflare memory pilot remains disabled and is never activated by a
+normal agent launch.
 
 ## Recommended next stage
 
@@ -886,7 +888,7 @@ that memory improves quality, coordination, duration, or total token cost.
 ## Automatic bounded project memory
 
 Automatic mode is an optional local extension of the same Gate B hybrid store.
-It is limited to Project Factory owner tasks and is disabled by default. It
+It is limited to Project Factory owner tasks and is disabled on a fresh install. It
 does not use Cloudflare, `memory-dump.py`, a board corpus, a second index, an
 OpenAI API key, or a provider model for retrieval.
 
@@ -897,16 +899,18 @@ stopping after the first sufficient result. The complete recovery transaction
 has a two-second deadline and may inject at most three provenance-bearing
 claims and 300 estimated tokens.
 
-Enable the reviewed local sidecar and automatic mode with one command:
+Enable automatic mode with one command:
 
 ```powershell
-.\windows\Start-MyPeopleMemoryCanary.ps1 -Action Enable -Mode Automatic
+docker exec mypeople mp memory mode automatic
 ```
 
-The launcher defaults to the final locked dataset and the image already used
-by the running `mypeople` container. It starts only the read-only sidecar,
-connects the internal Docker network, activates the Project Factory profile,
-and changes the memory mode. It does not recreate or restart MyPeople.
+The foreground runtime supervisor notices the persisted mode, starts the
+read-only adapter on `127.0.0.1` inside the existing container, generates an
+ephemeral local capability, and reconciles the Project Factory profile. The
+Windows one-click launcher starts this same supervisor, so subsequent machine
+restarts need no separate memory command or container. The experimental
+`memory-gate-b-live-canary` Compose project is not part of this path.
 
 Inspect state:
 
@@ -921,7 +925,9 @@ rest of MyPeople running:
 docker exec mypeople mp memory mode off
 ```
 
-Remove the sidecar, its network attachment, and its ephemeral credential:
+Automatic mode stops its local child and removes its readiness marker when set
+to `off`; no Docker sidecar or network cleanup is required. Use the separate
+canary `Disable` command only after an explicit manual-canary experiment:
 
 ```powershell
 .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
