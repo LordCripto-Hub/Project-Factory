@@ -270,9 +270,11 @@ async function settle(page) {
 }
 
 async function capturePhase() {
+  let browser;
+  try {
   const out = path.join(outputRoot, phase);
   fs.mkdirSync(out, { recursive: true });
-  const browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true });
   const base = `http://127.0.0.1:${server.address().port}`;
   const targets = phase === "viewer" ? [{ name: "viewer", route: "/", prepare: async (page, viewportName) => {
     await page.locator('li.task[data-id="visual-alpha"] .task-text').click();
@@ -292,9 +294,9 @@ async function capturePhase() {
     if (await page.locator('#lightbox:not([hidden])').count() !== 1) throw new Error('lightbox not open for fullscreen capture');
     await page.evaluate(() => document.querySelector('#fullscreenLightbox').click());
     if (await page.evaluate(() => window.__fullscreenCalls) !== 1) throw new Error('fullscreen control did not invoke requestFullscreen');
-    await page.evaluate(() => document.querySelector('#closeLightbox').click());
+    await page.locator('#closeLightbox').click({ force: true });
     await page.waitForSelector('#lightbox[hidden]', { state: 'hidden' });
-    if (!(await page.evaluate(() => document.activeElement?.classList.contains('evidence-image-trigger')))) throw new Error('lightbox focus did not return');
+    if (!(await page.evaluate(() => document.activeElement?.classList.contains('evidence-image-trigger')))) throw new Error(`lightbox focus did not return: ${await page.evaluate(() => `${document.activeElement?.tagName}#${document.activeElement?.id}.${document.activeElement?.className}`)}`);
     const video = page.locator('#modal video').first();
     await video.click();
     await page.locator('#modal video').evaluate((node) => { node.controls = true; node.play(); });
@@ -324,8 +326,9 @@ async function capturePhase() {
   const manifest = [];
   for (const [viewportName, viewport] of Object.entries(viewports)) {
     const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: "dark", ...(phase === "viewer" ? { recordVideo: { dir: out } } : {}) });
-    for (const target of targets) {
+    try { for (const target of targets) {
       const page = await context.newPage();
+      try {
       const external = [];
       page.on("request", (request) => {
         const requestUrl = new URL(request.url());
@@ -418,9 +421,9 @@ async function capturePhase() {
         externalRequests: [...new Set(external)],
         audit,
       });
-      await page.close();
+      } finally { await page.close().catch(() => {}); }
     }
-    await context.close();
+    } finally { await context.close().catch(() => {}); }
   }
   fs.writeFileSync(path.join(out, "manifest.json"), JSON.stringify({
     fixture: "sanitized-scorpion-v1",
@@ -428,8 +431,8 @@ async function capturePhase() {
     phase,
     captures: manifest,
   }, null, 2) + "\n");
-  await browser.close();
   console.log(`${phase}: ${manifest.length} captures; ${manifest.filter((item) => item.externalRequests.length).length} with external requests`);
+  } finally { if (browser) await browser.close().catch(() => {}); }
 }
 
 function imageData(file) {
