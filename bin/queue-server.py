@@ -130,6 +130,7 @@ def joined_agents():
             z["summary"]=st.get("summary") or z.get("summary","");z["status"]=st.get("status","idle")
             for key in ("timestamp","activity_updated_at","activity_event"):
                 if key in st:z[key]=st[key]
+        if "ts" in a:z["heartbeat_at"]=a["ts"]
         else:z["status"]="idle"
         out.append(z)
     return sorted(out,key=lambda x:(not x.get("is_master",False),x["agent_id"]))

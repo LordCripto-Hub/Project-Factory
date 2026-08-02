@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import hashlib, json, os, re, subprocess, time, traceback
+import json, os, re, subprocess, time, traceback
 from mpcommon import *
 from provider_handoff import sanitize_terminal_tail
 
 HOST=ENV.get("HOST_ID",os.uname().nodename.split('.')[0]); INTERVAL=float(ENV.get("HEARTBEAT_INTERVAL","3"))
-SESSION_OUTPUT_DIGESTS={}
 TAILSCALE_ENABLED = ENV.get("MYPEOPLE_TAILSCALE_ENABLED", "0") == "1"
 
 def reconcile_prompt_idle(aid, target, status):
@@ -15,16 +14,6 @@ def reconcile_prompt_idle(aid, target, status):
     pane=run_tmux(["capture-pane","-p","-S","-30","-t",target],capture=True,check=False)
     if pane.returncode == 0 and any(marker in (pane.stdout or "") for marker in ("How can I help", "Try", "OpenAI Codex", "Claude Code")):
         write_status(aid,"idle",activity_event="composer_prompt_ready")
-
-def reconcile_session_activity(aid, target, status):
-    """Only verified changing session output refreshes a working heartbeat."""
-    if status.get("status")!="working":return
-    pane=run_tmux(["capture-pane","-p","-S","-30","-t",target],capture=True,check=False)
-    if pane.returncode!=0:return
-    digest=hashlib.sha256((pane.stdout or "").encode()).hexdigest()
-    previous=SESSION_OUTPUT_DIGESTS.get(aid);SESSION_OUTPUT_DIGESTS[aid]=digest
-    if previous is not None and previous!=digest:
-        write_status(aid,"working",status.get("summary",""),activity_event="session_output")
 
 def tail_ip():
     if not TAILSCALE_ENABLED:
@@ -60,7 +49,6 @@ def live_roster():
                 elif status.get("status"):
                     row["status"]=status["status"]
                 reconcile_prompt_idle(aid,f"mc-{s}:{t}",status)
-                reconcile_session_activity(aid,f"mc-{s}:{t}",status)
                 status=load_json(status_path(aid),{})
                 row["status"]=status.get("status","idle")
                 if status.get("summary"):

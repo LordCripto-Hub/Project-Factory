@@ -243,7 +243,7 @@ def roster_map():
     try:
         for live in queue_get("/agents"):
             if isinstance(live,dict) and live.get("agent_id") in out:
-                out[live["agent_id"]]={**out[live["agent_id"]],**{k:live[k] for k in ("status","timestamp","activity_updated_at","activity_event") if k in live}}
+                out[live["agent_id"]]={**out[live["agent_id"]],**{k:live[k] for k in ("status","timestamp","activity_updated_at","activity_event","heartbeat_at") if k in live}}
     except Exception:pass
     return out
 def valid_owner(task,aid):

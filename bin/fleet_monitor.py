@@ -19,9 +19,8 @@ def classify(task,owner,now=None):
     if not task.get("assignee") or (owner or {}).get("state") in {"missing","dead","retired"} or (owner or {}).get("retired") is True:return STALE
     if task.get("state")=="review" and c["handoff"]:return REVIEW_READY
     if task.get("state")=="blocked" or c["ownerState"]=="blocked":return BLOCKED
-    raw_active=(owner or {}).get("activity_updated_at")
-    if raw_active is None:raw_active=(owner or {}).get("timestamp")
-    if raw_active is None:return BENIGN if c["ownerState"] in {"starting","working"} else STALE
+    raw_active=(owner or {}).get("heartbeat_at")
+    if raw_active is None:return STALE
     active=float(raw_active)
     if now-active>=heartbeat_minutes()*60:return STALE
     last=(task.get("comments") or [{}])[-1]
