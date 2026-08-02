@@ -19,6 +19,8 @@ class TestFleet(unittest.TestCase):
   self.assertEqual(classify(self.task(comments=[{"by":"CEO","ts":999}]),{"state":"alive","status":"idle","activity_updated_at":998,"heartbeat_at":998},999),WAITING)
   with tempfile.TemporaryDirectory() as d:
    l=Ledger(d+"/l.json");t=self.task(state="blocked");self.assertIsNotNone(l.observe(t,self.owner(),"fail",1));self.assertIsNone(l.observe(t,self.owner(),"fail",2));self.assertEqual(t["monitorState"],BLOCKED);self.assertEqual(t["monitorAction"],"resolve_blocker")
+   t=self.task(state="review",comments=[{"body":"Worker handoff: PASS"}]);o={"state":"alive","status":"idle","heartbeat_at":1}
+   self.assertIsNotNone(l.observe(t,o,"worker_handoff",1));self.assertIsNone(l.observe(t,o,"card_state",2));self.assertIsNone(l.observe(t,o,"complete",3))
  def test_mocked_lifecycle_wake_once_and_retirement_wins(self):
   with tempfile.TemporaryDirectory() as d:
    old=os.environ.copy();os.environ.update({"INSTALL_DIR":d,"QUEUE_SECRET":"test","HOST_ID":"h","BOSS_AGENT":"main:Boss"})

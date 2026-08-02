@@ -30,7 +30,7 @@ def action(state):return {REVIEW_READY:"verify_handoff",BLOCKED:"resolve_blocker
 class Ledger:
  def __init__(self,path):self.path=path
  def observe(self,task,owner,event,now=None):
-  now=time.time() if now is None else now; state=classify(task,owner,now); ctx=context(task,owner); payload={"event":event,"state":state,"context":ctx}; digest=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest();os.makedirs(os.path.dirname(self.path),exist_ok=True)
+  now=time.time() if now is None else now; state=classify(task,owner,now); ctx=context(task,owner); payload={"event":event,"state":state,"context":ctx}; notification={"state":state,"boss_action":action(state),"context":ctx}; digest=hashlib.sha256(json.dumps(notification,sort_keys=True).encode()).hexdigest();os.makedirs(os.path.dirname(self.path),exist_ok=True)
   with open(self.path+".lock","a+") as lock:
    fcntl.flock(lock,fcntl.LOCK_EX)
    try:
