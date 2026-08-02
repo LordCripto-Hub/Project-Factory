@@ -33,10 +33,11 @@ class TestFleet(unittest.TestCase):
     nightwatch=[];boss=[];todo.FLEET=Ledger(d+"/end-to-end.json")
     todo.mp_send=lambda agent,message,**_kwargs:nightwatch.append((agent,message)) or 0
     todo.ping_boss=lambda message:boss.append(message) or 0
-    worker={"agent_id":"h/main:W","state":"alive","status":"idle","heartbeat_at":10}
+    worker={"agent_id":"h/main:W","state":"alive","status":"working","heartbeat_at":10}
     todo.roster_map=lambda:{"h/main:W":worker}
-    handoff=self.task(state="review",comments=[{"by":"h/main:W","body":"Worker handoff: PASS"}])
-    for event in ("worker_handoff","card_state","complete"):todo.observe_fleet(handoff,event)
+    handoff=self.task(state="review",comments=[{"by":"h/main:W","body":"Worker handoff: 14 tests PASS"}])
+    self.assertEqual(context(handoff,worker)["tests"],"passed")
+    todo.observe_fleet(handoff,"worker_handoff");todo.observe_fleet(handoff,"card_state");worker["status"]="idle";todo.observe_fleet(handoff,"complete")
     self.assertEqual((len(nightwatch),len(boss)),(1,1))
     t["state"]="done";todo.observe_fleet(t,"stop");self.assertEqual(t["monitorState"],BENIGN);self.assertEqual(len(sent),2)
     fake=object.__new__(todo.Handler);fake.json=lambda payload,status=200,**_:(status,payload)
