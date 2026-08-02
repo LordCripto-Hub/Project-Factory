@@ -16,8 +16,8 @@ const viewports = {
   mobile: { width: 390, height: 844 },
 };
 
-if (!["before", "after", "contact"].includes(phase)) {
-  console.error("usage: capture_scorpion_visuals.js <before|after|contact> <output-root>");
+if (!["before", "after", "contact", "viewer"].includes(phase)) {
+  console.error("usage: capture_scorpion_visuals.js <before|after|contact|viewer> <output-root>");
   process.exit(2);
 }
 
@@ -96,6 +96,9 @@ const tasks = {
         url: "/fixture-proof",
         ts: 1785104400,
       },
+      { id: "p-image", by: "forge/main:eng-3", kind: "image", filename: "viewer-image.png", url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO94W9kAAAAASUVORK5CYII=", ts: 1785104410 },
+      { id: "p-video", by: "forge/main:eng-3", kind: "video", filename: "viewer-video.webm", url: "/fixture-proof", mime: "video/webm", ts: 1785104420 },
+      { id: "p-link", by: "forge/main:eng-3", kind: "link", url: "https://example.com/viewer-fixture", ts: 1785104430 },
     ],
     unread: 0,
     verified: false,
@@ -271,7 +274,37 @@ async function capturePhase() {
   fs.mkdirSync(out, { recursive: true });
   const browser = await chromium.launch({ headless: true });
   const base = `http://127.0.0.1:${server.address().port}`;
-  const targets = [
+  const targets = phase === "viewer" ? [{ name: "viewer", route: "/", prepare: async (page, viewportName) => {
+    await page.locator('li.task[data-id="visual-alpha"] .task-text').click();
+    await page.waitForSelector("body.modal-open");
+    await page.locator('.evidence-image-trigger').first().focus();
+    await page.locator('.evidence-image-trigger').first().click();
+    await page.waitForSelector('#lightbox:not([hidden])');
+    await page.click('#zoomIn');
+    const imageBox = await page.locator('#lightboxImage').boundingBox();
+    if (!imageBox) throw new Error('lightbox image has no box');
+    await page.mouse.move(imageBox.x + imageBox.width / 2, imageBox.y + imageBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(imageBox.x + imageBox.width / 2 + 45, imageBox.y + imageBox.height / 2 + 35);
+    await page.mouse.up();
+    await page.screenshot({ path: path.join(out, `viewer-lightbox-${viewportName}.png`), fullPage: false });
+    await page.evaluate(() => { window.__fullscreenCalls = 0; HTMLElement.prototype.requestFullscreen = () => { window.__fullscreenCalls += 1; return Promise.resolve(); }; });
+    if (await page.locator('#lightbox:not([hidden])').count() !== 1) throw new Error('lightbox not open for fullscreen capture');
+    await page.evaluate(() => document.querySelector('#fullscreenLightbox').click());
+    if (await page.evaluate(() => window.__fullscreenCalls) !== 1) throw new Error('fullscreen control did not invoke requestFullscreen');
+    await page.evaluate(() => document.querySelector('#closeLightbox').click());
+    await page.waitForSelector('#lightbox[hidden]', { state: 'hidden' });
+    if (!(await page.evaluate(() => document.activeElement?.classList.contains('evidence-image-trigger')))) throw new Error('lightbox focus did not return');
+    const video = page.locator('#modal video').first();
+    await video.click();
+    await page.locator('#modal video').evaluate((node) => { node.controls = true; node.play(); });
+    const popup = page.waitForEvent('popup');
+    await page.locator('#modal .proof a[href^="https://"]').click();
+    const link = await popup;
+    if (!link.url().startsWith('https://example.com/viewer-fixture')) throw new Error('safe link opened wrong URL');
+    await link.close();
+    await page.click('#closeModal');
+  }}] : [
     { name: "priorities-list", route: "/" },
     { name: "priorities-detail", route: "/", prepare: async (page) => {
       await page.locator('li.task[data-id="visual-alpha"] .task-text').click();
@@ -290,7 +323,7 @@ async function capturePhase() {
   ];
   const manifest = [];
   for (const [viewportName, viewport] of Object.entries(viewports)) {
-    const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: "dark" });
+    const context = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: "dark", ...(phase === "viewer" ? { recordVideo: { dir: out } } : {}) });
     for (const target of targets) {
       const page = await context.newPage();
       const external = [];
@@ -302,7 +335,7 @@ async function capturePhase() {
       });
       await page.goto(base + target.route, { waitUntil: "domcontentloaded" });
       if (target.ready) await page.waitForSelector(target.ready);
-      if (target.prepare) await target.prepare(page);
+      if (target.prepare) await target.prepare(page, viewportName);
       await settle(page);
       if (target.name === "priorities-detail") {
         const mobileContract = await page.evaluate(() => {
