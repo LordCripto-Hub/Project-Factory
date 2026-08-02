@@ -78,6 +78,36 @@ function Wait-MyPeopleControlPlane {
     throw "MyPeople control plane did not become ready within $TimeoutSeconds seconds."
 }
 
+function Restore-StoppedLiveContainer {
+    try {
+        $expectedImage = if ($deploymentMutationStarted) {
+            $script:state.rollbackPinnedImage
+        } else {
+            $script:state.oldImage
+        }
+        $actualImage = (Invoke-MyPeopleDocker -Arguments @(
+            'inspect', 'mypeople', '--format', '{{.Config.Image}}'
+        ) -Capture).Trim()
+        if ($actualImage -ne $expectedImage) {
+            throw "Refusing to restart unexpected image: $actualImage"
+        }
+        Invoke-MyPeopleDocker -Arguments @('start', 'mypeople')
+        Wait-MyPeopleControlPlane
+        $running = (Invoke-MyPeopleDocker -Arguments @(
+            'inspect', 'mypeople', '--format', '{{.State.Running}}'
+        ) -Capture).Trim()
+        if ($running -ne 'true') { throw 'MyPeople did not remain running after restart.' }
+        $script:liveStopped = $false
+        $script:state.restartStatus = 'pass'
+    } catch {
+        $script:state.restartStatus = 'recovery-required'
+        $script:state.restartFailure = $_.Exception.Message
+    }
+    if (Test-Path -LiteralPath $transactionRoot) {
+        try { Write-MyPeopleTransaction -Path $transactionPath -State $script:state } catch {}
+    }
+}
+
 function Get-LiveState {
     $board = ((Invoke-MyPeopleDocker -Arguments @(
         'exec', 'mypeople', 'sha256sum', '/home/mp/mypeople/todos/board.v2.json'
@@ -145,6 +175,23 @@ function Assert-LiveRuntimeContract {
     )
 }
 
+function Assert-FrozenSourceState {
+    if (-not $script:helperCreated) { throw 'Frozen-state helper is not available.' }
+    $sourceBoardSha256 = ((Invoke-MyPeopleDocker -Arguments @(
+        'exec', $helper, 'sha256sum', '/src/mypeople-todos/board.v2.json'
+    ) -Capture).Trim() -split '\s+')[0]
+    $sourceRosterJson = Invoke-MyPeopleDocker -Arguments @(
+        'exec', $helper, 'cat', '/src/mypeople-run/roster.json'
+    ) -Capture
+    $sourceStableRosterSha256 = Get-MyPeopleStableRosterHash -Json $sourceRosterJson
+    if ($sourceBoardSha256 -ne $script:state.backupBoardSha256) {
+        throw 'Durable board changed after the protected snapshot.'
+    }
+    if ($sourceStableRosterSha256 -ne $script:state.backupStableRosterSha256) {
+        throw 'Stable roster changed after the protected snapshot.'
+    }
+}
+
 function Write-PortableBackup {
     Invoke-MyPeopleDocker -Arguments @('stop', '--timeout', '30', 'mypeople')
     $script:liveStopped = $true
@@ -195,10 +242,10 @@ tar -tzf /tmp/portable-state.tar.gz >/dev/null
     $script:state.archiveSha256 = $hostHash
     $script:state.archiveBytes = (Get-Item -LiteralPath $archivePath).Length
     $script:state.backupBoardSha256 = ((Invoke-MyPeopleDocker -Arguments @(
-        'exec', $helper, 'sha256sum', '/src/mypeople-todos/board.v2.json'
+        'exec', $helper, 'sha256sum', '/tmp/portable/home/mp/mypeople/todos/board.v2.json'
     ) -Capture).Trim() -split '\s+')[0]
     $backupRosterJson = Invoke-MyPeopleDocker -Arguments @(
-        'exec', $helper, 'cat', '/src/mypeople-run/roster.json'
+        'exec', $helper, 'cat', '/tmp/portable/home/mp/mypeople/run/roster.json'
     ) -Capture
     $script:state.backupStableRosterSha256 = Get-MyPeopleStableRosterHash -Json $backupRosterJson
     $script:state.excludedAuthPatterns = @(
@@ -206,9 +253,7 @@ tar -tzf /tmp/portable-state.tar.gz >/dev/null
         '.npmrc', '.pypirc', '*.pem', '*.p12'
     )
     Write-MyPeopleTransaction -Path $transactionPath -State $script:state
-
-    Invoke-MyPeopleDocker -Arguments @('rm', '-f', $helper)
-    $script:helperCreated = $false
+    Assert-FrozenSourceState
 }
 
 function Assert-Preflight {
@@ -306,6 +351,9 @@ try {
         'image', 'inspect', $script:state.deploymentImage, '--format', '{{.Id}}'
     ) -Capture).Trim()
     if ($pinnedCandidateId -ne $script:state.candidateImageId) { throw 'Pinned candidate image changed before deployment.' }
+    Assert-FrozenSourceState
+    Invoke-MyPeopleDocker -Arguments @('rm', '-f', $helper)
+    $script:helperCreated = $false
     $deploymentMutationStarted = $true
     Invoke-PinnedCompose
     $script:liveStopped = $false
@@ -334,6 +382,7 @@ try {
                 [IO.File]::WriteAllText($environmentPath, $rollbackEnvironment, [Text.UTF8Encoding]::new($false))
                 [IO.File]::WriteAllText($composePath, $oldCompose, [Text.UTF8Encoding]::new($false))
                 Invoke-PinnedCompose
+                $script:liveStopped = $false
                 Wait-MyPeopleControlPlane
                 $restored = (Invoke-MyPeopleDocker -Arguments @(
                     'inspect', 'mypeople', '--format', '{{.Config.Image}}'
@@ -376,7 +425,7 @@ try {
     throw $failure
 } finally {
     if ($helperCreated) { & docker rm -f $helper *> $null }
-    if ($liveStopped) { & docker start mypeople *> $null }
+    if ($liveStopped) { Restore-StoppedLiveContainer }
     if ($operationLock) {
         Exit-MyPeopleDockerOperationLock -Path $operationLockPath -Lock $operationLock
     }

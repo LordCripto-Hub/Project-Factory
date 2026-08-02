@@ -88,23 +88,45 @@ $backupBody = $upgrade.Substring($backupStart, $backupEnd - $backupStart)
 foreach ($required in @(
     'backupBoardSha256',
     'backupStableRosterSha256',
-    '/src/mypeople-todos/board.v2.json',
-    '/src/mypeople-run/roster.json'
+    '/tmp/portable/home/mp/mypeople/todos/board.v2.json',
+    '/tmp/portable/home/mp/mypeople/run/roster.json',
+    'Assert-FrozenSourceState'
 )) {
     if ($backupBody -notmatch [regex]::Escape($required)) {
         throw "Backup does not capture frozen durable state: $required"
     }
+}
+if ($backupBody -match '\$script:state\.backupBoardSha256[^\r\n]*/src/mypeople-todos/board\.v2\.json') {
+    throw 'The authoritative board hash must come from the staged archive tree.'
 }
 if ($backupBody -match [regex]::Escape("Invoke-MyPeopleDocker -Arguments @('start', 'mypeople')")) {
     throw 'The old runtime must remain stopped between backup and candidate deployment.'
 }
 foreach ($required in @(
     '$script:state.beforeBoardSha256 = $script:state.backupBoardSha256',
-    '$script:state.beforeStableRosterSha256 = $script:state.backupStableRosterSha256'
+    '$script:state.beforeStableRosterSha256 = $script:state.backupStableRosterSha256',
+    'Assert-FrozenSourceState',
+    'Restore-StoppedLiveContainer',
+    'restartFailure',
+    "restartStatus = 'recovery-required'"
 )) {
     if ($upgrade -notmatch [regex]::Escape($required)) {
         throw "Upgrade does not compare against the frozen backup state: $required"
     }
+}
+$frozenCheck = $upgrade.LastIndexOf('Assert-FrozenSourceState')
+$deployCall = $upgrade.IndexOf('Invoke-PinnedCompose', $frozenCheck)
+if ($frozenCheck -lt 0 -or $deployCall -le $frozenCheck) {
+    throw 'Frozen source state must be rechecked immediately before deployment.'
+}
+$finallyStart = $upgrade.LastIndexOf('} finally {')
+if ($finallyStart -lt 0) { throw 'Upgrade finally block is missing.' }
+$finallyBody = $upgrade.Substring($finallyStart)
+if ($finallyBody -notmatch [regex]::Escape('Restore-StoppedLiveContainer')) {
+    throw 'Finally must use the checked live-container restart path.'
+}
+if ($finallyBody -match [regex]::Escape("& docker start mypeople")) {
+    throw 'Finally must not use an unchecked native Docker restart.'
 }
 
 Write-Output 'PASS provider-independent Docker image upgrade contract'
