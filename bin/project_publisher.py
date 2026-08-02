@@ -203,9 +203,11 @@ def select_current_approvals(records: list[dict]) -> list[dict]:
 
 def select_actionable_approvals(records: list[dict]) -> list[dict]:
     """Return only publication records that still require CEO action."""
-    return select_current_approvals(
-        [record for record in records if record.get("status") in CEO_ACTIONABLE_APPROVAL_STATUSES]
-    )
+    return [
+        record
+        for record in select_current_approvals(records)
+        if record.get("status") in CEO_ACTIONABLE_APPROVAL_STATUSES
+    ]
 
 
 def create_approval(

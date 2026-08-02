@@ -166,7 +166,14 @@ class ProjectPublisherContract(unittest.TestCase):
             {"approvalId": "c" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pr_created", "createdAt": 12},
         ]
         actionable = self.module.select_actionable_approvals(records)
-        self.assertEqual([item["approvalId"] for item in actionable], ["a" * 24])
+        self.assertEqual(actionable, [])
+
+    def test_actionable_projection_collapses_stale_pending_before_filtering(self):
+        records = [
+            {"approvalId": "a" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pending", "createdAt": 10},
+            {"approvalId": "b" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "2" * 40, "status": "approved", "createdAt": 11},
+        ]
+        self.assertEqual(self.module.select_actionable_approvals(records), [])
 
     def test_merge_when_green_approval_binds_exact_actions_and_evidence(self):
         with tempfile.TemporaryDirectory() as temp:
