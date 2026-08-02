@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -187,12 +189,16 @@ class ProviderSessionContract(unittest.TestCase):
             model="",
             profile="codex-secondary",
         )
+        output = io.StringIO()
         with mock.patch.object(module, "TRANSACTIONS_ROOT", str(transactions)), \
              mock.patch.object(module, "LOCK_PATH", self.lock), \
              mock.patch.object(module, "BINDINGS_PATH", str(bindings)), \
              mock.patch.object(module, "load_roster", return_value=roster), \
-             mock.patch.object(module, "_capture_tail", return_value="progress"):
+             mock.patch.object(module, "_capture_tail", return_value="progress"), \
+             contextlib.redirect_stdout(output):
             module.command_prepare(args)
+        receipt = json.loads(output.getvalue())
+        self.assertEqual(receipt["selectedAgentIds"], [agent_id])
         handoffs = list((transactions / "tx-prepare" / "handoffs").glob("*.json"))
         self.assertEqual(len(handoffs), 1)
         payload = json.loads(handoffs[0].read_text(encoding="utf-8"))
@@ -266,6 +272,29 @@ class ProviderSessionContract(unittest.TestCase):
         )
         state = module.load_json(str(transaction_dir / "state.json"), {})
         self.assertEqual(state["phase"], "revived")
+
+    def test_abort_prepared_transaction_releases_lock_without_runtime_mutation(self):
+        transaction_dir = self.root / "transactions" / "tx-abort"
+        transaction_dir.mkdir(parents=True)
+        module.atomic_json(
+            str(transaction_dir / "state.json"),
+            {
+                "transaction": "tx-abort",
+                "selectedAgent": "",
+                "phase": "prepared",
+            },
+        )
+        module.acquire_lock(self.lock, "tx-abort")
+        with mock.patch.object(module, "TRANSACTIONS_ROOT", str(self.root / "transactions")), \
+             mock.patch.object(module, "LOCK_PATH", self.lock), \
+             mock.patch.object(module, "stop_agents") as stop, \
+             mock.patch.object(module, "revive_agents") as revive:
+            module.command_abort(module.argparse.Namespace(transaction="tx-abort"))
+        state = module.load_json(str(transaction_dir / "state.json"), {})
+        self.assertEqual(state["phase"], "aborted")
+        self.assertFalse(Path(self.lock).exists())
+        stop.assert_not_called()
+        revive.assert_not_called()
 
     def test_verify_roles_requires_live_matching_roster(self):
         expected = [

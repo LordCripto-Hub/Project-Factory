@@ -374,7 +374,15 @@ def command_prepare(args) -> None:
     except Exception:
         release_lock(LOCK_PATH, args.transaction)
         raise
-    print(json.dumps({"transaction": args.transaction, "phase": "prepared"}))
+    print(
+        json.dumps(
+            {
+                "transaction": args.transaction,
+                "phase": "prepared",
+                "selectedAgentIds": [row["agent_id"] for row in selected],
+            }
+        )
+    )
 
 
 def _transaction_roster(transaction_dir: str) -> list[dict]:
@@ -428,6 +436,15 @@ def command_commit(args) -> None:
     release_lock(LOCK_PATH, args.transaction)
 
 
+def command_abort(args) -> None:
+    transaction_dir = _transaction_dir(args.transaction)
+    state = _read_state(transaction_dir)
+    if state.get("phase") != "prepared":
+        raise RuntimeError("provider switch transaction cannot be aborted")
+    _write_phase(transaction_dir, state, "aborted")
+    release_lock(LOCK_PATH, args.transaction)
+
+
 def command_rollback(args) -> None:
     rollback(_transaction_dir(args.transaction))
 
@@ -465,6 +482,7 @@ def parser() -> argparse.ArgumentParser:
         ("revive", command_revive),
         ("verify", command_verify),
         ("commit", command_commit),
+        ("abort", command_abort),
         ("rollback", command_rollback),
     ):
         command = commands.add_parser(name)

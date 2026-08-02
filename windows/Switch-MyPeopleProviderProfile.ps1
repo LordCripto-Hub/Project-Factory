@@ -14,9 +14,10 @@ $transactionId = [Guid]::NewGuid().ToString('N')
 $logRoot = Join-Path $env:LOCALAPPDATA 'MyPeople\state'
 $logPath = Join-Path $logRoot 'provider-switch.log'
 $prepared = $false
+$agentsStopped = $false
 $adapter = $null
 $previousBindings = $null
-$previousEffectiveProfile = ''
+$profilesToRestore = @()
 $phase = 'preflight'
 $targetLabel = 'unresolved'
 
@@ -39,6 +40,38 @@ function ConvertTo-SwitchMap {
     }
     foreach ($property in $Value.PSObject.Properties) {
         $result[$property.Name] = $property.Value
+    }
+    return $result
+}
+
+function Get-HostTargetProfiles {
+    param(
+        [Parameter(Mandatory)]$Bindings,
+        [Parameter(Mandatory)][string[]]$SelectedAgentIds,
+        [switch]$AllowEmptySelection
+    )
+    $agentProfiles = ConvertTo-SwitchMap $Bindings.agentProfiles
+    if ($SelectedAgentIds.Count -eq 0) {
+        if (-not $AllowEmptySelection) {
+            throw 'Prepared provider transaction selected no agents.'
+        }
+        $values = @([string]$Bindings.globalProfile)
+    } else {
+        $values = foreach ($selectedAgentId in $SelectedAgentIds) {
+            if ($agentProfiles.Contains($selectedAgentId)) {
+                [string]$agentProfiles[$selectedAgentId]
+            } else {
+                [string]$Bindings.globalProfile
+            }
+        }
+    }
+    $result = @(
+        $values |
+            ForEach-Object { Test-MyPeopleProfileId -Profile ([string]$_) } |
+            Sort-Object -Unique
+    )
+    if ($result.Count -eq 0) {
+        throw 'Host provider bindings have no target profiles.'
     }
     return $result
 }
@@ -95,6 +128,7 @@ function Invoke-ProviderSession {
             if ($detail.Length -gt 1000) { $detail = $detail.Substring(0, 1000) }
             throw "Provider session phase failed: ${Operation}: $detail"
         }
+        return [IO.File]::ReadAllText($outputPath).Trim()
     } finally {
         Remove-Item -LiteralPath $outputPath, $errorPath -Force -ErrorAction SilentlyContinue
     }
@@ -119,28 +153,7 @@ try {
         throw 'Docker CLI is not available.'
     }
 
-    if (-not $InheritGlobal) {
-        $profiles = Get-MyPeopleProviderProfiles
-        $profileProperty = $profiles.PSObject.Properties[$safeProfile]
-        if ($null -eq $profileProperty) { throw 'Provider profile does not exist.' }
-        $profileMetadata = $profileProperty.Value
-        if (-not $profileMetadata.enabled) { throw 'Provider profile is disabled.' }
-        $provider = [string]$profileMetadata.provider
-        $adapter = Get-MyPeopleProviderAdapter -Provider $provider
-        $savedProfilePath = Get-MyPeopleProfilePath -Provider $provider -Profile $safeProfile
-        if (-not [IO.File]::Exists((Join-Path $savedProfilePath 'auth.json'))) {
-            throw 'Saved provider credential is missing.'
-        }
-    }
-
     $previousBindings = Get-MyPeopleProviderBindings
-    $previousAgents = ConvertTo-SwitchMap $previousBindings.agentProfiles
-    if ($Agent -and $previousAgents.Contains($Agent)) {
-        $previousEffectiveProfile = [string]$previousAgents[$Agent]
-    } else {
-        $previousEffectiveProfile = [string]$previousBindings.globalProfile
-    }
-
     $newAgents = ConvertTo-SwitchMap $previousBindings.agentProfiles
     $newBindings = [ordered]@{
         globalProfile = [string]$previousBindings.globalProfile
@@ -159,10 +172,57 @@ try {
         $safeProfile
     }
 
+    $profiles = Get-MyPeopleProviderProfiles
+    $targetProperty = $profiles.PSObject.Properties[$targetProfile]
+    if ($null -eq $targetProperty -or -not $targetProperty.Value.enabled) {
+        throw "Host provider profile is unavailable: $targetProfile"
+    }
+    $provider = [string]$targetProperty.Value.provider
+    $adapter = Get-MyPeopleProviderAdapter -Provider $provider
+    $targetPath = Get-MyPeopleProfilePath -Provider $provider -Profile $targetProfile
+    if (-not [IO.File]::Exists((Join-Path $targetPath 'auth.json'))) {
+        throw "Host provider credential is missing: $targetProfile"
+    }
+
     $phase = 'provider-session prepare'
     Write-SwitchLog $phase
-    Invoke-ProviderSession -Operation 'prepare' -Transaction $transactionId -SelectedAgent $Agent -TargetProfile $targetProfile
+    $prepareOutput = Invoke-ProviderSession -Operation 'prepare' -Transaction $transactionId -SelectedAgent $Agent -TargetProfile $targetProfile
     $prepared = $true
+    $prepareReceipt = $prepareOutput | ConvertFrom-Json
+    $selectedAgentIds = @(
+        $prepareReceipt.selectedAgentIds |
+            ForEach-Object {
+                $candidateAgentId = [string]$_
+                if ($candidateAgentId -notmatch '^[^\s/]+/[^\s/:]+:[^\s/:]+$') {
+                    throw 'Prepared provider transaction returned an invalid agent ID.'
+                }
+                $candidateAgentId
+            }
+    )
+    if ($Agent -and ($selectedAgentIds.Count -ne 1 -or $selectedAgentIds[0] -ne $Agent)) {
+        throw 'Prepared provider transaction selected the wrong agent.'
+    }
+
+    $profilesToActivate = @(
+        Get-HostTargetProfiles -Bindings $newBindings -SelectedAgentIds $selectedAgentIds -AllowEmptySelection:(-not [bool]$Agent)
+    )
+    $profilesToRestore = @(
+        Get-HostTargetProfiles -Bindings $previousBindings -SelectedAgentIds $selectedAgentIds -AllowEmptySelection:(-not [bool]$Agent)
+    )
+    foreach ($profileToActivate in $profilesToActivate) {
+        $candidateProperty = $profiles.PSObject.Properties[$profileToActivate]
+        if ($null -eq $candidateProperty -or -not $candidateProperty.Value.enabled) {
+            throw "Host provider profile is unavailable: $profileToActivate"
+        }
+        $candidateProvider = [string]$candidateProperty.Value.provider
+        if ($candidateProvider -ne $provider) {
+            throw "Host provider profile has an incompatible provider: $profileToActivate"
+        }
+        $candidatePath = Get-MyPeopleProfilePath -Provider $provider -Profile $profileToActivate
+        if (-not [IO.File]::Exists((Join-Path $candidatePath 'auth.json'))) {
+            throw "Host provider credential is missing: $profileToActivate"
+        }
+    }
 
     $handoffDirectory = Join-Path (Join-Path $env:LOCALAPPDATA 'MyPeople\handoffs') $transactionId
     Protect-MyPeopleDirectory -Path $handoffDirectory | Out-Null
@@ -172,16 +232,17 @@ try {
 
     $phase = 'provider-session stop'
     Write-SwitchLog $phase
-    Invoke-ProviderSession -Operation 'stop' -Transaction $transactionId
+    $agentsStopped = $true
+    Invoke-ProviderSession -Operation 'stop' -Transaction $transactionId | Out-Null
 
-    if (-not $InheritGlobal) {
-        $phase = 'activate provider profile'
+    foreach ($profileToActivate in $profilesToActivate) {
+        $phase = "activate provider profile $profileToActivate"
         Write-SwitchLog $phase
-        & $adapter.ActivateProfile $safeProfile $container | Out-Null
+        & $adapter.ActivateProfile $profileToActivate $container | Out-Null
 
-        $phase = 'validate provider runtime'
+        $phase = "validate provider runtime $profileToActivate"
         Write-SwitchLog $phase
-        & $adapter.ValidateRuntime $safeProfile $container | Out-Null
+        & $adapter.ValidateRuntime $profileToActivate $container | Out-Null
     }
 
     $phase = 'persist provider bindings'
@@ -190,30 +251,40 @@ try {
 
     $phase = 'provider-session revive'
     Write-SwitchLog $phase
-    Invoke-ProviderSession -Operation 'revive' -Transaction $transactionId
+    Invoke-ProviderSession -Operation 'revive' -Transaction $transactionId | Out-Null
 
     $phase = 'provider-session verify'
     Write-SwitchLog $phase
-    Invoke-ProviderSession -Operation 'verify' -Transaction $transactionId
+    Invoke-ProviderSession -Operation 'verify' -Transaction $transactionId | Out-Null
 
     $phase = 'provider-session commit'
     Write-SwitchLog $phase
-    Invoke-ProviderSession -Operation 'commit' -Transaction $transactionId
+    Invoke-ProviderSession -Operation 'commit' -Transaction $transactionId | Out-Null
     Write-Output "Provider binding active: $targetLabel ($(if ($Agent) { $Agent } else { 'global' }))"
 } catch {
     $failedPhase = $phase
     $failureMessage = $_.Exception.Message
     if ($prepared) {
-        if ($null -ne $adapter -and $previousEffectiveProfile) {
-            try { & $adapter.RestorePrevious $previousEffectiveProfile $container | Out-Null } catch {}
+        if ($agentsStopped) {
+            if ($null -ne $adapter) {
+                foreach ($profileToRestore in $profilesToRestore) {
+                    try { & $adapter.RestorePrevious $profileToRestore $container | Out-Null } catch {}
+                }
+            }
+            if ($null -ne $previousBindings) {
+                try { Set-MyPeopleProviderBindings -Bindings $previousBindings -Container $container } catch {}
+            }
+            $phase = 'provider-session rollback'
+        } else {
+            $phase = 'provider-session abort'
         }
-        if ($null -ne $previousBindings) {
-            try { Set-MyPeopleProviderBindings -Bindings $previousBindings -Container $container } catch {}
-        }
-        $phase = 'provider-session rollback'
         Write-SwitchLog $phase
         try {
-            Invoke-ProviderSession -Operation 'rollback' -Transaction $transactionId
+            if ($agentsStopped) {
+                Invoke-ProviderSession -Operation 'rollback' -Transaction $transactionId | Out-Null
+            } else {
+                Invoke-ProviderSession -Operation 'abort' -Transaction $transactionId | Out-Null
+            }
         } catch {}
     }
     Write-Error "Provider switch failed during $failedPhase for target ${targetLabel}: $failureMessage"
