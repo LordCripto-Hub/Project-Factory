@@ -1,6 +1,6 @@
-# Project Factory - MyPeople with Codex
+# Project Factory
 
-MyPeople is a local coordination environment for Codex agents running through Docker and tmux. It provides a Boss, Nightwatch, delegated workers, Priorities, and an operational HUD.
+local coordination environment for Codex agents running through Docker and tmux. It provides a Boss, Nightwatch, delegated workers, Priorities, and an operational HUD.
 
 This repository contains only the installable product: source code, documentation, plugins, Windows launchers, and verification. Live runtime state is intentionally excluded from version control.
 
