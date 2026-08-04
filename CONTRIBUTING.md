@@ -1,6 +1,6 @@
 # Contributing
 
-MyPeople is maintained as a public, community-facing repository.
+Is maintained as a public, community-facing repository.
 
 - Write tracked documentation, code comments, CLI output, tests, UI strings, examples, and commit messages in English.
 - Do not commit credentials, tokens, account identifiers, email addresses, private machine paths, or personal operational notes.
