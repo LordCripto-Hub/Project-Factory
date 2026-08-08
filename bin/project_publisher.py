@@ -27,6 +27,24 @@ APPROVAL_ID = re.compile(r"^[0-9a-f]{24}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 PR_URL = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/pull/([1-9][0-9]*)$")
 PUBLISH_MODES = {"direct_main", "draft_pr"}
+MERGE_METHODS = {"squash", "merge", "rebase"}
+APPROVED_ACTIONS = ["push_branch", "create_pr", "merge_when_green"]
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
+ACTIVE_APPROVAL_STATUSES = frozenset({
+    "pending", "pending_approval", "approved", "validating", "branch_pushed",
+    "pr_created", "waiting_checks", "merge_blocked",
+})
+CEO_ACTIONABLE_APPROVAL_STATUSES = frozenset({"pending", "pending_approval"})
+_APPROVAL_PROGRESS = {
+    "pending": 0,
+    "pending_approval": 0,
+    "approved": 1,
+    "validating": 2,
+    "branch_pushed": 3,
+    "pr_created": 4,
+    "waiting_checks": 5,
+    "merge_blocked": 6,
+}
 
 
 class PublisherError(RuntimeError):
@@ -136,6 +154,73 @@ def _validate_draft_pr_fields(base_branch: str, head_branch: str, title: str, bo
         raise PublisherError("draft PR body exceeds 8000 characters")
 
 
+def approval_logical_key(record: dict) -> tuple[str, ...]:
+    """Return the publication intent identity, excluding the commit attempt."""
+    return (
+        str(record.get("taskId") or ""),
+        str(record.get("projectSlug") or ""),
+        str(record.get("repository") or ""),
+        str(record.get("mode") or "direct_main"),
+        str(record.get("branch") or ""),
+        str(record.get("baseBranch") or ""),
+        str(record.get("headBranch") or ""),
+    )
+
+
+def select_current_approvals(records: list[dict]) -> list[dict]:
+    """Collapse legacy duplicates to one visible record per publication intent.
+
+    A newer commit is a newer attempt. For duplicate records of that same attempt,
+    prefer the record furthest through the publication lifecycle.
+    """
+    groups: dict[tuple[str, ...], list[dict]] = {}
+    for record in records:
+        if not isinstance(record, dict) or record.get("status") not in ACTIVE_APPROVAL_STATUSES:
+            continue
+        groups.setdefault(approval_logical_key(record), []).append(record)
+    selected: list[dict] = []
+    for candidates in groups.values():
+        by_commit: dict[str, list[dict]] = {}
+        for record in candidates:
+            by_commit.setdefault(str(record.get("commit") or ""), []).append(record)
+        newest_commit = max(
+            by_commit,
+            key=lambda commit: max(
+                (float(item.get("createdAt") or 0), str(item.get("approvalId") or ""))
+                for item in by_commit[commit]
+            ),
+        )
+        selected.append(max(
+            by_commit[newest_commit],
+            key=lambda item: (
+                _APPROVAL_PROGRESS.get(str(item.get("status") or ""), -1),
+                float(item.get("updatedAt") or item.get("createdAt") or 0),
+                str(item.get("approvalId") or ""),
+            ),
+        ))
+    return selected
+
+
+def select_actionable_approvals(records: list[dict], *, now: float | None = None) -> list[dict]:
+    """Return only publication records that still require CEO action."""
+    current = time.time() if now is None else float(now)
+
+    def unexpired(record: dict) -> bool:
+        value = record.get("expiresAt")
+        if value in (None, ""):
+            return True
+        try:
+            return float(value) > current
+        except (TypeError, ValueError):
+            return False
+
+    return [
+        record
+        for record in select_current_approvals(records)
+        if record.get("status") in CEO_ACTIONABLE_APPROVAL_STATUSES and unexpired(record)
+    ]
+
+
 def create_approval(
     *,
     task_id: str,
@@ -155,6 +240,8 @@ def create_approval(
     head_branch: str | None = None,
     pr_title: str | None = None,
     pr_body: str | None = None,
+    merge_method: str = "squash",
+    evidence_digest: str | None = None,
 ) -> dict:
     current = time.time() if now is None else float(now)
     commit = commit.lower()
@@ -172,12 +259,23 @@ def create_approval(
         raise PublisherError("commit must be a full 40-character SHA")
     if not _valid_branch(branch):
         raise PublisherError("invalid publication branch")
-    if mode not in PUBLISH_MODES:
+    if mode not in PUBLISH_MODES | {"pr_merge_when_green"}:
         raise PublisherError("invalid publication mode")
     if not 60 <= int(ttl_seconds) <= 3600:
         raise PublisherError("approval TTL must be between 60 and 3600 seconds")
     _validate_profile(profile, project_slug, branch)
-    if mode == "draft_pr":
+    if mode == "pr_merge_when_green":
+        base_branch = base_branch or "main"
+        if base_branch != "main" or branch != "main":
+            raise PublisherError("merge-when-green base branch must be main")
+        if not evidence_digest or not DIGEST.fullmatch(evidence_digest.lower()):
+            raise PublisherError("merge-when-green evidence digest is invalid")
+        if merge_method not in MERGE_METHODS:
+            raise PublisherError("invalid merge method")
+        base_branch = "main"
+        head_branch = head_branch or default_head_branch(task_id, project_slug)
+        _validate_draft_pr_fields(base_branch, head_branch, pr_title or str(task.get("text") or task_id), pr_body or "")
+    elif mode == "draft_pr":
         base_branch = base_branch or branch
         head_branch = head_branch or default_head_branch(task_id, project_slug)
         pr_title = (pr_title or str(task.get("text") or f"Task {task_id}")).strip()
@@ -185,16 +283,9 @@ def create_approval(
         _validate_draft_pr_fields(base_branch, head_branch, pr_title, pr_body)
         if base_branch != branch:
             raise PublisherError("draft PR base branch must match the approved workspace branch")
-    approval_id = id_factory()
-    if not APPROVAL_ID.fullmatch(approval_id):
-        raise PublisherError("approval ID generator returned an invalid value")
     root = approvals_root(approvals_dir)
-    path = approval_path(approval_id, root)
-    if os.path.exists(path):
-        raise PublisherError("approval ID collision")
     record = {
-        "schemaVersion": 1,
-        "approvalId": approval_id,
+        "schemaVersion": 2 if mode == "pr_merge_when_green" else 1,
         "status": "pending",
         "taskId": task_id,
         "projectSlug": project_slug,
@@ -215,7 +306,52 @@ def create_approval(
             "prTitle": pr_title,
             "prBody": pr_body,
         })
-    atomic_json(path, record, mode=0o600)
+    elif mode == "pr_merge_when_green":
+        record.update({
+            "baseBranch": "main",
+            "headBranch": head_branch,
+            "prTitle": (pr_title or str(task.get("text") or task_id)).strip(),
+            "prBody": pr_body if pr_body is not None else f"Authorized by Boss for MyPeople task `{task_id}`.",
+            "mergeMethod": merge_method,
+            "evidenceDigest": evidence_digest.lower(),
+            "approvedActions": list(APPROVED_ACTIONS),
+            "transactionNonce": secrets.token_hex(32),
+        })
+    os.makedirs(root, exist_ok=True)
+    logical_key = approval_logical_key(record)
+    with json_lock(os.path.join(root, ".approvals")):
+        existing: list[tuple[dict, str]] = []
+        for name in os.listdir(root):
+            if not re.fullmatch(r"[0-9a-f]{24}\.json", name):
+                continue
+            item = load_json(os.path.join(root, name), None)
+            if isinstance(item, dict):
+                existing.append((item, os.path.join(root, name)))
+        for item, _item_path in existing:
+            if item.get("status") not in ACTIVE_APPROVAL_STATUSES:
+                continue
+            if approval_logical_key(item) != logical_key:
+                continue
+            if str(item.get("commit") or "") == commit and float(item.get("expiresAt") or 0) > current:
+                return item
+
+        approval_id = id_factory()
+        if not APPROVAL_ID.fullmatch(approval_id):
+            raise PublisherError("approval ID generator returned an invalid value")
+        path = approval_path(approval_id, root)
+        if os.path.exists(path):
+            raise PublisherError("approval ID collision")
+        record["approvalId"] = approval_id
+        for item, item_path in existing:
+            if item.get("status") not in ACTIVE_APPROVAL_STATUSES:
+                continue
+            if approval_logical_key(item) != logical_key:
+                continue
+            item["status"] = "superseded"
+            item["supersededBy"] = approval_id
+            item["supersededAt"] = current
+            atomic_json(item_path, item, mode=0o600)
+        atomic_json(path, record, mode=0o600)
     return record
 
 
@@ -291,12 +427,15 @@ def publish(
         record = load_json(path, None)
         if not isinstance(record, dict):
             raise PublisherError("approval not found")
-        if record.get("mode") == "draft_pr" and record.get("status") == "pr_created":
+        if record.get("mode") in {"draft_pr", "pr_merge_when_green"} and record.get("status") in {"pr_created", "waiting_checks", "merge_blocked"}:
             return record
         if current >= float(record.get("expiresAt") or 0):
             raise PublisherError("approval has expired")
-        if record.get("mode") == "draft_pr" and record.get("status") == "branch_pushed":
+        if record.get("mode") in {"draft_pr", "pr_merge_when_green"} and record.get("status") == "branch_pushed":
             return record
+        if record.get("mode") == "pr_merge_when_green" and record.get("status") in {"approved", "validating"}:
+            _preflight(record, load_profile(record["projectSlug"], profiles_root(profiles_dir)), runner)
+            return {**record, "status": record["status"], "validatedAt": current}
         if record.get("status") != "pending":
             raise PublisherError("approval is not pending")
         profile = load_profile(record["projectSlug"], profiles_root(profiles_dir))
@@ -410,6 +549,107 @@ def get_approval(approval_id: str, approvals_dir: str | None = None) -> dict:
     return record
 
 
+def _transition(
+    approval_id: str,
+    expected: set[str],
+    target: str,
+    *,
+    approvals_dir: str | None = None,
+    now: float | None = None,
+    validate: Callable[[dict], None] | None = None,
+    updates: dict | None = None,
+) -> dict:
+    root = approvals_root(approvals_dir)
+    path = approval_path(approval_id, root)
+    with json_lock(path):
+        record = load_json(path, None)
+        if not isinstance(record, dict) or record.get("status") not in expected:
+            raise PublisherError("publication transition mismatch")
+        current = time.time() if now is None else float(now)
+        if current >= float(record.get("expiresAt") or 0) and target not in {"expired", "rejected"}:
+            raise PublisherError("approval has expired")
+        if validate:
+            validate(record)
+        record.update(updates or {})
+        record["status"] = target
+        record["updatedAt"] = current
+        atomic_json(path, record, mode=0o600)
+        _append_receipt(root, {
+            "approvalId": approval_id,
+            "taskId": record.get("taskId"),
+            "projectSlug": record.get("projectSlug"),
+            "status": target,
+            "timestamp": current,
+            "shortSha": str(record.get("commit", ""))[:12],
+        })
+        return record
+
+
+def approve_request(approval_id: str, actor: str, *, approvals_dir: str | None = None, now: float | None = None) -> dict:
+    if actor != "CEO":
+        raise PublisherError("only CEO can approve publication")
+    return _transition(approval_id, {"pending_approval", "pending"}, "approved", approvals_dir=approvals_dir, now=now, updates={"approvedAt": now})
+
+
+def reject_request(approval_id: str, actor: str, *, approvals_dir: str | None = None, now: float | None = None) -> dict:
+    if actor != "CEO":
+        raise PublisherError("only CEO can reject publication")
+    return _transition(approval_id, {"pending_approval", "pending", "approved"}, "rejected", approvals_dir=approvals_dir, now=now, updates={"rejectedBy": actor})
+
+
+def record_branch_push(approval_id: str, head_sha: str, *, approvals_dir: str | None = None, now: float | None = None) -> dict:
+    if not COMMIT.fullmatch(head_sha.lower()):
+        raise PublisherError("invalid pushed head SHA")
+    def validate(record: dict) -> None:
+        if head_sha.lower() != record.get("commit"):
+            raise PublisherError("pushed SHA does not match approval")
+    return _transition(
+        approval_id, {"approved", "validating"}, "branch_pushed",
+        approvals_dir=approvals_dir, now=now, validate=validate,
+        updates={"branchPushedAt": now, "headSha": head_sha.lower()},
+    )
+
+
+def record_pull_request(approval_id: str, number: int, url: str, head_sha: str, *, approvals_dir: str | None = None, now: float | None = None) -> dict:
+    def validate(record: dict) -> None:
+        if record.get("mode") != "pr_merge_when_green":
+            raise PublisherError("approval is not merge-when-green")
+        match = PR_URL.fullmatch(url)
+        if not match or int(match.group(3)) != number or url.rsplit("/pull/", 1)[0] != record["repository"].removesuffix(".git"):
+            raise PublisherError("pull request does not match approval repository")
+        if head_sha.lower() != record.get("commit"):
+            raise PublisherError("pull request head does not match approval")
+    return _transition(
+        approval_id, {"branch_pushed"}, "pr_created",
+        approvals_dir=approvals_dir, now=now, validate=validate,
+        updates={"pullRequest": {"number": int(number), "url": url}, "headSha": head_sha.lower()},
+    )
+
+
+def record_checks(approval_id: str, state: str, digest: str, *, approvals_dir: str | None = None, now: float | None = None) -> dict:
+    if state not in {"pending", "failed", "passed"} or not DIGEST.fullmatch(digest.lower()):
+        raise PublisherError("invalid check result")
+    target = "waiting_checks" if state in {"pending", "passed"} else "merge_blocked"
+    return _transition(
+        approval_id, {"pr_created", "waiting_checks", "merge_blocked"}, target,
+        approvals_dir=approvals_dir, now=now,
+        updates={"checksState": state, "checksDigest": digest.lower()},
+    )
+
+
+def record_merge(approval_id: str, merge_sha: str, *, approvals_dir: str | None = None, now: float | None = None) -> dict:
+    if not COMMIT.fullmatch(merge_sha.lower()):
+        raise PublisherError("invalid merge SHA")
+    def validate(record: dict) -> None:
+        if record.get("checksState") != "passed":
+            raise PublisherError("required checks are not green")
+    return _transition(
+        approval_id, {"waiting_checks"}, "merged",
+        approvals_dir=approvals_dir, now=now, validate=validate,
+        updates={"mergeSha": merge_sha.lower(), "mergedAt": now},
+    )
+
+
 def approve_runtime(
     task_id: str,
     project_slug: str,
@@ -421,6 +661,8 @@ def approve_runtime(
     head_branch: str | None = None,
     pr_title: str | None = None,
     pr_body: str | None = None,
+    merge_method: str = "squash",
+    evidence_digest: str | None = None,
 ) -> dict:
     actor = os.environ.get("AGENT_ID", "").strip()
     todo_base = (
@@ -447,6 +689,8 @@ def approve_runtime(
         head_branch=head_branch,
         pr_title=pr_title,
         pr_body=pr_body,
+        merge_method=merge_method,
+        evidence_digest=evidence_digest,
     )
     try:
         result=http_json("/todo/status", "POST", {

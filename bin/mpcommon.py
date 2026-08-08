@@ -3,6 +3,7 @@
 from __future__ import annotations
 import contextlib, fcntl, json, os, pathlib, shlex, subprocess, tempfile, time
 import urllib.error, urllib.parse, urllib.request
+from agent_identity import validate_tmux_agent
 
 CONFIG = os.environ.get("MYPEOPLE_CONFIG_PATH", os.path.expanduser("~/.config/mypeople/queue.env"))
 DEFAULT_ENG_MODEL = "claude-opus-4-8"
@@ -24,7 +25,7 @@ def read_env(path: str = CONFIG) -> dict[str, str]:
         out[k.strip()] = v
     # Process-local overrides enable isolated verification without mutating queue.env.
     for k, v in os.environ.items():
-        if k in out or k in {"BOARD_PATH","ROSTER_PATH","AGENTS_PATH","STATUS_DIR","EXPORT_REPO","CEO_WHATSAPP","HERMES_SEND_URL","NIGHTWATCH_IDLE_MIN","NIGHTWATCH_TOKEN_TTL","BOSS_AGENT","NIGHTWATCH_AGENT","HUD_PORT","TODO_PORT","QUEUE_URL","BIND_ADDR","INSTALL_DIR","HOST_ID","QUEUE_SECRET","NIGHTWATCH_TOKEN","PROJECT_PROFILES_DIR","TASKSPECS_DIR","MEMORY_GATEWAY_PATH","MYPEOPLE_MEMORY_ALLOW_HTTP"}:
+        if k in out or k in {"BOARD_PATH","ROSTER_PATH","AGENTS_PATH","STATUS_DIR","EXPORT_REPO","CEO_WHATSAPP","HERMES_SEND_URL","NIGHTWATCH_IDLE_MIN","NIGHTWATCH_TOKEN_TTL","BOSS_AGENT","NIGHTWATCH_AGENT","HUD_PORT","TODO_PORT","QUEUE_URL","BIND_ADDR","INSTALL_DIR","HOST_ID","QUEUE_SECRET","NIGHTWATCH_TOKEN","PROJECT_PROFILES_DIR","TASKSPECS_DIR","MEMORY_GATEWAY_PATH","MYPEOPLE_MEMORY_ALLOW_HTTP","MYPEOPLE_MEMORY_COMPARISON_ENABLED"}:
             out[k] = v
     return out
 
@@ -97,6 +98,12 @@ def run_tmux(args, *, check=True, capture=False, env=None):
 def window_exists(target: str) -> bool:
     return run_tmux(["has-session", "-t", target], check=False, capture=True).returncode == 0
 
+def require_matching_agent(target: str, expected: dict) -> dict:
+    result = validate_tmux_agent(target, expected, run_tmux)
+    if not result["ok"]:
+        raise RuntimeError(f"agent_identity_{result['state']}: {target}")
+    return result
+
 def tmux_send_message(target: str, message, runner=run_tmux, delay=.4, submit_delay=.08) -> bool:
     """Paste exactly one nonempty payload and submit once; retry only a stuck multiline paste."""
     if message is None or not str(message).strip():
@@ -109,7 +116,7 @@ def tmux_send_message(target: str, message, runner=run_tmux, delay=.4, submit_de
     if "\n" in msg:
         time.sleep(delay)
         cap = runner(["capture-pane", "-p", "-t", target], capture=True)
-        if "[Pasted text" in (cap.stdout or ""):
+        if any(marker in (cap.stdout or "") for marker in ("[Pasted text", "[Pasted Content")):
             runner(["send-keys", "-t", target, "Enter"])
     return True
 
@@ -126,6 +133,22 @@ def update_roster(record: dict):
     with json_lock(roster_path()):
         rows = [x for x in load_roster() if x.get("agent_id") != record["agent_id"]]
         rows.append(record); save_roster(rows)
+
+def record_session_identity(agent_id: str, identity: dict) -> dict:
+    with json_lock(roster_path()):
+        rows = load_roster()
+        current = next(
+            (dict(row) for row in rows if row.get("agent_id") == agent_id),
+            None,
+        )
+        if current is None:
+            raise ValueError("unknown_agent")
+        current.update(identity)
+        save_roster([
+            current if row.get("agent_id") == agent_id else row
+            for row in rows
+        ])
+    return current
 
 def remove_roster(agent_id: str):
     with json_lock(roster_path()):

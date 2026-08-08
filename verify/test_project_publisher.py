@@ -131,6 +131,195 @@ class ProjectPublisherContract(unittest.TestCase):
         values.update(overrides)
         return self.module.create_approval(**values)
 
+    def test_duplicate_retry_is_idempotent_for_same_commit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            first = self.create(root, id_factory=lambda: "b" * 24)
+            second = self.create(root, id_factory=lambda: "c" * 24, now=1001.0)
+            self.assertEqual(second["approvalId"], first["approvalId"])
+            self.assertEqual(len(list((root / "approvals").glob("[0-9a-f]" * 24 + ".json"))), 1)
+
+    def test_new_commit_supersedes_previous_attempt_for_same_task(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            first = self.create(root, id_factory=lambda: "b" * 24)
+            second = self.create(root, commit="c" * 40, id_factory=lambda: "d" * 24, now=1001.0)
+            old = json.loads((root / "approvals" / (first["approvalId"] + ".json")).read_text(encoding="utf-8"))
+            self.assertEqual(old["status"], "superseded")
+            self.assertEqual(old["supersededBy"], second["approvalId"])
+            self.assertEqual(second["status"], "pending")
+
+    def test_legacy_projection_selection_prefers_new_attempt_then_progress(self):
+        records = [
+            {"approvalId": "a" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pr_created", "createdAt": 10},
+            {"approvalId": "b" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pending", "createdAt": 11},
+            {"approvalId": "c" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "2" * 40, "status": "pending", "createdAt": 12},
+        ]
+        current = self.module.select_current_approvals(records)
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0]["approvalId"], "c" * 24)
+
+    def test_actionable_projection_hides_decided_publication_records(self):
+        records = [
+            {"approvalId": "a" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pending", "createdAt": 10},
+            {"approvalId": "b" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "approved", "createdAt": 11},
+            {"approvalId": "c" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pr_created", "createdAt": 12},
+        ]
+        actionable = self.module.select_actionable_approvals(records)
+        self.assertEqual(actionable, [])
+
+    def test_actionable_projection_collapses_stale_pending_before_filtering(self):
+        records = [
+            {"approvalId": "a" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "1" * 40, "status": "pending", "createdAt": 10},
+            {"approvalId": "b" * 24, "taskId": "t", "projectSlug": "p", "repository": "repo", "mode": "direct_main", "branch": "main", "commit": "2" * 40, "status": "approved", "createdAt": 11},
+        ]
+        self.assertEqual(self.module.select_actionable_approvals(records), [])
+
+    def test_actionable_projection_hides_expired_pending_records(self):
+        record = {
+            "approvalId": "a" * 24,
+            "taskId": "t",
+            "projectSlug": "p",
+            "repository": "repo",
+            "mode": "direct_main",
+            "branch": "main",
+            "commit": "1" * 40,
+            "status": "pending",
+            "expiresAt": 99,
+        }
+        self.assertEqual(self.module.select_actionable_approvals([record], now=100), [])
+
+    def test_actionable_projection_keeps_unexpired_pending_records(self):
+        record = {
+            "approvalId": "a" * 24,
+            "taskId": "t",
+            "projectSlug": "p",
+            "repository": "repo",
+            "mode": "direct_main",
+            "branch": "main",
+            "commit": "1" * 40,
+            "status": "pending",
+            "expiresAt": 101,
+        }
+        self.assertEqual(
+            [item["approvalId"] for item in self.module.select_actionable_approvals([record], now=100)],
+            ["a" * 24],
+        )
+
+    def test_merge_when_green_approval_binds_exact_actions_and_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            approval = self.create(
+                root,
+                mode="pr_merge_when_green",
+                head_branch="task/task-123-project-factory",
+                base_branch="main",
+                merge_method="squash",
+                evidence_digest="e" * 64,
+            )
+            self.assertEqual(approval["schemaVersion"], 2)
+            self.assertEqual(approval["baseBranch"], "main")
+            self.assertEqual(approval["mergeMethod"], "squash")
+            self.assertEqual(approval["evidenceDigest"], "e" * 64)
+            self.assertEqual(
+                approval["approvedActions"],
+                ["push_branch", "create_pr", "merge_when_green"],
+            )
+            self.assertEqual(len(approval["transactionNonce"]), 64)
+
+    def test_merge_when_green_rejects_unsafe_bounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            for values in (
+                {"base_branch": "release"},
+                {"merge_method": "admin"},
+                {"evidence_digest": "bad"},
+                {"ttl_seconds": 30},
+            ):
+                with self.assertRaises(self.module.PublisherError):
+                    self.create(
+                        root,
+                        mode="pr_merge_when_green",
+                        head_branch="task/task-123-project-factory",
+                        base_branch=values.get("base_branch", "main"),
+                        merge_method=values.get("merge_method", "squash"),
+                        evidence_digest=values.get("evidence_digest", "e" * 64),
+                        ttl_seconds=values.get("ttl_seconds", 900),
+                    )
+
+    def test_merge_when_green_transitions_to_merged_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            approval = self.create(
+                root,
+                mode="pr_merge_when_green",
+                head_branch="task/task-123-project-factory",
+                base_branch="main",
+                merge_method="squash",
+                evidence_digest="e" * 64,
+            )
+            approval_id = approval["approvalId"]
+            self.module.approve_request(approval_id, "CEO", approvals_dir=str(root / "approvals"), now=1001)
+            self.module.record_branch_push(approval_id, COMMIT, approvals_dir=str(root / "approvals"), now=1002)
+            self.module.record_pull_request(
+                approval_id, 42,
+                "https://github.com/LordCripto-Hub/Project-Factory/pull/42",
+                COMMIT,
+                approvals_dir=str(root / "approvals"), now=1003,
+            )
+            self.module.record_checks(
+                approval_id, "passed", "f" * 64,
+                approvals_dir=str(root / "approvals"), now=1004,
+            )
+            merged = self.module.record_merge(
+                approval_id, "c" * 40,
+                approvals_dir=str(root / "approvals"), now=1005,
+            )
+            self.assertEqual(merged["status"], "merged")
+            with self.assertRaises(self.module.PublisherError):
+                self.module.record_merge(
+                    approval_id, "d" * 40,
+                    approvals_dir=str(root / "approvals"), now=1006,
+                )
+
+    def test_merge_when_green_rejects_changed_head_and_failed_checks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            approval = self.create(
+                root,
+                mode="pr_merge_when_green",
+                head_branch="task/task-123-project-factory",
+                base_branch="main",
+                merge_method="squash",
+                evidence_digest="e" * 64,
+            )
+            approval_id = approval["approvalId"]
+            self.module.approve_request(approval_id, "CEO", approvals_dir=str(root / "approvals"), now=1001)
+            self.module.record_branch_push(approval_id, COMMIT, approvals_dir=str(root / "approvals"), now=1002)
+            with self.assertRaises(self.module.PublisherError):
+                self.module.record_pull_request(
+                    approval_id, 42,
+                    "https://github.com/LordCripto-Hub/Project-Factory/pull/42",
+                    "b" * 40,
+                    approvals_dir=str(root / "approvals"), now=1003,
+                )
+            self.module.record_pull_request(
+                approval_id, 42,
+                "https://github.com/LordCripto-Hub/Project-Factory/pull/42",
+                COMMIT,
+                approvals_dir=str(root / "approvals"), now=1003,
+            )
+            blocked = self.module.record_checks(
+                approval_id, "failed", "f" * 64,
+                approvals_dir=str(root / "approvals"), now=1004,
+            )
+            self.assertEqual(blocked["status"], "merge_blocked")
+            with self.assertRaises(self.module.PublisherError):
+                self.module.record_merge(
+                    approval_id, "c" * 40,
+                    approvals_dir=str(root / "approvals"), now=1005,
+                )
+
     def save_profile(self, root: pathlib.Path):
         profiles = root / "profiles"
         profiles.mkdir()

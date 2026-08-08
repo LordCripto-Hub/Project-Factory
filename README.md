@@ -1,6 +1,6 @@
-# Project Factory - MyPeople with Codex
+# Project Factory
 
-MyPeople is a local coordination environment for Codex agents running through Docker and tmux. It provides a Boss, Nightwatch, delegated workers, Priorities, and an operational HUD.
+local coordination environment for Codex agents running through Docker and tmux. It provides a Boss, Nightwatch, delegated workers, Priorities, and an operational HUD.
 
 This repository contains only the installable product: source code, documentation, plugins, Windows launchers, and verification. Live runtime state is intentionally excluded from version control.
 
@@ -61,6 +61,83 @@ and the launcher never imports another Windows login automatically. Refresh the
 saved profile explicitly, then run the shortcut again; a successful validation
 runs `mp providers-resume` and restores Boss and Nightwatch.
 
+## Exact agent session recovery
+
+Managed Codex and Claude agents persist their provider session identity.
+`mp kill` records a deliberate stop before terminating tmux, so the
+supervisor cannot immediately undo an operator decision. `mp revive` performs
+an exact session resume only when the recorded backend, provider profile,
+working directory, TaskSpec and role receipts, and provider transcript all
+match.
+
+`mp reconcile` checks missing windows every 15 seconds. It allows three
+recovery attempts separated by a 30-second cooldown, then records a typed
+blocked state. A stale process that never established a session may receive up
+to three labeled bootstrap retries. An exact-resume failure has no silent fresh
+fallback.
+
+A model change inside the same backend and provider profile uses exact session
+resume. A backend or profile change requires the private provider-switch
+transaction and an explicit fresh handoff; it starts a new provider session
+without claiming conversation continuity. Task ownership, ProjectProfile,
+TaskSpec, role, Git workspace, and evidence remain outside the provider process
+and survive either path.
+
+## Zero-token adaptive owner routing
+
+New Codex owner workers may omit --model. Boss then classifies the compiled
+TaskSpec with deterministic local rules and selects the least expensive allowed
+tier: Luna for economy work, Terra for normal implementation, and Sol only for
+explicit critical signals. The routing step makes no provider call and records
+aiUsage: none.
+
+Each project policy defines allowed models, the maximum automatic tier, attempt
+limits, and escalation limits. Hints can raise classification or impose a
+ceiling, but they cannot downgrade stronger task signals. If the exact
+justified tier is unavailable, routing chooses the cheapest allowed tier above
+it within the ceiling and never silently downgrades. Manual model requests pass through the same
+allowlist and ceilings and fail closed instead of being silently substituted.
+Every ProjectProfile slug must have an explicit matching project entry in the
+private policy; startup never auto-authorizes new projects or overwrites an
+operator policy.
+The canonical routing receipt is private, SHA-256-bound to the roster, and
+summarized once in the Priorities task comments.
+
+Exact revive preserves that receipt and model. Lossless automatic escalation
+accepts only `verification_failed`, `implementation_blocked`, or
+`model_capability_insufficient`. A worker reports its own assigned task with:
+
+```bash
+mp fail --failure verification_failed \
+  --summary "The focused verifier still fails." \
+  --proof "python3 verify/example.py: 1 failed"
+```
+
+The owning Boss or a local operator can use:
+
+```bash
+mp escalate node-1/main:Worker-1 \
+  --failure model_capability_insufficient \
+  --summary "The bounded implementation path exceeds this model." \
+  --proof "Boss review confirmed the capability blocker."
+```
+
+MyPeople preserves the same agent, task, assignee, provider profile, working
+directory, TaskSpec, role receipt, and same Codex session. It stops only the
+selected worker, resumes that exact session on one higher policy-compliant
+model, verifies identity, and sends one compact continuation message.
+The routing calculation consumes zero model tokens; the continuation starts
+one normal turn on the higher model and has that model's ordinary token cost.
+
+Provider quota, authentication, startup, infrastructure, Docker, tmux, queue,
+filesystem, network, missing-context, timeout, silence, and crash failures
+never escalate the model. A failed forward resume rolls back to the prior exact
+session and receipt. If rollback also fails, the task and selected worker enter
+`recovery_required`; all private evidence is preserved and no fresh session is
+created. The HUD exposes bounded Boss and Nightwatch model controls for the
+currently supported Sol and Luna profiles; worker orchestration remains under
+Boss control.
+
 ## Durable Docker state
 
 MyPeople uses a pinned local image plus eight named volumes:
@@ -92,7 +169,15 @@ The live transaction retains the old container as `mypeople-pre-volumes-<timesta
 
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Cleanup of preserved containers, images, backups, or restore-test volumes is a separate human-approved operation.
 
-Cloudflare memory remains disabled during this migration. Its first real profile is a separate, bounded, read-only activation cycle after backup, restore, launcher recovery, and rollback are verified.
+### Boss SSH publication broker
+
+Engineers never receive GitHub credentials. After an engineer completes a task, Boss verifies the exact commit, branch, repository, and evidence, then submits a CEO approval in Priorities. The approval is bound to one task, one repository, one task branch, one 40-character SHA, and `main` as the base.
+
+After CEO approval, the host-only publication broker uses the operator's existing SSH access to push that exact commit, create or reconcile the pull request, wait for required checks, and merge only when GitHub reports the protected PR green. The broker never copies private keys, SSH sockets, tokens, or GitHub CLI configuration into Docker. Direct pushes, force pushes, administrator bypass, changed head SHAs, and failed checks are rejected.
+
+Cloudflare memory remains disabled during this migration. A separate, local,
+read-only one-card canary may be enabled explicitly after backup, restore,
+launcher recovery, and rollback are verified; it is never part of normal startup.
 
 ### Upgrade an existing volume-backed deployment
 
@@ -129,6 +214,50 @@ shareable diagnostic evidence.
 Provider sessions are independent of code upgrades. An exhausted, logged-out,
 or intentionally stopped provider remains in that state; the upgrade does not
 open OAuth, validate provider quotas, or revive agents.
+
+### Rebuild after local image loss
+
+If the `mypeople` container and all `mypeople-node:*` images are missing but
+the eight named volumes still exist, rebuild from the repository instead of
+recreating or restoring the volumes:
+
+```powershell
+$sha = (git rev-parse --short=7 HEAD).Trim()
+$base = "mypeople-node:recovery-base-$sha"
+$candidate = "mypeople-node:recovery-candidate-$sha"
+docker build -f docker\Dockerfile.recovery-base -t $base .
+docker build -f docker\Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t $candidate .
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image $candidate -TimeoutSeconds 1800 -UsePackagedSource
+```
+
+Record the successful verifier result in a current-user-protected JSON receipt
+under `%LOCALAPPDATA%\MyPeople\state`. Bind `sourceCommit` to `git rev-parse
+HEAD`, `imageId` to `docker image inspect <candidate> --format '{{.Id}}'`, set
+`status` to `pass`, and set `verification` to `isolated-packaged-source`.
+Recovery refuses a dirty checkout, a mismatched receipt, a live `mypeople`
+container, a missing canonical volume, or insufficient disk space.
+
+```powershell
+# Read-only plan and receipt
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Recover-MyPeopleDockerDeployment.ps1 -CandidateImage $candidate -VerificationReceipt <protected-receipt.json>
+
+# Explicit recovery after reviewing the plan
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Recover-MyPeopleDockerDeployment.ps1 -CandidateImage $candidate -VerificationReceipt <protected-receipt.json> -Execute
+
+# Normal provider rehydration and role startup
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeople.ps1 -NoBrowser -NonInteractive
+```
+
+The recovery mounts every source volume read-only while producing a sanitized
+portable archive, verifies its SHA-256 after the Docker copy, pins the exact
+candidate image ID, and checks board and stable-roster hashes after Compose
+starts. A failed deployment removes only the new container and restores the
+previous deployment files; it never claims that a deleted old image was
+restored. Backups contain volume state, not Docker image layers.
+
+Memory comparison remains disabled after recovery. Its live `Preflight` action
+requires the comparison flag and sidecar to be explicitly enabled first; do
+not treat that command as a passive check or run it without a separate approval.
 
 ## Persistent Project Factory workspace
 
@@ -169,8 +298,47 @@ contract.
 ## Documentation
 
 - [User manual](docs/USER-MANUAL.md)
+- [Adaptive routing live canary](docs/ADAPTIVE-ROUTING-LIVE-CANARY.md)
 - [Minimal architecture](docs/MINIMAL-ARCHITECTURE.md)
 - [Upstream MyPeople implementation review](docs/UPSTREAM-MYPEOPLE-REVIEW.md)
+
+## Experimental memory evaluation
+
+[`experiments/memory-gate-b/`](experiments/memory-gate-b/) contains the
+provider-neutral, read-only TaskSpec memory Gate B. It is reproducible evidence
+and is not installed or enabled by default.
+
+### Opt-in local Memory Gate B canary
+
+The reviewed local canary uses the public, SHA-locked Project Factory history
+dataset and an internal, portless Docker sidecar. It is disabled by default and
+does not activate Cloudflare or any hosted memory provider.
+
+This sidecar is an experimental manual-canary surface only. Normal automatic
+memory is supervised inside the main `mypeople` container on loopback and is
+rehydrated by the standard one-click startup; it does not require a second
+Docker container.
+
+```powershell
+$source = (Resolve-Path .\experiments\memory-gate-b).Path
+$dataset = (Resolve-Path .\experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632).Path
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Enable -MemorySource $source -Dataset $dataset -Image <reviewed-local-image>
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Status
+```
+
+In Priorities, edit one Project Factory card, set a bounded **Context
+question**, select **Use Memory Gate B canary for this task**, save it, and use
+**Run**. Record `useful`, `neutral`, `harmful`, or `not demonstrated` with the
+**Assess** control. **Retry without memory** recompiles the same card without
+claims. Disable and remove the sidecar, internal network, and ephemeral token:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
+```
+
+The shared `mp` Linux identity is a governance boundary, not a private-memory
+isolation boundary. Use only the public dataset. One canary is operational
+evidence, not statistical proof of better task quality or lower token cost.
 
 ## Safe full verification
 

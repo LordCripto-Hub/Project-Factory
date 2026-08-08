@@ -35,6 +35,7 @@ def namespace(cwd, owner="task-1"):
         model="gpt-5.6-luna",
         owner_task=owner,
         temporary=False,
+        without_memory=False,
     )
 
 
@@ -157,6 +158,141 @@ class TaskSpecSpawnContract(unittest.TestCase):
         self.assertEqual(notices[0][0], "node-1/main:Boss")
         self.assertIn("memory_timeout", notices[0][1])
 
+    def test_without_memory_requires_owner_task(self):
+        parser = self.mp.parser()
+        parsed = parser.parse_args([
+            "spawn", "node-1/main:eng-context", "--boss", "node-1/main:Boss",
+            "--owner-task", "task-1", "--without-memory",
+        ])
+        self.assertTrue(parsed.without_memory)
+        invalid = parser.parse_args([
+            "spawn", "node-1/main:eng-context", "--boss", "node-1/main:Boss",
+            "--temporary", "--without-memory",
+        ])
+        self.mp.window_exists = lambda _target: False
+        with self.assertRaisesRegex(SystemExit, "requires --owner-task"):
+            self.mp.spawn(invalid)
+
+    def test_without_memory_accepts_only_an_enabled_comparison_baseline(self):
+        task = {
+            "id": "task-1",
+            "projectSlug": "project-factory",
+            "contextQuestion": "question",
+            "memoryCanary": False,
+            "experiment": {"memory_comparison": {"arm": "baseline"}},
+        }
+        self.mp.http_json = lambda *_args, **_kwargs: {"tasks": {"task-1": task}}
+        self.mp.load_profile = lambda *_args: {
+            "slug": "project-factory", "revision": 7,
+            "memory": {"enabled": True},
+        }
+        compiled_profiles = []
+        def compile_baseline(_task, profile):
+            compiled_profiles.append(profile)
+            return {
+                "workingDirectory": "/tmp",
+                "projectSlug": "project-factory",
+                "profileRevision": 7,
+                "memoryStatus": "disabled",
+                "memoryClaims": [],
+            }
+        self.mp.compile_task_spec = compile_baseline
+        self.mp.write_task_spec = lambda *_args: "/tmp/task-1.json"
+        self.mp.record_taskspec_event = lambda _event: None
+        self.mp.ENV["MYPEOPLE_MEMORY_COMPARISON_ENABLED"] = "1"
+
+        self.assertEqual(
+            self.mp.compile_owner_task_spec("task-1", bypass_memory=True),
+            "/tmp/task-1.json",
+        )
+        self.assertIs(compiled_profiles[0]["memory"]["enabled"], False)
+        task.pop("experiment")
+        with self.assertRaisesRegex(self.mp.TaskSpecError, "canary_not_requested"):
+            self.mp.compile_owner_task_spec("task-1", bypass_memory=True)
+
+    def test_canary_receipt_is_durable_before_taskspec_write(self):
+        order = []
+        self.mp.http_json = lambda *_args, **_kwargs: {
+            "tasks": {"task-1": {
+                "id": "task-1", "projectSlug": "project-factory",
+                "text": "objective", "contextQuestion": "question",
+                "memoryCanary": True,
+            }}
+        }
+        self.mp.load_profile = lambda *_args: {
+            "slug": "project-factory", "revision": 7,
+            "memory": {"enabled": True},
+        }
+        self.mp.load_memory_canary_control = lambda *_args: {
+            "schemaVersion": 1, "enabled": True,
+            "allowedProjects": ["project-factory"], "revision": 2,
+        }
+        self.mp.compile_memory_canary_attempt = lambda **_kwargs: {
+            "candidate": {
+                "taskId": "task-1", "projectSlug": "project-factory",
+                "profileRevision": 7, "memoryStatus": "ok",
+                "memoryClaims": [],
+            },
+            "receipt": {"attemptId": "a", "taskId": "task-1"},
+        }
+        self.mp.append_memory_canary_receipt = (
+            lambda *_args: order.append("receipt")
+        )
+        self.mp.write_task_spec = (
+            lambda *_args: order.append("write") or "/tmp/task-1.json"
+        )
+        self.mp.record_taskspec_event = lambda _event: None
+        self.mp.compile_owner_task_spec("task-1")
+        self.assertEqual(order, ["receipt", "write"])
+
+    def test_automatic_mode_compiles_existing_card_once_with_derived_query(self):
+        calls = []
+        events = []
+        self.mp.http_json = lambda *_args, **_kwargs: {
+            "tasks": {"task-1": {
+                "id": "task-1",
+                "projectSlug": "project-factory",
+                "text": "Repair publisher continuity",
+                "doneCondition": "Preserve ownership",
+                "contextQuestion": "",
+                "memoryCanary": False,
+            }}
+        }
+        self.mp.load_profile = lambda *_args: {
+            "slug": "project-factory", "revision": 7,
+            "limits": {"memoryTopK": 3},
+            "memory": {"enabled": True},
+        }
+        self.mp.load_memory_canary_control = lambda *_args: {
+            "schemaVersion": 2, "mode": "automatic",
+            "allowedProjects": ["project-factory"], "revision": 9,
+        }
+        class Document(dict):
+            pass
+        document = Document({
+            "taskId": "task-1", "projectSlug": "project-factory",
+            "profileRevision": 7, "memoryStatus": "memory_applied",
+            "memoryClaims": [],
+        })
+        document.memory_metadata = {
+            "selectedLevel": "fast", "levelsAttempted": ["fast"],
+            "estimatedTokens": 20, "provenanceComplete": True,
+        }
+        self.mp.compile_task_spec = lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or document
+        )
+        self.mp.write_task_spec = lambda *_args: "/tmp/task-1.json"
+        self.mp.record_taskspec_event = lambda event: events.append(event)
+        self.assertEqual(self.mp.compile_owner_task_spec("task-1"), "/tmp/task-1.json")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1]["memory_mode"], "automatic")
+        self.assertEqual(
+            calls[0][1]["memory_query"],
+            "Repair publisher continuity | Preserve ownership",
+        )
+        self.assertEqual(events[0]["selectedLevel"], "fast")
+        self.assertNotIn("memory_query", events[0])
+
 
     def test_failed_compile_records_typed_metadata_without_content(self):
         events = []
@@ -190,6 +326,9 @@ class TaskSpecSpawnContract(unittest.TestCase):
             "memoryStatus": "ok", "memoryClaims": [{"content": "claim"}],
         })
         document.memory_metadata = {
+            "requestedClaimCount": 3,
+            "returnedClaimCount": 1,
+            "embeddedClaimCount": 1,
             "responseCharacters": 5,
             "aiUsage": {"neurons": 12},
         }

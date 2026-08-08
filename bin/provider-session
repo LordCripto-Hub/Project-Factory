@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
-import re
+import signal
 import subprocess
 import sys
 import time
@@ -21,11 +22,28 @@ from mpcommon import (
     window_exists,
 )
 from provider_profiles import validate_profile_id
+from agent_session import SessionError, validate_session_id
+from provider_handoff import (
+    PUBLIC_HANDOFF_FIELDS,
+    build_handoff,
+    redact,
+    sanitize_terminal_tail,
+)
+from provider_transaction import (
+    SwitchBusy,
+    _private_dir,
+    acquire_lock,
+    release_lock,
+)
 
 
 RUN_ROOT = os.path.realpath(
     os.environ.get("MYPEOPLE_RUN_DIR", os.path.join(ROOT, "run"))
 )
+
+
+def raise_termination(_signum, _frame) -> None:
+    raise RuntimeError("provider switch terminated")
 LOCK_PATH = os.path.realpath(
     os.environ.get("PROVIDER_SWITCH_LOCK", os.path.join(RUN_ROOT, "provider-switch.lock"))
 )
@@ -41,117 +59,32 @@ TRANSACTIONS_ROOT = os.path.realpath(
     )
 )
 
-PUBLIC_HANDOFF_FIELDS = (
-    "agent_id",
-    "backend",
-    "model",
-    "provider_profile",
-    "lifecycle",
-    "owner_task_id",
-    "boss_id",
-    "is_master",
-    "state",
-    "status",
-    "summary",
-)
+def handoff_path_for_agent(transaction_dir: str, agent_id: str) -> str:
+    digest = hashlib.sha256(str(agent_id).encode("utf-8")).hexdigest()
+    return os.path.join(os.path.realpath(transaction_dir), "handoffs", digest + ".json")
 
 
-class SwitchBusy(RuntimeError):
-    pass
-
-
-def _private_dir(path: str) -> None:
-    os.makedirs(path, mode=0o700, exist_ok=True)
-    os.chmod(path, 0o700)
-
-
-def acquire_lock(path: str, transaction_id: str) -> None:
-    transaction_id = validate_profile_id(transaction_id)
-    path = os.path.realpath(path)
-    _private_dir(os.path.dirname(path))
-    try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as exc:
-        raise SwitchBusy("a provider switch is already active") from exc
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(
-                {"transaction": transaction_id, "created": time.time()},
-                handle,
-                sort_keys=True,
-            )
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(path, 0o600)
-    except Exception:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-def release_lock(path: str, transaction_id: str) -> None:
-    transaction_id = validate_profile_id(transaction_id)
-    path = os.path.realpath(path)
-    current = load_json(path, {})
-    if current.get("transaction") != transaction_id:
-        return
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-
-
-def redact(text: str) -> str:
-    value = str(text or "")
-    substitutions = (
-        (
-            re.compile(
-                r"(?i)authorization\s*:\s*bearer\s+[A-Za-z0-9._-]+"
-            ),
-            "Authorization: Bearer [REDACTED]",
-        ),
-        (
-            re.compile(
-                r"(?i)(?<![A-Za-z0-9])(?:tskey-auth-|sk-|ghp_|github_pat_)"
-                r"[A-Za-z0-9._-]+"
-            ),
-            "[REDACTED_TOKEN]",
-        ),
-        (
-            re.compile(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"),
-            "[REDACTED_EMAIL]",
-        ),
-        (
-            re.compile(r"(?i)[A-Z]:\\Users\\[^\r\n]+"),
-            "[REDACTED_WINDOWS_PATH]",
-        ),
-        (
-            re.compile(r"/" + r"Users/[^/\r\n]+(?:/[^\r\n]*)?"),
-            "[REDACTED_MACOS_PATH]",
-        ),
+def write_handoffs(
+    transaction_dir: str,
+    selected: list[dict],
+) -> list[dict]:
+    handoff_dir = os.path.join(os.path.realpath(transaction_dir), "handoffs")
+    _private_dir(handoff_dir)
+    handoffs = []
+    for row in selected:
+        handoff = build_handoff(row, _capture_tail(row))
+        atomic_json(
+            handoff_path_for_agent(transaction_dir, row["agent_id"]),
+            handoff,
+            mode=0o600,
+        )
+        handoffs.append(handoff)
+    atomic_json(
+        os.path.join(transaction_dir, "handoffs.json"),
+        handoffs,
+        mode=0o600,
     )
-    for pattern, replacement in substitutions:
-        value = pattern.sub(replacement, value)
-    return value
-
-
-def build_handoff(record: dict, terminal_tail: str, limit: int = 4000) -> dict:
-    public = {}
-    for key in PUBLIC_HANDOFF_FIELDS:
-        if key not in record:
-            continue
-        value = record[key]
-        public[key] = redact(value) if isinstance(value, str) else value
-    bounded = max(0, int(limit))
-    tail = redact(terminal_tail)
-    if bounded:
-        tail = tail[-bounded:]
-    else:
-        tail = ""
-    return {"agent": public, "terminalTail": tail}
+    return handoffs
 
 
 def active_provider_roster(roster: list[dict]) -> list[dict]:
@@ -220,26 +153,107 @@ def revive_agents(roster: list[dict], selected_agent: str = "") -> None:
         run_mp(["revive", row["agent_id"]])
 
 
-def verify_roles(roster: list[dict], selected_agent: str = "") -> None:
+def fresh_handoff_agents(
+    transaction_dir: str,
+    transaction_id: str,
+    roster: list[dict],
+    selected_agent: str = "",
+) -> None:
+    for row in revival_order(_selected(roster, selected_agent)):
+        run_mp(
+            [
+                "fresh-handoff",
+                row["agent_id"],
+                "--transaction",
+                transaction_id,
+                "--handoff",
+                handoff_path_for_agent(transaction_dir, row["agent_id"]),
+            ]
+        )
+
+
+def verify_roles(
+    roster: list[dict],
+    selected_agent: str = "",
+    target_backend: str = "",
+    target_model: str = "",
+) -> None:
     actual = {row.get("agent_id"): row for row in load_roster()}
-    role_fields = ("backend", "is_master", "boss_id", "lifecycle", "owner_task_id")
+    bindings = load_json(BINDINGS_PATH, {})
+    role_fields = (
+        "is_master",
+        "boss_id",
+        "lifecycle",
+        "owner_task_id",
+        "cwd",
+        "taskspec_sha256",
+        "role_contract_sha256",
+    )
     failures = []
     for expected in _selected(roster, selected_agent):
         agent_id = expected["agent_id"]
         current = actual.get(agent_id)
-        if current is None or current.get("state") != "alive":
-            failures.append(agent_id)
+        if current is None:
+            failures.append(f"{agent_id}:missing")
+            continue
+        if current.get("state") != "alive":
+            failures.append(f"{agent_id}:not_alive")
             continue
         if not window_exists(tmux_target(agent_id)):
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:window_missing")
+            continue
+        if target_backend and current.get("backend") != target_backend:
+            failures.append(f"{agent_id}:backend_mismatch")
+            continue
+        if not target_backend and current.get("backend") != expected.get("backend"):
+            failures.append(f"{agent_id}:backend_mismatch")
+            continue
+        expected_model = target_model or expected.get("model")
+        if expected_model and current.get("model") != expected_model:
+            failures.append(f"{agent_id}:model_mismatch")
+            continue
+        if current.get("backend") == "codex":
+            expected_profile = (
+                (bindings.get("agentProfiles") or {}).get(agent_id)
+                or bindings.get("globalProfile")
+            )
+            if (
+                expected_profile
+                and current.get("provider_profile") != expected_profile
+            ):
+                failures.append(f"{agent_id}:profile_mismatch")
+                continue
+        try:
+            session_id = validate_session_id(current.get("session_id"))
+        except SessionError:
+            failures.append(f"{agent_id}:session_invalid")
+            continue
+        if current.get("resume_state") != "available":
+            failures.append(f"{agent_id}:session_unavailable")
+            continue
+        if current.get("session_backend") != current.get("backend"):
+            failures.append(f"{agent_id}:session_backend_mismatch")
+            continue
+        if current.get("session_profile") != current.get("provider_profile", ""):
+            failures.append(f"{agent_id}:session_profile_mismatch")
+            continue
+        if os.path.realpath(str(current.get("session_cwd") or "")) != os.path.realpath(
+            str(current.get("cwd") or "")
+        ):
+            failures.append(f"{agent_id}:session_cwd_mismatch")
+            continue
+        if expected.get("session_id") and session_id == expected.get("session_id"):
+            failures.append(f"{agent_id}:session_reused")
             continue
         if any(
             field in expected and current.get(field) != expected.get(field)
             for field in role_fields
         ):
-            failures.append(agent_id)
+            failures.append(f"{agent_id}:role_receipt_mismatch")
     if failures:
-        raise RuntimeError("provider switch role verification failed")
+        raise RuntimeError(
+            "provider switch role verification failed: " + ",".join(failures)
+        )
 
 
 def rollback(transaction_dir: str) -> None:
@@ -254,17 +268,30 @@ def rollback(transaction_dir: str) -> None:
     active_roster = load_json(active_path, []) if has_active_snapshot else roster
     bindings = load_json(os.path.join(transaction_dir, "bindings.json"), {})
     try:
+        target_ids = {row.get("agent_id") for row in active_roster}
+        snapshot_by_id = {row.get("agent_id"): row for row in roster}
+        if any(agent_id not in snapshot_by_id for agent_id in target_ids):
+            raise RuntimeError("provider rollback snapshot is incomplete")
         current_roster = load_roster()
-        if has_active_snapshot:
-            current_roster = active_provider_roster(current_roster)
-        if selected_agent:
-            current_roster = [
-                row for row in current_roster if row.get("agent_id") == selected_agent
-            ]
-        if current_roster:
-            stop_agents(current_roster, selected_agent)
+        current_selected = [
+            row for row in current_roster if row.get("agent_id") in target_ids
+        ]
+        if current_selected:
+            stop_agents(current_selected, selected_agent)
         atomic_json(BINDINGS_PATH, bindings, mode=0o600)
-        save_roster(roster)
+        restored = []
+        restored_ids = set()
+        for row in current_roster:
+            agent_id = row.get("agent_id")
+            if agent_id in target_ids:
+                restored.append(snapshot_by_id[agent_id])
+                restored_ids.add(agent_id)
+            else:
+                restored.append(row)
+        for row in active_roster:
+            if row.get("agent_id") not in restored_ids:
+                restored.append(snapshot_by_id[row["agent_id"]])
+        save_roster(restored)
         revive_agents(active_roster, selected_agent)
         state["phase"] = "rolled-back"
         state["updated"] = time.time()
@@ -305,31 +332,62 @@ def _capture_tail(row: dict) -> str:
 
 def command_prepare(args) -> None:
     transaction_dir = _transaction_dir(args.transaction)
+    target_backend = str(getattr(args, "backend", "") or "")
+    target_profile = str(getattr(args, "profile", "") or "")
+    if target_backend != "claude" and not target_profile:
+        raise RuntimeError("target provider profile is required")
     acquire_lock(LOCK_PATH, args.transaction)
     try:
         complete_roster = load_roster()
         roster = active_provider_roster(complete_roster)
         selected = _selected(roster, args.agent)
+        if target_profile:
+            if args.agent and any(row.get("backend") != "codex" for row in selected):
+                raise RuntimeError("Codex provider profile requires a Codex agent")
+            if not args.agent:
+                selected = [row for row in selected if row.get("backend") == "codex"]
         bindings = load_json(BINDINGS_PATH, {})
         snapshot(transaction_dir, complete_roster, bindings)
         atomic_json(
             os.path.join(transaction_dir, "active-roster.json"),
-            roster,
+            selected,
             mode=0o600,
         )
-        handoffs = [build_handoff(row, _capture_tail(row)) for row in selected]
-        atomic_json(os.path.join(transaction_dir, "handoffs.json"), handoffs, mode=0o600)
+        write_handoffs(transaction_dir, selected)
         state = {
             "transaction": args.transaction,
             "selectedAgent": args.agent or "",
             "phase": "prepared",
             "created": time.time(),
         }
+        if getattr(args, "backend", ""):
+            state["targetBackend"] = args.backend
+        if getattr(args, "model", ""):
+            state["targetModel"] = args.model
+        if target_profile:
+            state["targetProfile"] = validate_profile_id(target_profile)
+            overrides = bindings.get("agentProfiles") or {}
+            state["targetProfiles"] = {
+                row["agent_id"]: validate_profile_id(
+                    target_profile
+                    if args.agent
+                    else overrides.get(row["agent_id"]) or target_profile
+                )
+                for row in selected
+            }
         atomic_json(os.path.join(transaction_dir, "state.json"), state, mode=0o600)
     except Exception:
         release_lock(LOCK_PATH, args.transaction)
         raise
-    print(json.dumps({"transaction": args.transaction, "phase": "prepared"}))
+    print(
+        json.dumps(
+            {
+                "transaction": args.transaction,
+                "phase": "prepared",
+                "selectedAgentIds": [row["agent_id"] for row in selected],
+            }
+        )
+    )
 
 
 def _transaction_roster(transaction_dir: str) -> list[dict]:
@@ -351,8 +409,15 @@ def command_stop(args) -> None:
 def command_revive(args) -> None:
     transaction_dir = _transaction_dir(args.transaction)
     state = _read_state(transaction_dir)
+    if state.get("phase") != "stopped":
+        raise RuntimeError("provider switch transaction is not stopped")
     roster = _transaction_roster(transaction_dir)
-    revive_agents(roster, str(state.get("selectedAgent") or ""))
+    fresh_handoff_agents(
+        transaction_dir,
+        state["transaction"],
+        roster,
+        str(state.get("selectedAgent") or ""),
+    )
     _write_phase(transaction_dir, state, "revived")
 
 
@@ -360,7 +425,12 @@ def command_verify(args) -> None:
     transaction_dir = _transaction_dir(args.transaction)
     state = _read_state(transaction_dir)
     roster = _transaction_roster(transaction_dir)
-    verify_roles(roster, str(state.get("selectedAgent") or ""))
+    verify_roles(
+        roster,
+        str(state.get("selectedAgent") or ""),
+        str(state.get("targetBackend") or ""),
+        str(state.get("targetModel") or ""),
+    )
     _write_phase(transaction_dir, state, "verified")
 
 
@@ -368,6 +438,15 @@ def command_commit(args) -> None:
     transaction_dir = _transaction_dir(args.transaction)
     state = _read_state(transaction_dir)
     _write_phase(transaction_dir, state, "committed")
+    release_lock(LOCK_PATH, args.transaction)
+
+
+def command_abort(args) -> None:
+    transaction_dir = _transaction_dir(args.transaction)
+    state = _read_state(transaction_dir)
+    if state.get("phase") != "prepared":
+        raise RuntimeError("provider switch transaction cannot be aborted")
+    _write_phase(transaction_dir, state, "aborted")
     release_lock(LOCK_PATH, args.transaction)
 
 
@@ -399,12 +478,16 @@ def parser() -> argparse.ArgumentParser:
     prepare = commands.add_parser("prepare")
     prepare.add_argument("--transaction", required=True)
     prepare.add_argument("--agent", default="")
+    prepare.add_argument("--backend", choices=["claude", "codex"], default="")
+    prepare.add_argument("--model", default="")
+    prepare.add_argument("--profile", default="")
     prepare.set_defaults(function=command_prepare)
     for name, function in (
         ("stop", command_stop),
         ("revive", command_revive),
         ("verify", command_verify),
         ("commit", command_commit),
+        ("abort", command_abort),
         ("rollback", command_rollback),
     ):
         command = commands.add_parser(name)
@@ -416,6 +499,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    signal.signal(signal.SIGTERM, raise_termination)
     args = parser().parse_args(argv)
     try:
         args.function(args)

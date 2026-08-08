@@ -5,9 +5,31 @@ ROOT=${INSTALL_DIR:-$HOME/mypeople}
 export INSTALL_DIR="$ROOT"
 export PATH="$HOME/.local/bin:$ROOT/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
+export MYPEOPLE_MEMORY_ALLOW_HTTP=1
 
 . "$HOME/.config/mypeople/queue.env"
 mkdir -p "$ROOT/run"
+
+bootstrap_routing_policy() {
+  local policy_path="$ROOT/run/routing-policy.json" policy_tmp=""
+  install -d -m 0700 "$ROOT/run/routing-decisions"
+  [[ -e "$policy_path" ]] && return 0
+  [[ -f "$ROOT/examples/routing-policy.example.json" ]] || return 1
+  policy_tmp=$(mktemp "$ROOT/run/.routing-policy.XXXXXX") || return 1
+  if ! install -m 0600 "$ROOT/examples/routing-policy.example.json" "$policy_tmp"; then
+    rm -f "$policy_tmp"
+    return 1
+  fi
+  if ! mv -n "$policy_tmp" "$policy_path"; then
+    rm -f "$policy_tmp"
+    return 1
+  fi
+  [[ ! -e "$policy_tmp" ]] || rm -f "$policy_tmp"
+  [[ -e "$policy_path" ]]
+}
+
+bootstrap_routing_policy || printf '%s\n' 'warning: routing policy bootstrap failed; automatic owner routing is unavailable' >&2
+
 if [[ "${MYPEOPLE_TAILSCALE_ENABLED:-0}" == "1" ]]; then
   mkdir -p "$ROOT/run/tailscale-state"
 fi
@@ -71,6 +93,7 @@ while (( ! stopping )); do
   spawn queue-client python3 "$ROOT/bin/queue-client.py"
   spawn board-export python3 "$ROOT/bin/board-export.py"
   spawn workspace-supervisor python3 "$ROOT/bin/workspace-supervisor.py"
+  spawn local-memory python3 "$ROOT/bin/local-memory-runtime.py"
   spawn ttyd-write ttyd -i 0.0.0.0 -W -a -p "$TTYD_PORT" -t disableLeaveAlert=true "$ROOT/bin/attach-helper.sh"
   spawn ttyd-read ttyd -i 0.0.0.0 -a -p "$TTYD_RO_PORT" -t disableLeaveAlert=true "$ROOT/bin/attach-ro-helper.sh"
   spawn boss-supervisor bash "$ROOT/bin/boss-supervisor.sh"

@@ -1,0 +1,181 @@
+# Memory Gate B Experiment
+
+This provider-neutral experiment verifies that Project Factory can add a small,
+grounded, read-only memory result to a real MyPeople TaskSpec without weakening
+the local task contract or changing the live runtime.
+
+## What It Proves
+
+- relevant recall returns at most three grounded claims;
+- irrelevant recall returns no claims;
+- no memory question causes no memory call;
+- the locked Project Factory history dataset is bound to source commit
+  `039a62988625369f3f86c055cd476b0080395daa`;
+- the disposable fixture has no external network, production volume, Docker
+  socket, provider key, or write tool;
+- actual provider tokens are `not_measured`; 236 tokens is only the estimated
+  TaskSpec memory-context delta.
+
+## Run On Windows
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\experiments\memory-gate-b\windows\Invoke-IsolatedTaskSpecMemory.ps1 -Image mypeople-node:upgrade-20260719T150005Z
+```
+
+The launcher requires Docker Desktop and an already reviewed MyPeople image. It
+verifies that the live `mypeople` container is unchanged and cleans up its
+unique disposable Compose project.
+
+## Run Focused Tests
+
+```powershell
+$env:PYTHONPATH = 'experiments\memory-gate-b\src'
+python -m unittest discover -s experiments\memory-gate-b\tests -v
+```
+
+## Runtime Boundary
+
+This directory is not activated by `install.sh`, the default Compose deployment,
+the normal Windows launcher, or the runtime supervisor. The explicitly invoked
+`Start-MyPeopleMemoryCanary.ps1` launcher may mount it read-only for one local
+canary. This is not general production memory. Cloudflare and other hosted
+providers are inactive and are not dependencies of this experiment.
+
+The dataset is public. Because Boss and workers share the `mp` Linux identity,
+the canary is not a private-memory isolation boundary and must not receive
+private project material. One canary proves bounded activation and rollback;
+it does not provide statistical evidence of improved quality or token cost.
+
+## Automatic bounded mode candidate
+
+The verified candidate adds an explicit `automatic` mode without adding a
+second memory system. Eligible Project Factory owner tasks derive one bounded
+query from the task title, done condition, and context question. One shared
+coordinator then attempts the existing store in this order:
+
+1. FTS5/graph fast recall;
+2. relation-aware deep recall;
+3. bounded exhaustive exploration over the same loaded events;
+4. SHA-locked, read-only local emergency scan.
+
+The first sufficient level stops the sequence. All levels share a two-second
+deadline, a maximum of three provenance-bearing claims, and a 300 estimated
+token budget. An empty, unavailable, invalid, timed-out, or over-budget memory
+result is recorded with a typed status and does not block TaskSpec creation.
+No level writes memory, calls a provider model, contacts Cloudflare, creates a
+board corpus, or uses `memory-dump.py`.
+
+The HUD and Priorities expose only mode, typed status, selected level, attempted
+levels, counts, latency, estimated memory tokens, provenance state, and provider
+usage when attributable. They never expose the query, claims, credentials, or
+provider transcript.
+
+Enable the reviewed sidecar in automatic mode without restarting MyPeople:
+
+```powershell
+.\windows\Start-MyPeopleMemoryCanary.ps1 -Action Enable -Mode Automatic
+docker exec mypeople mp memory mode status
+```
+
+Instantly stop recall for the next TaskSpec, without stopping the sidecar:
+
+```powershell
+docker exec mypeople mp memory mode off
+```
+
+Remove the sidecar, internal network attachment, and ephemeral credential:
+
+```powershell
+.\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
+```
+
+`manual_canary` remains available for explicit diagnostic cards. Automatic mode
+is Project Factory-only and remains a deployment gate until the disposable
+Docker suite and an explicit live approval are complete.
+
+## Promotion
+
+Promotion requires a separate approved design, controlled live canaries,
+measured task-quality improvement, honest token/cost attribution, secure
+project isolation, and rollback evidence.
+
+## Active Live Canary
+
+The first active live canary passed with bounded retrieval, normal Codex owner
+routing, evidence, and complete rollback. See
+[`artifacts/live-canary-report.md`](artifacts/live-canary-report.md) and
+[`artifacts/live-canary-receipt.json`](artifacts/live-canary-receipt.json).
+
+This single useful result validates activation and reversibility. It does not
+replace the controlled multi-task comparison required for promotion.
+
+## Controlled Comparison
+
+The controlled comparison locks six public Project Factory history cases. All
+six are qualified offline; three aliases are then eligible for paired live
+baseline and memory arms in the approved counterbalanced order. The comparison
+uses one model for every arm and creates a fresh worker, card, and provider
+conversation each time.
+
+Run the offline qualification from the repository root:
+
+```powershell
+python experiments\memory-gate-b\scripts\run_memory_comparison_offline.py `
+  --dataset experiments\memory-gate-b\datasets\project-factory-history-039a62988625 `
+  --lock experiments\memory-gate-b\docker\history-hybrid-039a62988625.dataset-lock.json `
+  --cases experiments\memory-gate-b\comparison\cases.json `
+  --output comparison-offline.json
+```
+
+The current qualification is bound to Project Factory source SHA
+`039a62988625369f3f86c055cd476b0080395daa`. Generator v2 produced 292
+committed-history events and 100 grounded questions from its 52 non-merge
+ancestors. Two independent six-case runs passed with fixture, logical digest,
+evidence selections, and escalation decisions identical. The canonical public
+receipt is
+[`reports/comparison-offline-039a62988625.json`](reports/comparison-offline-039a62988625.json).
+The earlier SHA-bound dataset, lock, and receipt remain unchanged as historical
+evidence.
+
+Two executions must have the same `logical_digest`, fixture hash, pass status,
+selected evidence identifiers, and escalation decisions. Whole-file hashes are
+expected to differ because retrieval latency is an actual observation. The
+committed report records one canonical observed run. Memory-context tokens are
+estimated, retrieval latency is actual, and provider tokens are
+`not_measured` unless the provider exposes attributable counters.
+
+### Stop conditions
+
+Do not begin paired execution if the dataset/source binding, fixture hash,
+logical digest, six-of-six result, Docker health, feature flag, project binding,
+or zero-resource preflight fails. During paired execution, stop on harmful
+output, wrong-project evidence, provider failure, timeout, score refusal,
+resource reuse, cleanup failure, or a container restart.
+
+Offline qualification demonstrates deterministic retrieval and scoring over a
+locked public fixture. It does not prove production benefit, lower provider
+cost, better Boss decisions, or improved real-agent coordination.
+
+### Paired live status
+
+The current-SHA preflight passed with the exact workspace SHA, locked fixture,
+offline digest, healthy sidecar, available provider, and unchanged restart
+count. The accepted run completed all three counterbalanced pairs and recorded
+six completed arms with fresh cards, workers, and conversations. The baseline
+scores were `75`, `65`, and `65`; the memory scores were `100`, `90`, and `90`.
+Memory improved every paired quality score, produced three successful results
+versus zero for baseline, and produced no harmful result or rework.
+
+Cleanup was verified complete after every arm, no comparison worker or card was
+retained, and the container restart delta was zero. Provider tokens, live
+retrieval latency, and live injected-context size remain `not_measured`.
+The offline receipt separately records actual retrieval latency and estimated
+memory-context size; those values are not relabeled as live observations.
+
+The decision remains `not_promoted` under the fail-closed rule. The quality gate
+passed, but two required live observability gates did not: retrieval latency and
+injected-context size were not captured per live arm. The sanitized receipt is
+[`reports/comparison-live-039a62988625.json`](reports/comparison-live-039a62988625.json).
+This historical result authorized the measured automatic-mode design. It did
+not itself authorize live activation; deployment still requires the current
+candidate's disposable Docker evidence and an explicit approval.

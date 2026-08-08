@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Contract for the single shared MyPeople design-system layer."""
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +12,7 @@ class DesignSystemContract(unittest.TestCase):
         self.css = (ROOT / "bin" / "mypeople-ui.css").read_text(encoding="utf-8")
         self.docs = (ROOT / "docs" / "design-system" / "README.md").read_text(encoding="utf-8")
         self.catalog = (ROOT / "docs" / "design-system" / "catalog.html").read_text(encoding="utf-8")
+        self.compact_css = re.sub(r"\s+", "", self.css)
 
     def test_semantic_tokens_map_to_existing_scorpion_tokens(self):
         for marker in (
@@ -24,11 +26,11 @@ class DesignSystemContract(unittest.TestCase):
             "--state-done:var(--jade)",
             "--font-code:var(--mono)",
         ):
-            self.assertIn(marker, self.css.replace(" ", ""))
+            self.assertIn(marker, self.compact_css)
 
     def test_legacy_aliases_remain_for_incremental_migration(self):
         for marker in ("--dark-bg:var(--soot)", "--volt:var(--gold)", "--warning:var(--ember)", "--success:var(--jade)"):
-            self.assertIn(marker, self.css.replace(" ", ""))
+            self.assertIn(marker, self.compact_css)
 
     def test_documentation_declares_single_runtime_source(self):
         self.assertIn("bin/mypeople-ui.css", self.docs)
@@ -44,7 +46,7 @@ class DesignSystemContract(unittest.TestCase):
             ".task-top{display:flex",
             ".viewbar{display:flex",
         ):
-            self.assertIn(marker, self.css.replace(" ", ""))
+            self.assertIn(marker, self.compact_css)
 
     def test_wall_is_not_part_of_the_active_component_map(self):
         self.assertNotIn("`wall.html` |", self.docs)

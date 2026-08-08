@@ -23,6 +23,7 @@ FILE_REF_RE = re.compile(
     r"^file:///run/mypeople-secrets/([A-Z][A-Z0-9_]{1,63})$"
 )
 MEMORY_SECRET_ROOT = Path("/run/mypeople-secrets")
+MEMORY_CANARY_URL = "http://memory-gate-b:18443/mcp"
 MAX_CREDENTIAL_BYTES = 4096
 SECRET_KEY_RE = re.compile(r"token|secret|password|credentialvalue|apikey", re.I)
 
@@ -132,6 +133,8 @@ def _validate_memory_url(value: str) -> str:
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ProfileError("memory_url_credentials_forbidden")
     if parsed.scheme == "https" and parsed.netloc:
+        return value
+    if value == MEMORY_CANARY_URL:
         return value
     allow_http = _runtime_setting("MYPEOPLE_MEMORY_ALLOW_HTTP") == "1"
     if (
@@ -312,11 +315,28 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
         for key in (
             "PATH", "PATHEXT", "SystemRoot", "WINDIR", "HOME", "USERPROFILE",
             "TMP", "TEMP", "LANG", "LC_ALL", "NODE_EXTRA_CA_CERTS",
-            "SSL_CERT_FILE", "SSL_CERT_DIR",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "MYPEOPLE_MEMORY_ALLOW_HTTP",
         )
         if key in os.environ
     }
     child_environment[credential_env] = token
+    if profile["memory"]["serverUrl"] == MEMORY_CANARY_URL:
+        control_path = Path(__file__).resolve().parents[1] / "run" / "memory-canary-control.json"
+        try:
+            control = json.loads(control_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise MemoryError("unavailable") from error
+        if (
+            (
+                control.get("mode") not in {"automatic", "manual_canary"}
+                if control.get("schemaVersion") == 2
+                else control.get("enabled") is not True
+            )
+            or control.get("allowedProjects") != ["project-factory"]
+            or profile["slug"] != "project-factory"
+        ):
+            raise MemoryError("unavailable")
+        child_environment["MYPEOPLE_MEMORY_CANARY_URL"] = MEMORY_CANARY_URL
     try:
         completed = runner(
             ["node", os.path.realpath(gateway_path)],
@@ -355,12 +375,20 @@ def call_memory_gateway(profile, question, *, runner=subprocess.run, max_chars=N
         or not 0 <= response_chars <= request["maxChars"]
     ):
         raise MemoryError("invalid_response")
-    return {
+    result = {
         "claims": response["claims"],
         "truncated": response["truncated"],
         "responseChars": response_chars,
         "aiUsage": _normalize_ai_usage(response.get("aiUsage")),
     }
+    for key in (
+        "status", "selectedLevel", "levelsAttempted", "elapsedMilliseconds",
+        "examinedCount", "returnedCount", "estimatedTokens",
+        "provenanceComplete", "reasonCode",
+    ):
+        if key in response:
+            result[key] = response[key]
+    return result
 
 
 def _normalize_ai_usage(value):
@@ -393,6 +421,12 @@ class TaskSpecDocument(dict):
             "embeddedClaimCount": 0,
             "responseCharacters": 0,
             "aiUsage": "not_measured",
+            "selectedLevel": None,
+            "levelsAttempted": [],
+            "examinedCount": 0,
+            "estimatedTokens": 0,
+            "provenanceComplete": False,
+            "reasonCode": None,
         }
 
 
@@ -409,11 +443,146 @@ def _task_string(value, code: str) -> str:
     return value
 
 
+def _routing_hints(value) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TaskSpecError("invalid_routing_hints")
+    allowed = {
+        "taskClass": {"simple", "implementation", "critical"},
+        "risk": {"low", "medium", "high"},
+        "maxTier": {"economy", "standard", "strong"},
+    }
+    if not set(value).issubset(allowed):
+        raise TaskSpecError("invalid_routing_hints")
+    result = {}
+    for key, item in value.items():
+        if not isinstance(item, str) or item not in allowed[key]:
+            raise TaskSpecError("invalid_routing_hints")
+        result[key] = item
+    return result
+
+
 def _task_spec_chars(value: dict) -> int:
     return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
 
-def compile_task_spec(task, profile, recall=None, now=None) -> dict:
+AUTOMATIC_MEMORY_STATUSES = {
+    "memory_applied", "insufficient_evidence", "memory_unavailable",
+    "memory_budget_exceeded", "memory_invalid_response",
+}
+
+
+def _automatic_empty(result, status, reason=None, metadata=None):
+    result["memoryClaims"] = []
+    result["memoryStatus"] = status
+    metadata = metadata if isinstance(metadata, dict) else {}
+    result.memory_metadata = {
+        "requestedClaimCount": 3,
+        "returnedClaimCount": 0,
+        "embeddedClaimCount": 0,
+        "responseCharacters": 0,
+        "aiUsage": "not_measured",
+        "selectedLevel": metadata.get("selectedLevel"),
+        "levelsAttempted": metadata.get("levelsAttempted", []),
+        "examinedCount": metadata.get("examinedCount", 0),
+        "estimatedTokens": metadata.get("estimatedTokens", 0),
+        "provenanceComplete": False,
+        "reasonCode": reason or metadata.get("reasonCode"),
+    }
+    return result
+
+
+def _automatic_error_status(code):
+    if code == "budget_exceeded":
+        return "memory_budget_exceeded"
+    if code == "invalid_response":
+        return "memory_invalid_response"
+    return "memory_unavailable"
+
+
+def _apply_automatic_response(result, response, project_slug, profile, limit):
+    required = {
+        "status", "selectedLevel", "levelsAttempted", "claims",
+        "elapsedMilliseconds", "examinedCount", "returnedCount",
+        "estimatedTokens", "provenanceComplete", "reasonCode",
+    }
+    # The transport boundary validates these envelope fields before returning
+    # the typed automatic-memory payload. They remain bounded metadata and are
+    # safe to accept here even though TaskSpec does not persist them directly.
+    allowed = required | {"aiUsage", "truncated", "responseChars"}
+    if not isinstance(response, dict) or not required.issubset(response) or not set(response).issubset(allowed):
+        raise TaskSpecError("memory_invalid_response")
+    status = response["status"]
+    if status not in AUTOMATIC_MEMORY_STATUSES:
+        raise TaskSpecError("memory_invalid_response")
+    levels = response["levelsAttempted"]
+    ordered = ["fast", "deep", "exhaustive", "emergency"]
+    if not isinstance(levels, list) or levels != ordered[:len(levels)]:
+        raise TaskSpecError("memory_invalid_response")
+    for key in ("elapsedMilliseconds", "examinedCount", "returnedCount", "estimatedTokens"):
+        value = response[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise TaskSpecError("memory_invalid_response")
+    claims = response["claims"]
+    if not isinstance(claims, list) or len(claims) > min(3, profile["limits"]["memoryTopK"]):
+        raise TaskSpecError("memory_invalid_response")
+    if response["returnedCount"] != len(claims) or response["estimatedTokens"] > 300:
+        raise TaskSpecError("memory_invalid_response")
+    if status != "memory_applied":
+        if claims or response["selectedLevel"] is not None:
+            raise TaskSpecError("memory_invalid_response")
+        return _automatic_empty(result, status, metadata=response)
+    if (
+        response["selectedLevel"] not in ordered
+        or response["selectedLevel"] not in levels
+        or response["provenanceComplete"] is not True
+    ):
+        raise TaskSpecError("memory_invalid_response")
+    normalized = []
+    for raw in claims:
+        if not isinstance(raw, dict):
+            raise TaskSpecError("memory_invalid_response")
+        for field in ("id", "projectSlug", "content", "sourceUri", "sourceType"):
+            if not isinstance(raw.get(field), str) or not raw[field].strip():
+                raise TaskSpecError("memory_invalid_response")
+        if raw["projectSlug"] != project_slug:
+            raise TaskSpecError("memory_invalid_response")
+        claim = {field: raw[field].strip() for field in (
+            "id", "projectSlug", "content", "sourceUri", "sourceType"
+        )}
+        if "status" in raw:
+            if not isinstance(raw["status"], str) or not raw["status"].strip() or len(raw["status"]) > 64:
+                raise TaskSpecError("memory_invalid_response")
+            claim["status"] = raw["status"].strip()
+        normalized.append(claim)
+    candidate = TaskSpecDocument(result)
+    candidate["memoryClaims"] = normalized
+    candidate["memoryStatus"] = "memory_applied"
+    if _task_spec_chars(candidate) > limit:
+        return _automatic_empty(result, "memory_budget_exceeded", "taskspec_budget_exceeded", response)
+    result["memoryClaims"] = normalized
+    result["memoryStatus"] = "memory_applied"
+    response_chars = len(json.dumps(normalized, ensure_ascii=False, separators=(",", ":")))
+    result.memory_metadata = {
+        "requestedClaimCount": profile["limits"]["memoryTopK"],
+        "returnedClaimCount": len(normalized),
+        "embeddedClaimCount": len(normalized),
+        "responseCharacters": response_chars,
+        "aiUsage": _normalize_ai_usage(response.get("aiUsage")),
+        "selectedLevel": response["selectedLevel"],
+        "levelsAttempted": levels,
+        "retrievalLatencyMs": int(response["elapsedMilliseconds"]),
+        "examinedCount": int(response["examinedCount"]),
+        "estimatedTokens": int(response["estimatedTokens"]),
+        "provenanceComplete": True,
+        "reasonCode": response["reasonCode"],
+    }
+    return result
+
+
+def compile_task_spec(task, profile, recall=None, now=None, *, memory_query=None,
+                      memory_mode=None) -> dict:
     if not isinstance(task, dict):
         raise TaskSpecError("task_object_required")
     try:
@@ -428,10 +597,13 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
     evidence_policy = str(task.get("evidencePolicy", "optional"))
     if evidence_policy not in {"required", "optional"}:
         raise TaskSpecError("invalid_evidence_policy")
-    question = re.sub(
-        r"[\x00-\x1f\x7f]+", " ", str(task.get("contextQuestion", ""))
-    ).strip()
-    if len(question) > 500:
+    automatic = memory_mode == "automatic"
+    if memory_mode not in {None, "off", "automatic", "manual_canary"}:
+        raise TaskSpecError("memory_mode_invalid")
+    question_source = memory_query if automatic else task.get("contextQuestion", "")
+    question = re.sub(r"[\x00-\x1f\x7f]+", " ", str(question_source or "")).strip()
+    question_limit = 800 if automatic else 500
+    if len(question) > question_limit:
         raise TaskSpecError("context_question_too_long")
     clock = now if now is not None else time.time
     result = TaskSpecDocument({
@@ -448,17 +620,20 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
         "allowedActions": profile["allowedActions"],
         "forbiddenActions": profile["forbiddenActions"],
         "evidencePolicy": evidence_policy,
+        "routingHints": _routing_hints(task.get("routingHints")),
         "memoryQuestion": question,
         "memoryClaims": [],
-        "memoryStatus": "not_requested" if not question else "disabled",
+        "memoryStatus": "not_requested" if memory_mode == "off" or not question else "disabled",
         "compiledAt": clock(),
     })
     limit = profile["limits"]["contextChars"]
     if _task_spec_chars(result) > limit:
         raise TaskSpecError("local_contract_budget_exceeded")
-    if not question or not profile["memory"]["enabled"]:
+    if memory_mode == "off" or not question or not profile["memory"]["enabled"]:
         return result
     remaining = limit - _task_spec_chars(result)
+    if remaining < 256 and automatic:
+        return _automatic_empty(result, "memory_budget_exceeded", "local_contract_budget_exceeded")
     if remaining < 256:
         raise TaskSpecError("memory_budget_exceeded")
     credential_env = _credential_env_name(profile["memory"]["credentialRef"])
@@ -477,7 +652,18 @@ def compile_task_spec(task, profile, recall=None, now=None) -> dict:
             profile, question, max_chars=remaining
         )
     except MemoryError as error:
+        if automatic:
+            return _automatic_empty(result, _automatic_error_status(error.code), error.code)
         raise TaskSpecError(f"memory_{error.code}") from error
+    except (OSError, TimeoutError, ValueError) as error:
+        if automatic:
+            return _automatic_empty(result, "memory_unavailable", "adapter_unavailable")
+        raise
+    if automatic:
+        try:
+            return _apply_automatic_response(result, response, project_slug, profile, limit)
+        except TaskSpecError as error:
+            return _automatic_empty(result, "memory_invalid_response", error.code)
     if not isinstance(response, dict) or not isinstance(response.get("claims"), list):
         raise TaskSpecError("memory_invalid_response")
     if len(response["claims"]) > profile["limits"]["memoryTopK"]:

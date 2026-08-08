@@ -3,6 +3,7 @@
 !.env.example
 .codex/
 .claude/
+.worktrees/
 run/
 status/
 todos/

@@ -18,6 +18,10 @@ class RuntimeImageContract(unittest.TestCase):
         self.assertIn("USER root", dockerfile)
         self.assertIn("COPY --chown=mp:mp . /tmp/mypeople-source", dockerfile)
         self.assertIn("sync_runtime_source.py", dockerfile)
+        self.assertIn("npm ci --prefix /home/mp/mypeople/verify", dockerfile)
+        self.assertIn("npm ci --prefix /home/mp/mypeople/memory-gateway", dockerfile)
+        self.assertIn("playwright install --with-deps chromium webkit", dockerfile)
+        self.assertIn("PLAYWRIGHT_BROWSERS_PATH=/home/mp/.cache/ms-playwright", dockerfile)
         self.assertIn('ENTRYPOINT ["/usr/bin/env"]', dockerfile)
         self.assertIn('CMD ["sleep", "infinity"]', dockerfile)
 
@@ -79,6 +83,9 @@ class RuntimeImageContract(unittest.TestCase):
             "*.p12",
         ):
             self.assertIn(required, ignored)
+        self.assertNotIn("**/*credential*", ignored)
+        self.assertNotIn("**/*token*", ignored)
+        self.assertTrue((ROOT / "bin" / "publish-with-credential").is_file())
 
 
 if __name__ == "__main__":

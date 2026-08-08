@@ -14,6 +14,9 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "bin"))
+
+from evidence_validation import validate_evidence_url
 
 
 def load_script(name: str, path: Path):
@@ -58,6 +61,51 @@ class TaskEvidenceContract(unittest.TestCase):
             "", "/todo/proof/task/file.zip", "result.zip", "application/zip"
         )
         self.assertEqual(kind, "file")
+
+    def test_local_paths_are_rejected_as_link_evidence(self):
+        for value in (
+            "file:///tmp/x.png",
+            r"C:\tmp\x.png",
+            "C:/tmp/x.png",
+            r"\\host\share\x.png",
+            "/home/mp/x.png",
+        ):
+            with self.subTest(value=value):
+                result = validate_evidence_url(value)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error"], "local_evidence_path_rejected")
+                self.assertEqual(result["action"], "use_proof_file")
+        self.assertTrue(validate_evidence_url("https://example.test/x.png")["ok"])
+
+    def test_browser_exposes_broken_media_and_local_path_guidance(self):
+        priorities = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
+        self.assertIn("evidence-preview-error", priorities)
+        self.assertIn("Evidence preview could not be loaded.", priorities)
+        self.assertIn("Use --proof-file <path> to upload local evidence.", priorities)
+
+    def test_only_explicit_http_urls_are_link_evidence(self):
+        self.assertTrue(self.server.is_explicit_http_url("https://example.test/a"))
+        self.assertTrue(self.server.is_explicit_http_url("HTTP://example.test/a"))
+        self.assertFalse(self.server.is_explicit_http_url("bien como van los fix"))
+        self.assertEqual(self.server.classify_media("link", "bien como van los fix"), "text")
+        self.assertEqual(self.server.classify_media("link", "https://example.test/a"), "link")
+
+    def test_legacy_relative_link_proof_migrates_to_comment(self):
+        board = {"version": 2, "order": ["task-1"], "tasks": {"task-1": {
+            "id": "task-1", "comments": [], "proofs": [{"id": "old", "kind": "link",
+            "url": "como van los fix", "body": "", "by": "CEO", "ts": 1}]
+        }}}
+        self.assertTrue(self.server.migrate(board))
+        task = board["tasks"]["task-1"]
+        self.assertEqual(task["proofs"], [])
+        self.assertEqual(task["comments"][0]["body"], "como van los fix")
+
+    def test_ui_composer_routes_text_and_urls_separately(self):
+        source = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")
+        self.assertIn("function isDirectUrl", source)
+        self.assertIn("if(url)await api('/todo/proof'", source)
+        self.assertIn("else await api('/todo/comment'", source)
+        self.assertIn("e.key==='Enter'&&!e.shiftKey", source)
 
     def test_proof_metadata_is_auditable(self):
         content = b"visual evidence"
@@ -127,6 +175,39 @@ class TaskEvidenceContract(unittest.TestCase):
         ])
         self.assertEqual(ns.proof_file, ["screen.png"])
         self.assertEqual(ns.proof_url, ["https://example.test/result"])
+
+    def test_mp_complete_attributes_canary_without_inventing_usage(self):
+        captured = []
+        self.mp.http_json = lambda *_args, **_kwargs: {"ok": True}
+        self.mp.notify_agent = lambda *_args, **_kwargs: None
+        self.mp.write_status = lambda *_args, **_kwargs: None
+        self.mp.load_roster = lambda: [{
+            "agent_id": "verify-host/main:eng-1",
+            "memory_canary_attempt_id": "attempt-1",
+            "backend": "codex",
+            "session_id": "session-1234567890",
+            "model": "gpt-5.6-luna",
+            "provider_profile": "shared",
+        }]
+        self.mp.complete_memory_canary_attempt = (
+            lambda *_args, **kwargs: captured.append(kwargs) or {}
+        )
+        env = {
+            "AGENT_ID": "verify-host/main:eng-1",
+            "OWNER_TASK_ID": "task-1",
+            "BOSS_ID": "verify-host/main:Boss",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            self.mp.complete(argparse.Namespace(
+                summary=["Done"],
+                proof=["tests pass"],
+                proof_file=[],
+                proof_url=[],
+            ))
+        self.assertEqual(captured[0]["attempt_id"], "attempt-1")
+        self.assertEqual(captured[0]["evidence_count"], 1)
+        self.assertEqual(captured[0]["usage_before"], {})
+        self.assertEqual(captured[0]["usage_after"], {})
 
     def test_browser_journey_waits_for_the_current_upload_success_status(self):
         priorities = (ROOT / "bin" / "todos.html").read_text(encoding="utf-8")

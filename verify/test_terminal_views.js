@@ -18,11 +18,11 @@ function size(page, selector) {
 }
 
 async function check(page, name, selector, getPollCount) {
-  await page.goto(`${base}/${name === 'Wall' ? 'wall' : 'terminal-graph'}`);
+  await page.goto(`${base}/terminal-graph`);
   await page.waitForSelector(`${selector} iframe`);
   const before = await size(page, selector);
   for (let i = 0; i < 8; i++) {
-    await page.evaluate(mode => mode === 'wall' ? window.__wall.poll() : window.__graph.poll(), name === 'Wall' ? 'wall' : 'graph');
+    await page.evaluate(() => window.__graph.poll());
   }
   const after = await size(page, selector);
   if (JSON.stringify(before) !== JSON.stringify(after)) {
@@ -62,13 +62,6 @@ async function check(page, name, selector, getPollCount) {
   }
  const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
-  let wallCalls = 0;
-  await page.route('**/todo/wall', route => {
-    wallCalls++;
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify([{ ...agent, cols: 120 + wallCalls * 17, rows: 36 + wallCalls * 5 }]) });
-  });
-  await check(page, 'Wall', '.tile', () => wallCalls);
-
   let graphCalls = 0;
   await page.route('**/todo/terminal-graph', route => {
     graphCalls++;

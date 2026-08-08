@@ -49,11 +49,16 @@ export function validateInput(value, {allowHttpLoopback = false} = {}) {
   }
   if (url.username || url.password || url.search || url.hash) invalid();
   const loopback = url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname);
-  if (url.protocol !== 'https:' && !(allowHttpLoopback && loopback)) invalid();
+  const internalCanary = (
+    request.serverUrl === 'http://memory-gate-b:18443/mcp' &&
+    process.env.MYPEOPLE_MEMORY_CANARY_URL === request.serverUrl &&
+    request.projectSlug === 'project-factory'
+  );
+  if (url.protocol !== 'https:' && !(allowHttpLoopback && loopback) && !internalCanary) invalid();
   if (!PROJECT_SLUG.test(request.projectSlug || '') || request.projectSlug.length > 64) invalid();
   if (typeof request.question !== 'string') invalid();
   request.question = request.question.trim();
-  if (!request.question || request.question.length > 500) invalid();
+  if (!request.question || request.question.length > 800) invalid();
   if (!Number.isInteger(request.topK) || request.topK < 1 || request.topK > 3) invalid();
   if (request.hops !== 0) invalid();
   if (typeof request.timeoutSeconds !== 'number' || request.timeoutSeconds < 0.01 || request.timeoutSeconds > 15) invalid();
@@ -120,6 +125,43 @@ export function normalizeClaims(rawClaims, request, rawAiUsage) {
   return {claims, truncated, responseChars, aiUsage: normalizeAiUsage(rawAiUsage)};
 }
 
+function normalizeTypedRecovery(raw, normalized) {
+  if (raw?.status === undefined) return normalized;
+  const statuses = new Set([
+    'memory_applied', 'insufficient_evidence', 'memory_unavailable',
+    'memory_invalid_response', 'memory_budget_exceeded',
+  ]);
+  const levels = ['fast', 'deep', 'exhaustive', 'emergency'];
+  if (!statuses.has(raw.status)) invalid();
+  if (!Array.isArray(raw.levelsAttempted) || raw.levelsAttempted.length > 4 ||
+      raw.levelsAttempted.some((value, index) => value !== levels[index])) invalid();
+  if (raw.selectedLevel !== null && !levels.includes(raw.selectedLevel)) invalid();
+  for (const field of ['elapsedMilliseconds', 'examinedCount', 'returnedCount', 'estimatedTokens']) {
+    if (!Number.isSafeInteger(raw[field]) || raw[field] < 0) invalid();
+  }
+  if (raw.returnedCount !== normalized.claims.length || raw.estimatedTokens > 300) invalid();
+  if (typeof raw.provenanceComplete !== 'boolean') invalid();
+  if (raw.reasonCode !== null && (typeof raw.reasonCode !== 'string' || raw.reasonCode.length > 64)) invalid();
+  if (raw.status === 'memory_applied') {
+    if (!normalized.claims.length || !raw.selectedLevel || !raw.levelsAttempted.includes(raw.selectedLevel)) invalid();
+  } else if (normalized.claims.length || raw.selectedLevel !== null) invalid();
+  return {
+    status: raw.status,
+    selectedLevel: raw.selectedLevel,
+    levelsAttempted: [...raw.levelsAttempted],
+    claims: normalized.claims,
+    elapsedMilliseconds: raw.elapsedMilliseconds,
+    examinedCount: raw.examinedCount,
+    returnedCount: raw.returnedCount,
+    estimatedTokens: raw.estimatedTokens,
+    provenanceComplete: raw.provenanceComplete,
+    reasonCode: raw.reasonCode,
+    truncated: normalized.truncated,
+    responseChars: normalized.responseChars,
+    aiUsage: normalized.aiUsage,
+  };
+}
+
 function classifyTransportError(error) {
   const candidates = [error?.status, error?.statusCode, error?.code, error?.response?.status];
   const status = candidates.find(value => Number.isInteger(value));
@@ -163,8 +205,9 @@ export async function executeRecall(value, options = {}) {
       timeout,
     ]);
     if (response?.isError === true) invalid('invalid_response');
-    const claims = response?.structuredContent?.claims;
-    return normalizeClaims(claims, request, response?.structuredContent?.aiUsage);
+    const structured = response?.structuredContent;
+    const normalized = normalizeClaims(structured?.claims, request, structured?.aiUsage);
+    return normalizeTypedRecovery(structured, normalized);
   } catch (error) {
     if (error instanceof GatewayError) throw error;
     invalid(classifyTransportError(error));
@@ -192,7 +235,9 @@ async function readStdin() {
 
 export async function main() {
   const request = await readStdin();
-  const result = await executeRecall(request);
+  const result = await executeRecall(request, {
+    allowHttpLoopback: process.env.MYPEOPLE_MEMORY_ALLOW_HTTP === '1',
+  });
   process.stdout.write(`${JSON.stringify({ok: true, ...result})}\n`);
 }
 

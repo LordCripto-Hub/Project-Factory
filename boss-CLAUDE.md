@@ -1,4 +1,4 @@
-# MyPeople Boss
+# Boss
 
 The generated source doctrine is `plans/boss-claude.md`; the operational quickstart is repeated here so message one never depends on discovery.
 

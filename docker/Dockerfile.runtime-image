@@ -1,10 +1,23 @@
 ARG BASE_IMAGE=mypeople-node:integration-a54d9e3
 FROM ${BASE_IMAGE}
 
+ARG MYPEOPLE_SOURCE_SHA=unknown
+ARG MYPEOPLE_BUILD_ID=unknown
+ARG MYPEOPLE_IMAGE_REF=unknown
+
 USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/mp/.cache/ms-playwright
 COPY --chown=mp:mp . /tmp/mypeople-source
 RUN python3 /tmp/mypeople-source/docker/sync_runtime_source.py \
       /tmp/mypeople-source /home/mp/mypeople \
+    && python3 /tmp/mypeople-source/bin/runtime_identity.py \
+      --write /home/mp/mypeople/runtime-build.json \
+      --sha "$MYPEOPLE_SOURCE_SHA" --build "$MYPEOPLE_BUILD_ID" \
+      --image "$MYPEOPLE_IMAGE_REF" --state candidate \
+    && npm ci --prefix /home/mp/mypeople/verify \
+    && npm ci --prefix /home/mp/mypeople/memory-gateway \
+    && npx --prefix /home/mp/mypeople/verify \
+      playwright install --with-deps chromium webkit \
     && rm -rf /tmp/mypeople-source \
     && chown -R mp:mp /home/mp/mypeople \
     && chmod +x /home/mp/mypeople/bin/* \

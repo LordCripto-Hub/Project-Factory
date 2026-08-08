@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import http.client, http.cookies, http.server, json, os, secrets, subprocess, threading, time
+import http.client, http.cookies, http.server, json, os, secrets, threading, time
 import urllib.parse
 from mpcommon import *
+import core_agent_controls
+from runtime_identity import read_runtime_identity
 
 HOST=ENV.get("BIND_ADDR","0.0.0.0"); PORT=int(ENV.get("HUD_PORT","9900")); TODO_PORT=int(ENV.get("TODO_PORT","9933"))
 SECRET=ENV["QUEUE_SECRET"]; DEAD=float(ENV.get("QUEUE_DEAD_AFTER","20")); START=time.time()
 CLIENTS={}; AGENTS={}; TASKS={}; BROWSER=set(); LOCK=threading.RLock()
 QUEUE_PATH=os.path.realpath(os.environ.get("QUEUE_STATE_PATH") or os.path.join(ROOT,"run","control-queue.json"))
-TASK_TYPES={"send","peek","kill","spawn","answer","revive"}
+TASK_TYPES={"send","peek","kill","spawn","answer","revive","routing_escalate"}
 TASK_STATUSES={"queued","delivered","done","failed","uncertain"}
 TERMINAL_TASK_STATUSES={"done","failed","uncertain"}
 TERMINAL_TASK_LIMIT=500
@@ -124,7 +126,11 @@ def joined_agents():
         z["attach_base"]=base; z["attach_url"]=(f"{base}/?arg=-t&arg={urllib.parse.quote(z['tmux_target'],safe=':-')}" if base else "")
         z["spawn_cmd"]=r.get("spawn_cmd",z.get("spawn_cmd","")); z["revive_cmd"]="mp revive "+a["agent_id"]
         st=load_json(status_path(a["agent_id"]),{})
-        if st:z["summary"]=st.get("summary") or z.get("summary","");z["status"]=st.get("status","idle")
+        if st:
+            z["summary"]=st.get("summary") or z.get("summary","");z["status"]=st.get("status","idle")
+            for key in ("timestamp","activity_updated_at","activity_event"):
+                if key in st:z[key]=st[key]
+        if "ts" in a:z["heartbeat_at"]=a["ts"]
         else:z["status"]="idle"
         out.append(z)
     return sorted(out,key=lambda x:(not x.get("is_master",False),x["agent_id"]))
@@ -172,10 +178,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def route(self,head=False):
         path=urllib.parse.urlparse(self.path).path
         if path=="/favicon.ico":self.send_bytes(b"",204,"image/x-icon",head=head);return
-        if path=="/health":return self.json({"status":"ok","uptime":int(now()-START),"build":int(os.path.getmtime(os.path.join(ROOT,"bin","dashboard.html"))) if os.path.exists(os.path.join(ROOT,"bin","dashboard.html")) else 0},head=head)
+        if path=="/health":
+            identity=read_runtime_identity()
+            return self.json({"status":"ok","uptime":int(now()-START),"build":identity["build"],"runtimeIdentity":identity},head=head)
         if path in ("/dashboard","/dashboard/"):return self.page("dashboard.html",head)
         if path=="/" or path.startswith(("/todos","/wall","/terminal-graph","/terminal","/assets/","/voice/","/todo/","/nightwatch/")):return self.proxy(head)
         if not self.authed():return self.json({"ok":False,"error":"unauthorized"},401,head=head)
+        if path=="/control-capabilities":return self.json(core_agent_controls.capabilities(),head=head)
         if path=="/clients":
             with LOCK:return self.json(list(CLIENTS.values()),head=head)
         if path=="/agents":return self.json(joined_agents(),head=head)
@@ -220,7 +229,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json({"ok":True})
         if path=="/task/submit":
             typ=b.get("type") or b.get("action")
-            if typ not in ("send","peek","kill","spawn","answer","revive"):return self.json({"ok":False,"error":"invalid_type"},400)
+            if typ not in TASK_TYPES:return self.json({"ok":False,"error":"invalid_type"},400)
             tid=secrets.token_hex(12);t={"task_id":tid,"type":typ,"target_agent":b.get("target_agent",""),"payload":b.get("payload",{}),"status":"queued","created_at":now()}
             with LOCK:TASKS[tid]=t;persist_tasks()
             return self.json({"task_id":tid})
@@ -232,12 +241,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path=="/task/retry":
             try:return self.json({"ok":True,"task":retry_task(str(b.get("task_id") or ""))})
             except ValueError as error:return self.json({"ok":False,"error":str(error)},400)
-        if path=="/revive":
-            aid=b.get("agent_id","")
-            try:
-                p=subprocess.run([os.path.join(ROOT,"bin","mp"),"revive",aid],capture_output=True,text=True,timeout=30)
-                return self.json({"ok":p.returncode==0,"result":p.stdout or p.stderr},200 if p.returncode==0 else 400)
-            except Exception as e:return self.json({"ok":False,"error":str(e)},500)
+        if path in ("/kill","/revive","/switch"):
+            try:return self.json(core_agent_controls.execute(path[1:],b,os.path.join(ROOT,"run","roster.json")))
+            except core_agent_controls.ControlError as error:
+                return self.json({"ok":False,"error":error.code},error.status)
+            except Exception:
+                return self.json({"ok":False,"error":"control_unavailable"},500)
         self.json({"error":"not_found"},404)
 
 if __name__=="__main__":

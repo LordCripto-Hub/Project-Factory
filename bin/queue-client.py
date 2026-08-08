@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import json, os, subprocess, time, traceback
+import json, os, re, subprocess, time, traceback
 from mpcommon import *
+from provider_handoff import sanitize_terminal_tail
 
 HOST=ENV.get("HOST_ID",os.uname().nodename.split('.')[0]); INTERVAL=float(ENV.get("HEARTBEAT_INTERVAL","3"))
 TAILSCALE_ENABLED = ENV.get("MYPEOPLE_TAILSCALE_ENABLED", "0") == "1"
@@ -69,6 +70,23 @@ def heartbeat():
 
 def execute(task):
     typ=task.get("type") or task.get("action");aid=task.get("target_agent","");p=task.get("payload") or {}
+    if typ=="routing_escalate":
+        request_id=p.get("request_id") if isinstance(p,dict) else None
+        try:parse_agent_id(aid)
+        except (TypeError,ValueError):return False,"invalid escalation request"
+        if (
+            not isinstance(p,dict)
+            or set(p)!={"request_id"}
+            or not isinstance(request_id,str)
+            or not re.fullmatch(r"[0-9a-f]{32}",request_id)
+        ):return False,"invalid escalation request"
+        argv=[os.path.join(ROOT,"bin","mp"),"escalate",aid,"--request-id",request_id]
+        try:
+            x=subprocess.run(argv,capture_output=True,text=True,timeout=120)
+        except subprocess.TimeoutExpired:
+            return False,"routing escalation timed out"
+        output=sanitize_terminal_tail((x.stdout or "")+(x.stderr or ""))[-4000:]
+        return x.returncode==0,output
     if typ=="send":
         write_status(aid,"working",activity_event="queue_send")
         return tmux_send_message(tmux_target(aid),p.get("message")),"delivered"
@@ -88,9 +106,19 @@ def execute(task):
         if boss is not None:argv += ["--boss",boss]
         if p.get("is_master"):argv += ["--master"]
         model=p.get("model")
-        if model is None and not p.get("is_master"):model=DEFAULT_ENG_MODEL
+        if (
+            model is None
+            and not p.get("is_master")
+            and not (
+                p.get("backend") == "codex"
+                and p.get("owner_task_id")
+            )
+        ):
+            model=DEFAULT_ENG_MODEL
         if model:argv += ["--model",model]
         if p.get("owner_task_id"):argv += ["--owner-task",p["owner_task_id"]]
+        if p.get("recording") in {"on","off"}:argv += ["--recording",p["recording"]]
+        if p.get("without_memory"):argv += ["--without-memory"]
         elif p.get("temporary"):argv += ["--temporary"]
         x=subprocess.run(argv,capture_output=True,text=True,timeout=60);return x.returncode==0,x.stdout+x.stderr
     return False,"unknown type"

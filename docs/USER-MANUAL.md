@@ -1,6 +1,6 @@
 # MyPeople User Manual
 
-Last reviewed: July 14, 2026.
+Last reviewed: July 26, 2026.
 
 ## Active configuration
 
@@ -63,6 +63,58 @@ docker exec -it mypeople tmux attach -t mc-nightwatch
 
 Detach without stopping the session with `Ctrl+B`, then `D`.
 
+### Boss and Nightwatch controls in the HUD
+
+The Combat Status cards expose a closed `COMMAND` strip only for Boss and
+Nightwatch. The model selector is supplied by the server and currently offers
+`gpt-5.6-sol` and `gpt-5.6-luna`.
+
+- `Apply model` switches a running core agent and preserves exact-session
+  recovery when the existing provider profile supports it.
+- `Kill` requires a second confirmation click within five seconds.
+- A stopped core agent can be revived with its saved model or relaunched with
+  the other allowed model.
+- The HUD waits for a fresh roster observation before reporting success.
+  Server error codes remain visible on the card.
+
+These controls do not apply to engineers. Boss continues to create, switch,
+kill, and revive delegated workers through its terminal and the existing
+`mp` commands. Provider profiles and account bindings are intentionally not
+changed by this HUD selector.
+
+## Provider health
+
+Read the latest non-secret provider-health receipts without contacting a paid
+model:
+
+```powershell
+docker exec mypeople /home/mp/mypeople/bin/mp providers-status
+```
+
+Refresh from local process and captured-session evidence only:
+
+```powershell
+docker exec mypeople /home/mp/mypeople/bin/mp providers-status --refresh
+```
+
+Each agent is classified as `authenticated`, `expired`, `quota_exhausted`,
+`unreachable`, `unknown`, or `process_dead`. Old observations are marked
+`stale`. A network failure is never reported as an expired credential without
+an explicit authentication rejection.
+
+## Evidence portability
+
+Evidence links accept portable `http` and `https` URLs. Local `file://`, drive,
+UNC, and absolute filesystem paths are rejected because other browsers and the
+container cannot open them. Upload local artifacts instead:
+
+```bash
+mp complete "Implemented and verified" --proof-file /path/to/result.png
+```
+
+Uploads retain SHA-256, MIME type, byte count, author, and timestamp. A broken
+image or video preview shows a visible error while retaining its metadata.
+
 ## Durable control queue
 
 Control commands are persisted in `run/control-queue.json` inside the durable
@@ -102,7 +154,11 @@ Nightwatch:
 docker exec mypeople /home/mp/mypeople/bin/mp switch nightwatch:Nightwatch --backend codex --model gpt-5.6-luna
 ```
 
-`mp switch` saves the requested configuration before closing and reviving the tmux window. Future supervisor revival preserves the selected backend and model.
+`mp switch` saves the requested model before closing the tmux window. When
+backend and provider profile are unchanged, it performs an exact session resume
+with the new model and verifies that the provider session ID did not change.
+Direct backend changes are rejected with `fresh_handoff_required`; use the
+provider-switch transaction described below.
 
 ## Switching provider accounts
 
@@ -138,7 +194,16 @@ Inspect non-secret status without making a paid provider request:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Get-MyPeopleProviderStatus.ps1
 ```
 
-A switch is transactional: it records bounded handoffs, stops only the selected active roles, installs and validates the target profile, writes bindings atomically, revives Boss before Nightwatch and workers, verifies the roster, and commits. A failed phase restores the previous binding and revives the prior roster. Startup rehydrates the configured global profile before services launch.
+A switch is transactional: it records one private, bounded handoff per selected
+agent, stops only the selected active roles, installs and validates the target
+profile, writes bindings atomically, starts Boss before Nightwatch and workers,
+verifies the roster, and commits. The forward path requires an explicit fresh
+handoff and honestly records a new provider session. It never describes a
+backend or provider-profile change as an exact resume. A failed phase restores
+the previous binding and roster, then uses exact session resume against the old
+profile storage. The transaction lock, `stopped` phase, private handoff path,
+agent identity, cwd, task, and role receipts must all match. Startup rehydrates
+the configured global profile before services launch.
 
 Profile switching currently uses PowerShell. HUD controls for global and per-agent account selection are a future interface layer over this same transaction contract.
 
@@ -147,13 +212,111 @@ Profile switching currently uses PowerShell. HUD controls for global and per-age
 Boss normally creates workers. For an advanced owner-task test:
 
 ```powershell
-docker exec mypeople /home/mp/mypeople/bin/mp spawn main:Worker-1 --backend codex --model gpt-5.6-luna --boss main:Boss --owner-task CARD_ID
+docker exec mypeople /home/mp/mypeople/bin/mp spawn main:Worker-1 --backend codex --boss main:Boss --owner-task CARD_ID
 ```
 
 Omit `--cwd` for the normal path. The owner worker uses the TaskSpec-owned
 working directory from its ProjectProfile. An explicit `--cwd` is accepted only
 when it resolves to that exact directory; a mismatch fails before tmux
-creation. Keep the explicit Codex backend and model while Claude is disabled.
+creation. Keep the explicit Codex backend while Claude is disabled.
+
+### Automatic owner-task model routing
+
+When --model is omitted for an owner task, Boss classifies the compiled
+TaskSpec locally and chooses the least expensive policy-compliant tier:
+
+- economy: gpt-5.6-luna for simple, documentation, translation, and
+  ambiguous work;
+- standard: gpt-5.6-terra for implementation, bug fixes, APIs, databases,
+  Docker, and integrations;
+- strong: gpt-5.6-sol for explicit security, authentication, production,
+  payment, data-loss, rollback, or architecture-critical signals.
+
+The classifier is deterministic and makes no provider call, so the routing
+decision itself consumes zero model tokens and records aiUsage: none.
+Optional TaskSpec routing hints may constrain class, risk, and maximum tier but
+cannot downgrade stronger text or structural signals and cannot bypass project
+policy. Required evidence with multiple verification commands can raise risk by
+at most one tier. If the exact justified tier is unavailable, Boss selects the
+least expensive allowed tier above it within the effective ceiling; it never
+silently downgrades. An explicit --model is treated as a manual
+request and is rejected rather than silently substituted when its model or tier
+is not allowed.
+
+The private policy is stored at
+/home/mp/mypeople/run/routing-policy.json; a custom location may be supplied
+with MYPEOPLE_ROUTING_POLICY_PATH. Runtime startup creates the default policy
+only when the file is absent and never overwrites operator configuration.
+Every ProjectProfile slug must have an explicit matching project entry in that
+private policy. MyPeople never auto-authorizes a newly added project.
+Canonical decisions live under run/routing-decisions, are mode 0600, and
+are bound to the roster by SHA-256. Priorities receives one idempotent comment
+showing class, risk, tier, model, selection, and reason codes.
+
+Exact revive validates and reuses the original routing receipt and model; it
+does not classify again or spend an escalation.
+
+### Lossless automatic model escalation
+
+Only three explicit worker outcomes may advance one tier:
+`verification_failed`, `implementation_blocked`, and
+`model_capability_insufficient`. Inside its managed owner terminal, a worker
+reports its own assigned task:
+
+```bash
+mp fail --failure verification_failed \
+  --summary "The focused verifier still fails." \
+  --proof "python3 verify/example.py: 1 failed"
+```
+
+`mp fail` validates the environment-bound worker, Boss, open task, assignee,
+session availability, and routing receipt. It writes a private request, adds
+one bounded Priorities marker, and queues only an opaque request ID. The queue
+never receives the summary, proof, provider output, policy, or session ID.
+
+The owning Boss or a local operator shell can request the same transaction:
+
+```bash
+mp escalate node-1/main:Worker-1 \
+  --failure model_capability_insufficient \
+  --summary "The bounded implementation path exceeds this model." \
+  --proof "Boss review confirmed the capability blocker."
+```
+
+`mp escalate` rejects unrelated managed agents. Before any stop, it validates
+the open assigned task, current receipt, exact provider session, profile,
+working directory, TaskSpec, role contract, policy, budget, and next model. It
+then takes the provider-switch lock and repeats those gates.
+
+On success MyPeople keeps the same agent, assignee, task, Boss, provider
+profile, working directory, TaskSpec, role receipt, and same Codex session.
+Only the selected worker's tmux window and recorder stop. The exact session
+resumes on one higher policy-compliant model; unrelated workers and control
+services remain live. After identity verification, MyPeople sends one compact continuation message:
+
+```text
+Continue the same owner task from the preserved session. Re-run the failed verification and report with mp complete or one new structured failure.
+```
+
+The routing calculation consumes zero model tokens and records
+`routingAiUsage=none`. The continuation is one ordinary provider turn on the
+higher model, so it has that model's normal token cost. Provider context usage
+remains `not_measured` unless provider telemetry is available.
+
+Quota exhaustion, authentication, provider startup, session capture,
+infrastructure, Docker, tmux, queue, filesystem, network, missing profile or
+context, policy denial, timeout, silence, and crash outcomes never escalate the
+model. They remain typed operational failures.
+
+If forward resume, identity verification, or continuation delivery fails after
+the stop, MyPeople kills only the partial candidate and restores the prior
+model, receipt, and exact session. No continuation is sent. If rollback also
+fails, the selected worker and original card become `blocked` with
+`recovery_required`; private roster, routing, handoff, and transaction
+evidence is retained. There is no fresh-session fallback.
+
+For the operator procedure, expected live signals, and safe failure handling,
+see [Adaptive Routing Live Canary](ADAPTIVE-ROUTING-LIVE-CANARY.md).
 
 ## One-click Windows startup
 
@@ -163,7 +326,7 @@ Install the desktop shortcut once:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Install-MyPeopleShortcut.ps1
 ```
 
-The installer copies the required launcher files to `%LOCALAPPDATA%\MyPeople\launcher`. The shortcut starts Docker Desktop when required, runs the pinned Compose deployment when it exists, rehydrates the selected provider profile, checks Priorities, queue/HUD, terminal readiness, and that Boss and Nightwatch are alive, then opens Priorities. It never deletes a volume or changes the pinned image.
+The installer copies the required launcher files to `%LOCALAPPDATA%\MyPeople\launcher`. The shortcut starts Docker Desktop when required, runs the pinned Compose deployment when it exists, rehydrates the selected provider profile, checks Priorities, queue/HUD, terminal readiness, and that Boss and Nightwatch are alive, then opens Priorities. It never deletes a volume or changes the pinned image. When automatic local memory is selected, the main runtime supervisor also reconciles its loopback-only Gate B adapter inside the same `mypeople` container. Normal startup does not require a second memory container.
 
 ### Ready degraded
 
@@ -247,7 +410,9 @@ Compose file alone.
 
 Never run `docker compose down -v` or delete MyPeople volumes as a startup or recovery step. Preserved containers, images, backups, and restore-test volumes are cleaned only in a separate human-approved operation.
 
-Cloudflare memory remains disabled until the Docker migration, restore drill, desktop-launcher recovery, and rollback rehearsal all pass.
+Cloudflare memory remains disabled. After the Docker migration, restore drill,
+desktop-launcher recovery, and rollback rehearsal pass, an operator may run the
+separate local one-card canary documented below; normal startup never enables it.
 
 ### Safe image upgrades after migration
 
@@ -301,7 +466,70 @@ activate a provider profile, open OAuth, validate quota, run `mypeople up`, or
 require Boss and Nightwatch to be alive. Logged-out, exhausted, and deliberately
 stopped providers remain unchanged for a later provider-management cycle.
 
-The transient queue task registry and connected-client state remain process memory. `mp revive` still opens a new Codex conversation until exact session resume is implemented; explicit TaskSpecs and handoffs remain authoritative.
+### Recover when Docker images were deleted
+
+Backups preserve durable state but do not contain Docker image layers. If the
+container and its local images were deleted while all eight canonical volumes
+survived, build a repository-owned base and application image from a clean
+checkout:
+
+```powershell
+$sha = (git rev-parse --short=7 HEAD).Trim()
+$base = "mypeople-node:recovery-base-$sha"
+$candidate = "mypeople-node:recovery-candidate-$sha"
+docker build -f docker\Dockerfile.recovery-base -t $base .
+docker build -f docker\Dockerfile.runtime-image --build-arg BASE_IMAGE=$base -t $candidate .
+powershell -NoProfile -ExecutionPolicy Bypass -File .\verify\Invoke-IsolatedVerify.ps1 -Image $candidate -TimeoutSeconds 1800 -UsePackagedSource
+```
+
+After the verifier passes, create a protected metadata-only receipt under
+`%LOCALAPPDATA%\MyPeople\state`. It must contain `status: pass`, the exact full
+source commit, the exact candidate image ID, and `verification:
+isolated-packaged-source`. Do not put authentication, provider output, prompts,
+or archive contents in this receipt.
+
+Run the recovery preflight without `-Execute`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Recover-MyPeopleDockerDeployment.ps1 `
+  -CandidateImage $candidate `
+  -VerificationReceipt <protected-receipt.json>
+```
+
+Review the reported transaction. It must show `stage: planned`, exactly eight
+volume names, the expected source commit and image ID, and comparison disabled.
+Then execute the same transaction explicitly:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Recover-MyPeopleDockerDeployment.ps1 `
+  -CandidateImage $candidate `
+  -VerificationReceipt <protected-receipt.json> `
+  -Execute
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeople.ps1 -NoBrowser -NonInteractive
+```
+
+The transaction refuses to run if `mypeople` already exists, any canonical
+volume is missing, the receipt does not match the image, the repository is
+dirty, or free space is below the configured threshold. It reads the volumes
+through a temporary read-only helper, writes a sanitized portable archive,
+verifies its SHA-256, pins the exact candidate image ID, and recreates Compose
+over the existing volumes. It checks local-only ports, restart count, memory
+disabled state, mounts, and durable hashes.
+
+On deployment failure, the new container is removed and the old deployment
+files are restored. Since the old image was already deleted, the transaction
+records `oldServiceRestored: false`; it never reports a fictitious rollback.
+Never run `docker compose down -v`, `docker volume rm`, or a Docker volume prune
+as part of this workflow.
+
+The Gate B `Preflight` command is a live readiness gate, not a passive audit.
+It requires `MYPEOPLE_MEMORY_COMPARISON_ENABLED=1` and a healthy internal
+sidecar. Recovery intentionally leaves the flag at `0`; enabling the sidecar or
+running paired arms requires a separate approval.
+
+The connected-client registry remains process memory. Provider conversations
+are durable provider state, while Priorities, ProjectProfile, TaskSpec, Git
+workspace, evidence, and bounded handoffs remain authoritative project state.
 
 ## Persistent project workspace and publication
 
@@ -389,8 +617,32 @@ the persisted roster configuration. Revive is eligible only for a dead or
 retired roster entry. It refuses an already-alive agent or an existing live
 window, and it refuses an owner whose task is done, cancelled, deleted, has a
 fresh-owner replacement pending, or has been reassigned. A valid owner revive
-reuses the saved backend, model, Boss, working directory, and owner-task
-TaskSpec; it does not create a second active owner.
+requires the saved provider session ID and transcript plus matching backend,
+provider profile, real working directory, TaskSpec SHA-256, and role contract
+SHA-256. It performs exact session resume with the saved Boss, model, working
+directory, and owner task; it does not create a second active owner.
+
+Operator commands:
+
+```powershell
+docker exec mypeople /home/mp/mypeople/bin/mp kill main:Boss --reason operator-request
+docker exec mypeople /home/mp/mypeople/bin/mp revive main:Boss
+docker exec mypeople /home/mp/mypeople/bin/mp reconcile
+docker exec mypeople /home/mp/mypeople/bin/mp switch main:Boss --backend codex --model gpt-5.6-luna
+```
+
+`mp kill` persists the deliberate stop before process mutation. Deliberately
+stopped agents remain stopped until explicit revive. For accidental window
+loss, the supervisor calls `mp reconcile` every 15 seconds. Recovery uses a
+30-second cooldown and stops after three recovery attempts with a typed
+`blocked` state. Only a stale initial process that never captured any session
+may receive three labeled bootstrap retries. There is no silent fresh fallback
+after an exact-resume failure; inspect the typed error and provider/profile
+state instead.
+
+A same-backend, same-profile model switch uses exact session resume. A backend
+or profile change is a new conversation and must use the provider transaction's
+explicit fresh handoff. `mp reconcile` never calls that fresh path.
 
 The publisher records a short sanitized Git failure detail in the approval
 ledger. URLs and secret-shaped values are redacted; credential contents are
@@ -398,9 +650,12 @@ never recorded.
 
 ## Known limitations
 
-- The transient queue is lost when its process restarts.
-- Codex conversations are not resumed automatically.
-- ProjectProfile and TaskSpec are available, but external memory remains disabled until the Phase B security and deployment gate.
+- The durable queue quarantines uncertain post-delivery outcomes; an operator
+  must inspect them and use `mp queue-retry` explicitly.
+- Legacy roster records without a captured provider session ID cannot use exact
+  resume; replace them only through an explicit operator-controlled handoff.
+- ProjectProfile and TaskSpec are available. Hosted external memory remains
+  disabled; only the explicit local, public-dataset canary is supported.
 - Standard ports are bound to `127.0.0.1`; port 7681 remains the explicitly writable local terminal.
 - The complete verifier creates temporary cards only inside its disposable, portless container and never targets the live board.
 - The board Git exporter may quarantine small snapshots during heavy test churn; review them before treating the exporter as backup.
@@ -408,6 +663,9 @@ never recorded.
   `mypeople-todos` volume. An explicit `EXPORT_REPO` may override it for an
   operator-controlled external target.
 - Preserved migration containers, images, backups, and restore-test volumes require an explicit cleanup review; startup never removes them.
+- Adaptive routing and lossless cross-model replacement currently support
+  Codex owner workers only. Hybrid providers, per-agent account controls, and
+  HUD model buttons remain separate gated work.
 
 ## Technical verification
 
@@ -418,6 +676,13 @@ docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeop
 docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_codex_boss_doctrine.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_boss_supervisor_backend.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_codex_message_submit.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_task_routing.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_adaptive_owner_routing.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_provider_shared_primitives.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_routing_escalation.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_routing_escalation_cli.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_queue_routing_escalation.py
+docker exec -e PYTHONPATH=/home/mp/mypeople/bin mypeople python3 /home/mp/mypeople/verify/test_lossless_routing_escalation.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_project_workspace.py
 docker exec mypeople python3 /home/mp/mypeople/verify/test_project_publisher.py
 ```
@@ -472,7 +737,7 @@ mp complete "Fixed the terminal popup" --proof "python verify/test_priorities_te
 
 MyPeople is the execution plane, not another memory system. Each task receives one compiled `TaskSpec`. External durable knowledge and targeted recall may contribute to that packet, but they are not queried automatically alongside complete Codex history. See [Minimal Architecture](MINIMAL-ARCHITECTURE.md).
 
-## Synthetic memory activation and security boundary
+## Synthetic hosted-memory fixture and security boundary
 
 The Cloudflare MCP pilot is available only as a one-shot synthetic E2E. It
 uses the fixed endpoint
@@ -480,7 +745,7 @@ uses the fixed endpoint
 `recall`, returns at most three provenance-complete claims, fixes graph hops
 at zero, and never writes project memory.
 
-Persistent memory activation is blocked. Boss, engineers, and services
+Hosted persistent-memory activation remains blocked. Boss, engineers, and services
 currently share the same Linux user inside the main container, so a token
 placed there would not be isolated from workers. The permanent design requires
 a separate credential broker identity before real project data or a live
@@ -523,13 +788,26 @@ Windows owns microphone permission, language selection, transcription, and
 the dictation UI. This works in Brave and other browsers because MyPeople only
 receives the text Windows types into the focused control.
 
+## Codex Apps and memory isolation
+
+MyPeople starts Codex agents with the built-in Codex Apps integration disabled.
+This prevents an unrelated or expired Apps authentication from producing
+`codex_apps` MCP startup warnings inside agent terminals.
+
+This switch does not remove or disable MyPeople's memory code. Automatic local
+memory runs as a bounded, loopback-only child of the main `mypeople` runtime.
+The separate Docker sidecar is retained only for the explicit experimental
+manual-canary workflow below and remains off during normal operation. The
+hosted Cloudflare memory pilot remains disabled and is never activated by a
+normal agent launch.
+
 ## Recommended next stage
 
-1. Exact Codex/Claude session resume with transcript validation and no silent fresh-session fallback.
-2. Deliberate Boss stop, reconcile, revive, model, and provider-profile controls in Priorities.
-3. Bind local services safely and protect the writable terminal.
+1. Add deliberate Boss stop, reconcile, revive, model, and provider-profile controls to Priorities.
+2. Add hybrid provider and optional per-agent account controls behind the same transaction contract.
+3. Add provider token and cost telemetry without changing zero-token routing.
 4. Evaluate a JSON-to-SQLite board migration with a tested JSON rollback path.
-5. Activate read-only Cloudflare recall for one real ProjectProfile through a separate security-gated cycle.
+5. Measure repeated local canaries before considering any separate, security-gated hosted-memory experiment.
 
 ## Bounded external memory pilot
 
@@ -557,4 +835,133 @@ tail -n 20 run/taskspec-events.jsonl | jq .
 
 The event log contains metadata only: task/project identifiers, profile revision, memory status, requested, returned, and embedded claim counts, timing, response characters, and `aiUsage` as measured or `not_measured`. It does not contain questions, claims, tokens, or server URLs.
 
-Phase A does not deploy Cloudflare, write external memory, enable a live profile, import real data, or expose MCP tools directly to Boss/engineers. Those actions require the separate Phase B approval and security gate.
+Phase A does not deploy Cloudflare, write external memory, import private data,
+or expose MCP tools directly to Boss/engineers. Hosted activation still requires
+a separate approval and security gate.
+
+## Active local Memory Gate B canary
+
+The active canary is a reversible local experiment for one opted-in Project
+Factory card. It reads the public dataset locked to source SHA
+`80dce6f866329b79061bb1ed6b0594f9fdf2dd45`, runs in a read-only sidecar on an
+internal Docker network, publishes no port, and provides no write tool. It does
+not contact Cloudflare.
+
+From a clean reviewed checkout, enable it with the exact candidate image that
+passed isolated verification:
+
+```powershell
+$source = (Resolve-Path .\experiments\memory-gate-b).Path
+$dataset = (Resolve-Path .\experiments\memory-gate-b\datasets\project-factory-history-80dce6f86632).Path
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Enable -MemorySource $source -Dataset $dataset -Image <reviewed-local-image>
+```
+
+Inspect the state without changing it:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Status
+docker exec mypeople /home/mp/mypeople/bin/mp memory-canary status
+```
+
+Open Priorities and edit exactly one card. Set **Project** to
+`project-factory`, add a **Context question**, select **Use Memory Gate B canary
+for this task**, and save. Its compact Memory Gate B strip then provides:
+
+- **Run** to dispatch the existing card through Boss and normal worker routing;
+- **Assess** to record `useful`, `neutral`, `harmful`, or `not demonstrated`
+  plus a short rationale;
+- **Retry without memory** to recompile the same card without claims;
+- **Disable canary** to close the global runtime gate immediately.
+
+The strip and receipt distinguish estimated TaskSpec token delta from measured
+provider tokens. If the provider cannot be attributed to the same session, the
+value is `not measured`; MyPeople never invents it.
+
+For complete cleanup, including the sidecar, internal network attachment,
+ephemeral token file, and secret volume, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
+```
+
+This does not restart MyPeople. The shared `mp` Linux identity is not a
+private-memory boundary, so this canary is restricted to the public dataset.
+One successful card is operational rollback evidence, not statistical proof
+that memory improves quality, coordination, duration, or total token cost.
+
+## Automatic bounded project memory
+
+Automatic mode is an optional local extension of the same Gate B hybrid store.
+It is limited to Project Factory owner tasks and is disabled on a fresh install. It
+does not use Cloudflare, `memory-dump.py`, a board corpus, a second index, an
+OpenAI API key, or a provider model for retrieval.
+
+For each eligible TaskSpec, MyPeople derives one deterministic query from the
+task title, done condition, and optional context question. It tries fast,
+deep, bounded exhaustive, and SHA-locked local emergency retrieval in order,
+stopping after the first sufficient result. The complete recovery transaction
+has a two-second deadline and may inject at most three provenance-bearing
+claims and 300 estimated tokens.
+
+Enable automatic mode with one command:
+
+```powershell
+docker exec mypeople mp memory mode automatic
+```
+
+The foreground runtime supervisor notices the persisted mode, starts the
+read-only adapter on `127.0.0.1` inside the existing container, generates an
+ephemeral local capability, and reconciles the Project Factory profile. The
+Windows one-click launcher starts this same supervisor, so subsequent machine
+restarts need no separate memory command or container. The experimental
+`memory-gate-b-live-canary` Compose project is not part of this path.
+
+Inspect state:
+
+```powershell
+docker exec mypeople mp memory mode status
+```
+
+Stop all automatic recall immediately for the next TaskSpec while leaving the
+rest of MyPeople running:
+
+```powershell
+docker exec mypeople mp memory mode off
+```
+
+Automatic mode stops its local child and removes its readiness marker when set
+to `off`; no Docker sidecar or network cleanup is required. Use the separate
+canary `Disable` command only after an explicit manual-canary experiment:
+
+```powershell
+.\windows\Start-MyPeopleMemoryCanary.ps1 -Action Disable
+```
+
+Memory failures fail open for task execution: the TaskSpec contains no claims
+and records `insufficient_evidence`, `memory_unavailable`,
+`memory_invalid_response`, or `memory_budget_exceeded`. TaskSpec write errors
+and other non-memory contract failures continue to fail closed.
+
+The HUD shows **Memory mode**, **Recall level**, **Latency**, and **Memory
+tokens** in the existing Scorpion theme. Priorities shows a compact, read-only
+status strip on Project Factory cards. These surfaces receive only bounded
+metadata; queries, claim text, credentials, and provider transcripts are never
+projected. Provider token usage remains `not measured` unless the active
+provider exposes counters attributable to the same session.
+## Boss SSH publication workflow
+
+The publication path is intentionally asymmetric. Engineers work in isolated project workspaces and receive no SSH key, SSH agent socket, GitHub token, Git credential helper, or GitHub CLI session. They can edit, test, and commit locally, then return the exact head SHA and evidence to Boss.
+
+Boss validates the TaskSpec, project profile, clean worktree, branch, repository, SHA, and verification evidence. Boss then creates a CEO approval request in Priorities. The approval card shows the repository, task branch, abbreviated SHA, target `main`, merge method, verification state, and expiry. One approval authorizes only the exact transaction: push the approved branch, create or reconcile its PR, wait for required checks, and merge when green.
+
+The host-only broker is invoked by the Windows bridge:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\windows\Invoke-MyPeopleSshPublication.ps1 -ApprovalId <approval-id>
+```
+
+The broker extracts a temporary Git bundle from the Docker workspace, pushes the approved SHA through the host's verified `git@github.com` SSH identity, and deletes the bundle. It then uses the host GitHub CLI session only to create/reconcile the matching PR, inspect checks, and merge with `--match-head-commit`. The private key and SSH agent never enter Docker. No command accepts a free-form remote, key path, token, shell expression, force flag, or administrator bypass.
+
+Publication stops safely when approval expires, the branch head changes, the repository/base does not match, SSH or GitHub CLI is unavailable, a check fails, the PR is not mergeable, or the merge wait times out. A pushed branch or existing matching PR can be reconciled idempotently; a changed SHA always requires a new CEO approval. Priorities records only sanitized state, URLs, SHAs, check summaries, and merge results.
+
+The HUD reports only bounded broker health: `available`, `ssh_unavailable`, `github_cli_unavailable`, `authentication_failed`, `rate_limited`, or `unknown`. It never displays account details, key paths, fingerprints, tokens, or raw GitHub responses.

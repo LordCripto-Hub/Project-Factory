@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
 import test from 'node:test';
+import {fileURLToPath} from 'node:url';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -30,6 +32,27 @@ const claim = {
   status: 'canonical',
 };
 
+function runGatewayCli(request, environment) {
+  const gatewayPath = fileURLToPath(new URL('../memory-gateway.mjs', import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [gatewayPath], {
+      env: {...process.env, ...environment},
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', chunk => stdout.push(chunk));
+    child.stderr.on('data', chunk => stderr.push(chunk));
+    child.on('error', reject);
+    child.on('close', code => resolve({
+      code,
+      stdout: Buffer.concat(stdout).toString('utf8'),
+      stderr: Buffer.concat(stderr).toString('utf8'),
+    }));
+    child.stdin.end(JSON.stringify(request));
+  });
+}
+
 test('accepts only the bounded recall contract', () => {
   assert.equal(validateInput(input).projectSlug, 'mypeople');
   for (const bad of [
@@ -40,9 +63,31 @@ test('accepts only the bounded recall contract', () => {
     {...input, serverUrl: 'https://user:secret' + '@' + 'memory.example/mcp'},
     {...input, serverUrl: 'https://memory.example/mcp?token=secret'},
     {...input, serverUrl: 'https://memory.example/mcp#secret'},
-    {...input, question: 'x'.repeat(501)},
+    {...input, question: 'x'.repeat(801)},
     {...input, maxChars: 20100},
   ]) assert.throws(() => validateInput(bad));
+});
+
+test('accepts only the exact explicitly activated internal canary URL', () => {
+  const previous = process.env.MYPEOPLE_MEMORY_CANARY_URL;
+  process.env.MYPEOPLE_MEMORY_CANARY_URL = 'http://memory-gate-b:18443/mcp';
+  try {
+    const canary = {
+      ...input,
+      serverUrl: process.env.MYPEOPLE_MEMORY_CANARY_URL,
+      projectSlug: 'project-factory',
+    };
+    assert.equal(validateInput(canary).serverUrl, canary.serverUrl);
+    for (const bad of [
+      {...canary, projectSlug: 'other'},
+      {...canary, serverUrl: 'http://memory-gate-b:18444/mcp'},
+      {...canary, serverUrl: 'http://127.0.0.1:18443/mcp'},
+      {...canary, serverUrl: canary.serverUrl + '?x=1'},
+    ]) assert.throws(() => validateInput(bad));
+  } finally {
+    if (previous === undefined) delete process.env.MYPEOPLE_MEMORY_CANARY_URL;
+    else process.env.MYPEOPLE_MEMORY_CANARY_URL = previous;
+  }
 });
 
 test('rejects missing provenance and cross-project claims', () => {
@@ -73,6 +118,36 @@ test('normalizes optional metadata, usage, and rejects error tool results', asyn
     executeRecall(input, {token: 'x', clientFactory: () => fake}),
     /invalid_response/
   );
+});
+
+test('preserves only validated typed automatic-recovery metadata', async () => {
+  const typed = {
+    status: 'memory_applied',
+    selectedLevel: 'deep',
+    levelsAttempted: ['fast', 'deep'],
+    claims: [claim],
+    elapsedMilliseconds: 7,
+    examinedCount: 12,
+    returnedCount: 1,
+    estimatedTokens: 42,
+    provenanceComplete: true,
+    reasonCode: null,
+    aiUsage: 'not_measured',
+    query: 'must-not-leak',
+  };
+  const fake = {
+    connect: async () => {},
+    callTool: async () => ({structuredContent: typed}),
+    close: async () => {},
+  };
+  const result = await executeRecall(input, {token: 'x', clientFactory: () => fake});
+  assert.equal(result.status, 'memory_applied');
+  assert.equal(result.selectedLevel, 'deep');
+  assert.deepEqual(result.levelsAttempted, ['fast', 'deep']);
+  assert.equal(result.returnedCount, 1);
+  assert.equal(result.truncated, false);
+  assert.equal(result.responseChars, claim.content.length);
+  assert.equal('query' in result, false);
 });
 
 test('calls only recall and closes the client', async () => {
@@ -185,6 +260,48 @@ test('uses the official Streamable HTTP client against a local recall-only serve
       hops: 0,
     });
     assert.equal(result.claims[0].sourceUri, 'task://fixture-1');
+  } finally {
+    await new Promise(resolve => listener.close(resolve));
+  }
+});
+
+test('CLI honors the explicit loopback-only runtime opt-in', async () => {
+  const app = createMcpExpressApp({host: '127.0.0.1', allowedHosts: ['127.0.0.1']});
+  app.post('/mcp', async (req, res) => {
+    const server = new McpServer({name: 'fixture-memory', version: '0.1.0'});
+    server.registerTool('recall', {
+      inputSchema: {
+        projectSlug: z.string(),
+        query: z.string(),
+        limit: z.number().int(),
+        hops: z.number().int(),
+      },
+    }, async () => ({
+      content: [{type: 'text', text: 'synthetic'}],
+      structuredContent: {claims: [claim]},
+    }));
+    const transport = new StreamableHTTPServerTransport({sessionIdGenerator: undefined});
+    res.on('close', () => {
+      transport.close().catch(() => {});
+      server.close().catch(() => {});
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  });
+  const listener = await new Promise(resolve => {
+    const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+  try {
+    const address = listener.address();
+    const result = await runGatewayCli({
+      ...input,
+      serverUrl: `http://127.0.0.1:${address.port}/mcp`,
+    }, {
+      MYPEOPLE_MEMORY_TOKEN: 'fixture-token',
+      MYPEOPLE_MEMORY_ALLOW_HTTP: '1',
+    });
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.equal(JSON.parse(result.stdout).ok, true);
   } finally {
     await new Promise(resolve => listener.close(resolve));
   }

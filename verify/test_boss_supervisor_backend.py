@@ -14,10 +14,28 @@ class SupervisorBackendContract(unittest.TestCase):
             "/home/mp/mypeople/bin/boss-supervisor.sh",
         )).read_text(encoding="utf-8")
 
-    def test_existing_boss_is_revived_from_roster(self):
+    def test_missing_boss_reconciles_then_bootstraps_fresh_when_still_absent(self):
         self.assertIn('boss_id="$HOST_ID/main:Boss"', self.source)
-        self.assertIn('jq -e --arg aid "$boss_id"', self.source)
-        self.assertIn('"$ROOT/bin/mp" revive "$boss_id"', self.source)
+        missing = self.source.index(
+            "if ! tmux has-session -t mc-main:Boss >/dev/null 2>&1; then"
+        )
+        reconcile = self.source.index(
+            '"$ROOT/bin/mp" reconcile --agent "$boss_id"',
+            missing,
+        )
+        recheck = self.source.index(
+            "if ! tmux has-session -t mc-main:Boss >/dev/null 2>&1; then",
+            reconcile,
+        )
+        bootstrap = self.source.index(
+            '"$ROOT/bin/mp" spawn "$boss_id" --master --backend codex --model gpt-5.6-sol',
+            recheck,
+        )
+        self.assertLess(missing, reconcile)
+        self.assertLess(reconcile, recheck)
+        self.assertLess(recheck, bootstrap)
+        self.assertNotIn('jq -e --arg aid "$boss_id"', self.source[missing:bootstrap])
+        self.assertNotIn('"$ROOT/bin/mp" revive', self.source)
 
     def test_provider_switch_lock_pauses_automatic_revival(self):
         loop = self.source.index("while :; do")
@@ -28,24 +46,25 @@ class SupervisorBackendContract(unittest.TestCase):
         self.assertLess(guard, pause)
         self.assertLess(pause, boss_check)
 
-    def test_empty_roster_bootstraps_boss_with_codex_sol(self):
-        roster_check = self.source.index('jq -e --arg aid "$boss_id"')
-        revive = self.source.index('"$ROOT/bin/mp" revive "$boss_id"', roster_check)
-        fallback = self.source.index('"$ROOT/bin/mp" spawn "$boss_id" --master --backend codex --model gpt-5.6-sol', revive)
-        self.assertLess(roster_check, revive)
-        self.assertLess(revive, fallback)
-        between = self.source[revive:fallback]
-        self.assertIn("else", between)
-        self.assertNotIn("||", between)
+    def test_boss_fresh_bootstrap_uses_managed_default_cwd(self):
+        bootstrap = self.source.index(
+            '"$ROOT/bin/mp" spawn "$boss_id" --master --backend codex --model gpt-5.6-sol'
+        )
+        command = self.source[bootstrap:self.source.index(">>", bootstrap)]
+        self.assertNotIn("--cwd", command)
 
     def test_nightwatch_revives_roster_or_bootstraps_codex_luna(self):
         self.assertIn('nightwatch_id="$HOST_ID/nightwatch:Nightwatch"', self.source)
         start = self.source.index('nightwatch_id="$HOST_ID/nightwatch:Nightwatch"')
         roster_check = self.source.index('jq -e --arg aid "$nightwatch_id"', start)
-        revive = self.source.index('"$ROOT/bin/mp" revive "$nightwatch_id"', roster_check)
-        fallback = self.source.index('"$ROOT/bin/mp" spawn "$nightwatch_id" --boss "$boss_id" --cwd "$ROOT/run/nightwatch" --backend codex --model gpt-5.6-luna', revive)
-        self.assertLess(roster_check, revive)
-        self.assertLess(revive, fallback)
+        bootstrap = self.source.index('"$ROOT/bin/mp" spawn "$nightwatch_id" --boss "$boss_id" --cwd "$ROOT/run/nightwatch" --backend codex --model gpt-5.6-luna', roster_check)
+        self.assertLess(roster_check, bootstrap)
+        self.assertNotIn('"$ROOT/bin/mp" revive', self.source[roster_check:bootstrap])
+
+    def test_supervisor_uses_bounded_fifteen_second_reconcile_loop(self):
+        reconcile = self.source.index('"$ROOT/bin/mp" reconcile')
+        sleep = self.source.index("sleep 15", reconcile)
+        self.assertLess(reconcile, sleep)
 
 
 if __name__ == "__main__":

@@ -133,6 +133,81 @@ async function count(page, sel) {
   return await page.locator(sel).count();
 }
 
+async function assertUnifiedHudCards(page) {
+  await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length === 2);
+  await expect(await count(page, '#telemetryCards .combat-card') === 2, 'HUD did not render one card per active agent');
+  await expect(await count(page, '#agentsTable') === 0, 'legacy Agents table is still visible');
+  await expect(await count(page, '#telemetryCards .command-strip') === 2, 'core COMMAND strips are missing');
+  await expect(await count(page, '#telemetryCards .command-model option') === 4, 'closed model options mismatch');
+  const firstCard = page.locator('#telemetryCards .combat-card').first();
+  const pagesBefore = page.context().pages().length;
+  await firstCard.getByRole('button', { name: 'Copy spawn' }).click();
+  await page.waitForTimeout(100);
+  await expect(page.context().pages().length === pagesBefore, 'nested card action opened a popup');
+
+  let killRequests = 0;
+  await page.route('**/kill', async route => {
+    killRequests += 1;
+    await route.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"error":"synthetic_kill"}' });
+  });
+  await firstCard.getByRole('button', { name: 'Kill', exact: true }).click();
+  await expect(killRequests === 0, 'first Kill click sent a mutation');
+  await expect((await firstCard.getByRole('button', { name: 'Confirm kill' }).count()) === 1, 'Kill was not visibly armed');
+  await page.waitForFunction(() => {
+    const button = document.querySelector('#telemetryCards .combat-card:first-child .card-action.danger');
+    return button?.textContent?.trim() === 'Kill';
+  }, undefined, { timeout: 7000 });
+  await expect((await firstCard.getByRole('button', { name: 'Kill', exact: true }).count()) === 1, 'Kill did not disarm');
+  await page.unroute('**/kill');
+
+  let switchBody = null;
+  await page.route('**/switch', async route => {
+    switchBody = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":false,"error":"synthetic_switch_failure"}' });
+  });
+  await firstCard.locator('.command-model').selectOption('gpt-5.6-luna');
+  await firstCard.getByRole('button', { name: 'Apply model' }).click();
+  await expect(switchBody?.agent_id === 'node-1/main:Boss' && switchBody?.model === 'gpt-5.6-luna', 'switch body was not exact');
+  await page.waitForFunction(() => document.querySelector('#telemetryCards .combat-card:first-child .command-status')?.textContent?.includes('synthetic_switch_failure'));
+  await expect((await text(page, '#telemetryCards .combat-card:first-child .command-status')).includes('synthetic_switch_failure'), 'control failure was hidden');
+  await expect(page.context().pages().length === pagesBefore, 'COMMAND action opened terminal');
+  await page.unroute('**/switch');
+
+  const clickPopup = page.waitForEvent('popup');
+  await firstCard.locator('.combat-title').click();
+  const clicked = await clickPopup;
+  await clicked.waitForURL(url => url.toString().includes('/todo/terminal?agent='), { timeout: 5000 });
+  await expect(clicked.url().includes('/todo/terminal?agent='), 'card click did not open terminal');
+  await clicked.close();
+
+  const keyboardPopup = page.waitForEvent('popup');
+  await firstCard.focus();
+  await page.keyboard.press('Enter');
+  const keyed = await keyboardPopup;
+  await keyed.waitForURL(url => url.toString().includes('/todo/terminal?agent='), { timeout: 5000 });
+  await expect(keyed.url().includes('/todo/terminal?agent='), 'keyboard attach did not open terminal');
+  await keyed.close();
+
+  await page.evaluate(() => {
+    window.__hudOriginalFetch = window.fetch;
+    window.fetch = (input, init) => String(input).includes('/todo/operator-telemetry')
+      ? Promise.resolve(new Response('{"error":"synthetic stale telemetry"}', {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      : window.__hudOriginalFetch(input, init);
+  });
+  await page.evaluate(() => window.__hud.poll());
+  await expect((await text(page, '#telemetryState')) === 'STALE', 'HUD did not expose stale telemetry');
+  await expect(await count(page, '#telemetryCards .combat-card') === 2, 'HUD cards disappeared during stale telemetry');
+  await expect(await count(page, '#telemetryCards .card-action') >= 2, 'lifecycle actions disappeared during stale telemetry');
+  await page.evaluate(() => {
+    window.fetch = window.__hudOriginalFetch;
+    delete window.__hudOriginalFetch;
+    return window.__hud.poll();
+  });
+}
+
 async function liveCore(page) {
   const liveMarker = `browser-${browserName}-${Date.now()}`;
   await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
@@ -151,12 +226,9 @@ async function liveCore(page) {
   await page.click('a.navlink[href="/dashboard"]');
   await page.waitForURL(/\/dashboard$/);
   await expect((await text(page, 'h1')) === 'MyPeople - HUD', 'HUD title mismatch');
+  await assertUnifiedHudCards(page);
   await page.click('a.nav[href="/"]');
   await page.waitForURL(/\/$/);
-  await page.click('a.navlink[href="/wall"]');
-  await page.waitForURL(/\/wall$/);
-  await page.waitForSelector('iframe');
-  await page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   await page.click('a.navlink[href="/terminal-graph"]');
   await page.waitForURL(/\/terminal-graph$/);
   await page.waitForSelector('iframe');
@@ -269,6 +341,51 @@ async function sandboxSuite(page, boardPollNavigation) {
   await page.waitForFunction(n => document.querySelectorAll('.evidence-card').length > n, beforeEvidence);
   await page.waitForFunction(() => document.querySelector('#evidenceStatus')?.textContent.includes('Uploaded'));
   await expect(await count(page, '.evidence-meta') >= 1, 'evidence metadata missing');
+  await page.evaluate(() => {
+    window.__fullscreenCalls = 0;
+    HTMLElement.prototype.requestFullscreen = function () { window.__fullscreenCalls += 1; return Promise.resolve(); };
+    document.exitFullscreen = () => Promise.resolve();
+    const originalPlay = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () { window.__playCalls = (window.__playCalls || 0) + 1; return Promise.resolve(); };
+    window.__restoreMedia = () => { HTMLMediaElement.prototype.play = originalPlay; };
+  });
+  const imageTrigger = page.locator('.evidence-image-trigger').last();
+  await imageTrigger.click();
+  await page.waitForSelector('#lightbox:not([hidden])');
+  await expect(await page.locator('#lightboxImage').getAttribute('alt') === 'browser-evidence.png', 'lightbox image alt missing');
+  await page.click('#zoomIn');
+  await expect(await page.locator('#zoomReset').textContent() === '125%', 'lightbox zoom control failed');
+  const viewerImageBox = await page.locator('#lightboxImage').boundingBox();
+  await expect(Boolean(viewerImageBox), 'lightbox image has no interactive bounds');
+  const dragStart = { x: viewerImageBox.x + viewerImageBox.width / 2, y: viewerImageBox.y + viewerImageBox.height / 2 };
+  await page.mouse.move(dragStart.x, dragStart.y);
+  await page.mouse.down();
+  await page.mouse.move(dragStart.x + 40, dragStart.y + 30);
+  await page.mouse.up();
+  await expect(await page.locator('#lightbox').isVisible(), 'lightbox closed during image pan');
+  await expect((await page.locator('#lightboxImage').getAttribute('style') || '').includes('translate(40px, 30px)'), 'lightbox pan transform missing');
+  await page.click('#zoomReset');
+  await expect(await page.locator('#zoomReset').textContent() === '100%', 'lightbox reset failed');
+  await expect(await page.locator('#fullscreenLightbox').isVisible(), 'lightbox fullscreen control missing');
+  await page.click('#fullscreenLightbox');
+  await expect(await page.evaluate(() => window.__fullscreenCalls) === 1, 'fullscreen control did not invoke requestFullscreen');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.querySelector('#lightbox')?.hidden === true);
+  await expect(await page.evaluate(() => document.activeElement?.classList.contains('evidence-image-trigger')), 'lightbox did not return focus');
+  const media = await page.evaluate(async () => { const videos = [...document.querySelectorAll('#modal video')]; for (const video of videos) await video.play(); return { items: videos.map(video => ({ controls: video.controls, preload: video.preload, fullscreen: typeof video.requestFullscreen === 'function' })), playCalls: window.__playCalls || 0 }; });
+  await expect(media.items.length >= 1, 'video fixture missing');
+  await expect(media.items.every(video => video.controls && video.preload === 'metadata' && video.fullscreen), 'video controls/fullscreen wiring unavailable');
+  await expect(media.playCalls >= media.items.length, 'video play() was not attempted');
+  const links = await page.evaluate(() => [...document.querySelectorAll('#modal .proof a[href]')].map(link => ({ href: link.href, target: link.target, rel: link.rel })));
+  await expect(links.length >= 1, 'link fixture missing');
+  await expect(links.some(link => link.href === 'https://example.com/viewer-fixture'), 'safe evidence link target missing');
+  await expect(links.every(link => link.target === '_blank' && link.rel.includes('noopener') && link.rel.includes('noreferrer')), 'evidence link safety attrs missing');
+  const linkPopupEvent = page.waitForEvent('popup');
+  await page.locator('#modal .proof a[target="_blank"]').first().click();
+  const linkPopup = await linkPopupEvent;
+  await expect(!linkPopup.isClosed(), 'safe evidence link did not open a new tab');
+  await linkPopup.close();
+  await page.evaluate(() => window.__restoreMedia?.());
   await closeCard(page);
 
   // Cross-nav by real clicks.
@@ -280,7 +397,7 @@ async function sandboxSuite(page, boardPollNavigation) {
   await page.waitForURL(/\/$/);
   await expect((await text(page, 'h1')) === 'Priorities', 'HUD->board failed');
   await page.goto(`${hudUrl}/dashboard`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#agentsTable');
+  await page.waitForSelector('#telemetryCards .combat-card');
   await page.click('a.nav[href="/"]');
   await page.waitForURL(/\/$/);
   await expect((await text(page, 'h1')) === 'Priorities', 'direct HUD->board failed');
@@ -295,6 +412,8 @@ async function sandboxSuite(page, boardPollNavigation) {
   // Recurring flow.
   const recurringFlow = taskIds.find(id => id !== s.deleteId && id !== s.ownerTask && id !== s.safeMdId && id !== s.scrollId);
   await openCard(page, recurringFlow);
+  await page.click('#detailsToggle');
+  await expect(await page.locator('#detailsPanel').isVisible(), 'task details did not open');
   await page.selectOption('#stateSelect', 'recurring');
   await page.click('#saveDetails');
   await page.waitForTimeout(250);
@@ -325,9 +444,11 @@ async function sandboxSuite(page, boardPollNavigation) {
 
   // Hidden live-board controls check.
   await page.goto(`${baseUrl}/dashboard`, { waitUntil: 'domcontentloaded' });
-  await expect(await count(page, 'a.attach') >= 0, 'dashboard missing');
-  await page.goto(`${baseUrl}/wall`, { waitUntil: 'domcontentloaded' });
-  await expect(await count(page, 'iframe') >= 1, 'wall iframe missing');
+  await page.waitForFunction(() => document.querySelectorAll('#telemetryCards .combat-card').length >= 1);
+  await expect(await count(page, '#telemetryCards .combat-card') >= 1, 'dashboard cards missing');
+  await expect(await count(page, '#agentsTable') === 0, 'legacy dashboard table returned');
+  const retiredWall = await page.goto(`${baseUrl}/wall`, { waitUntil: 'domcontentloaded' });
+  await expect(retiredWall.url().endsWith('/'), 'retired wall did not redirect to board');
   await page.goto(`${baseUrl}/terminal-graph`, { waitUntil: 'domcontentloaded' });
   await expect(await count(page, 'iframe') >= 1, 'graph iframe missing');
   await saveShot(page, `sandbox-${browserName}`);

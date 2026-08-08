@@ -1,19 +1,97 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import cgi, copy, hashlib, http.client, http.cookies, http.server, io, json, mimetypes, os, pathlib, re, secrets, shutil, subprocess, threading, time
+import cgi, copy, hashlib, http.client, http.cookies, http.server, io, json, mimetypes, os, pathlib, queue, re, secrets, shutil, subprocess, threading, time
 import urllib.parse, urllib.request
+from evidence_validation import validate_evidence_url
 from mpcommon import *
+from memory_canary import (
+    MemoryCanaryError,
+    append_receipt as append_memory_canary_receipt,
+    latest_receipt as latest_memory_canary_receipt,
+    load_control as load_memory_canary_control,
+    provider_usage_snapshot,
+    receipt_projection as memory_canary_receipt_projection,
+    set_control as set_memory_canary_control,
+)
+import memory_comparison as memory_comparison_runtime
+from agent_session import SessionError, session_files
+from operator_telemetry import build_operator_telemetry
+from provider_health import read_health_receipts
+from memory_observability import get_memory_projection
+from runtime_identity import read_runtime_identity
+from project_publisher import (
+    ACTIVE_APPROVAL_STATUSES,
+    PublisherError,
+    approvals_root,
+    approve_request as approve_publication_request,
+    select_actionable_approvals,
+    get_approval,
+    reject_request as reject_publication_request,
+)
+from fleet_monitor import Ledger, heartbeat_minutes, message
 
 BIND=ENV.get("BIND_ADDR","0.0.0.0");PORT=int(ENV.get("TODO_PORT","9933"));HUD=int(ENV.get("HUD_PORT","9900"))
 SECRET=ENV["QUEUE_SECRET"]; NW_TOKEN=ENV.get("NIGHTWATCH_TOKEN",""); HOST_ID=ENV.get("HOST_ID",os.uname().nodename.split('.')[0])
 BOSS=ENV.get("BOSS_AGENT","main:Boss");BOSS_FULL=full_agent_id(BOSS);NW_AGENT=ENV.get("NIGHTWATCH_AGENT",f"{HOST_ID}/nightwatch:Nightwatch")
 BOARD_PATH=os.path.realpath(os.environ.get("BOARD_PATH",os.path.join(ROOT,"todos","board.v2.json")))
 PROJECT_PROFILES_DIR=os.path.realpath(ENV.get("PROJECT_PROFILES_DIR",os.path.join(ROOT,"run","project-profiles")))
+MEMORY_COMPARISON_RUNTIME_DIR=os.path.realpath(ENV.get("MEMORY_COMPARISON_RUNTIME_DIR",os.path.join(ROOT,"run")))
 TODOS_DIR=os.path.dirname(BOARD_PATH);PROOFS_DIR=os.path.join(TODOS_DIR,"proofs");INBOX_LOG=os.path.join(TODOS_DIR,"boss-inbox.log")
 os.makedirs(os.path.join(ROOT,"run"),exist_ok=True)
 SESSIONS=set();TOKENS={};START=time.time();STORE_LOCK=threading.RLock()
+FLEET=Ledger(os.path.join(ROOT,"run","fleet-monitor.json"))
+FLEET_EVENTS=queue.Queue(maxsize=2048)
 VALID_STATES={"needs_brainstorm","working","review","done","blocked","cancelled","recurring"};TERMINAL={"done","cancelled"}
 PROJECT_SLUG_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+MEMORY_COMPARISON_ENABLED=ENV.get("MYPEOPLE_MEMORY_COMPARISON_ENABLED","")=="1"
+MEMORY_COMPARISON_CASES={"cmp-exact-01","cmp-temporal-01","cmp-contradiction-01"}
+MEMORY_COMPARISON_ID_RE=re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+OPERATOR_TELEMETRY_MAX_BYTES=128 * 1024
+PUBLIC_APPROVAL_FIELDS={
+    "approvalId", "taskId", "projectSlug", "repositorySlug", "headBranch",
+    "shortSha", "baseBranch", "mergeMethod", "expiresAt", "status",
+    "verificationStatus",
+}
+PUBLISHER_HEALTH_PATH=os.path.join(ROOT,"run","publisher-health.json")
+PUBLISHER_HEALTH_STATES={"available","ssh_unavailable","github_cli_unavailable","authentication_failed","rate_limited","unknown"}
+
+class MemoryComparisonAccessError(ValueError):pass
+
+def publication_approval_projection(root=None):
+    out=[]; records=[]
+    directory=approvals_root(root)
+    try:names=sorted(os.listdir(directory))
+    except OSError:return out
+    for name in names:
+        if not name.endswith(".json") or not re.fullmatch(r"[0-9a-f]{24}\.json",name):continue
+        try:record=get_approval(name[:-5],directory)
+        except (PublisherError,OSError,ValueError):continue
+        if record.get("status") not in ACTIVE_APPROVAL_STATUSES:continue
+        records.append(record)
+    for record in select_actionable_approvals(records):
+        repository=str(record.get("repository") or "")
+        slug=repository.removeprefix("https://github.com/").removesuffix(".git")
+        item={
+            "approvalId":record.get("approvalId"),
+            "taskId":record.get("taskId"),
+            "projectSlug":record.get("projectSlug"),
+            "repositorySlug":slug,
+            "headBranch":record.get("headBranch") or record.get("branch"),
+            "shortSha":str(record.get("commit") or "")[:12],
+            "baseBranch":record.get("baseBranch") or "main",
+            "mergeMethod":record.get("mergeMethod") or "squash",
+            "expiresAt":record.get("expiresAt"),
+            "status":record.get("status"),
+            "verificationStatus":"verified" if record.get("evidenceDigest") else "legacy",
+        }
+        out.append({key:item[key] for key in PUBLIC_APPROVAL_FIELDS})
+    return out
+
+def publisher_health_projection(path=PUBLISHER_HEALTH_PATH):
+    value=load_json(path,{})
+    if not isinstance(value,dict):value={}
+    state=value.get("state") if value.get("state") in PUBLISHER_HEALTH_STATES else "unknown"
+    return {"state":state,"checkedAt":value.get("checkedAt"),"reasonCode":value.get("reasonCode") if isinstance(value.get("reasonCode"),str) and len(value.get("reasonCode"))<=64 else None}
 
 def validate_project_slug(value,*,allow_empty=False):
     value=str(value or "").strip()
@@ -25,6 +103,42 @@ def validate_context_question(value):
     value=re.sub(r"[\x00-\x1f\x7f]+"," ",str(value or "")).strip()
     if len(value)>500:raise ValueError("context_question_too_long")
     return value
+
+def validate_memory_canary(value,project_slug,context_question):
+    if not isinstance(value,bool):raise ValueError("invalid_memory_canary")
+    if not value:return False
+    if project_slug!="project-factory":raise ValueError("memory_canary_requires_project_factory")
+    if not context_question:raise ValueError("memory_canary_requires_question")
+    return True
+
+def validate_memory_comparison(value,kind,project_slug,context_question,memory_canary,is_test,*,now=None):
+    if value is None:return None
+    if not MEMORY_COMPARISON_ENABLED:raise MemoryComparisonAccessError("memory_comparison_disabled")
+    if kind!="machine":raise MemoryComparisonAccessError("memory_comparison_internal_only")
+    if not isinstance(value,dict) or set(value)!={"memory_comparison"}:raise ValueError("invalid_memory_comparison")
+    item=value.get("memory_comparison")
+    required={"experiment_id","case_alias","arm","cleanup_deadline"}
+    if not isinstance(item,dict) or set(item)!=required:raise ValueError("invalid_memory_comparison")
+    experiment_id=item.get("experiment_id");case_alias=item.get("case_alias");arm=item.get("arm");deadline=item.get("cleanup_deadline")
+    if not isinstance(experiment_id,str) or len(experiment_id)>64 or not MEMORY_COMPARISON_ID_RE.fullmatch(experiment_id):raise ValueError("invalid_memory_comparison_id")
+    if case_alias not in MEMORY_COMPARISON_CASES:raise ValueError("invalid_memory_comparison_case")
+    if arm not in {"baseline","memory"}:raise ValueError("invalid_memory_comparison_arm")
+    if project_slug!="project-factory":raise ValueError("memory_comparison_requires_project_factory")
+    if not context_question:raise ValueError("memory_comparison_requires_question")
+    if is_test is not True:raise ValueError("memory_comparison_requires_test_card")
+    if memory_canary is not (arm=="memory"):raise ValueError("memory_comparison_arm_mismatch")
+    current=time.time() if now is None else float(now)
+    if isinstance(deadline,bool) or not isinstance(deadline,(int,float)) or deadline<=current or deadline>current+3600:raise ValueError("invalid_memory_comparison_deadline")
+    return {"memory_comparison":{"experiment_id":experiment_id,"case_alias":case_alias,"arm":arm,"cleanup_deadline":float(deadline)}}
+
+def validate_canary_assessment(assessment,rationale):
+    assessment=str(assessment or "").strip()
+    if assessment not in {"useful","neutral","harmful","not_demonstrated"}:
+        raise ValueError("invalid_canary_assessment")
+    rationale=re.sub(r"[\x00-\x1f\x7f]+"," ",str(rationale or "")).strip()
+    if not rationale or len(rationale)>500:
+        raise ValueError("invalid_canary_rationale")
+    return assessment,rationale
 
 def available_project_slugs():
     directory=pathlib.Path(PROJECT_PROFILES_DIR)
@@ -43,7 +157,7 @@ def blank_board():return default_board()
 def owner_event(action,agent_id="",previous="",by="system"):
     return {"id":secrets.token_hex(6),"action":action,"kind":action,"agent_id":agent_id,"previous":previous,"by":by,"ts":time.time()}
 def normalize_task(t):
-    defaults={"text":"","state":"needs_brainstorm","assignee":"","doneCondition":"","projectSlug":"","contextQuestion":"","evidencePolicy":"optional","workToDone":False,"comments":[],"proofs":[],"unread":0,"verified":False,"pingsToBoss":0,"pinned":False,"pinRank":None,"test":False,"ownerHistory":[],"ownerNeedsReplacement":False,"updated":time.time()}
+    defaults={"text":"","state":"needs_brainstorm","assignee":"","doneCondition":"","projectSlug":"","contextQuestion":"","memoryCanary":False,"evidencePolicy":"optional","workToDone":False,"comments":[],"proofs":[],"unread":0,"verified":False,"pingsToBoss":0,"pinned":False,"pinRank":None,"test":False,"ownerHistory":[],"ownerNeedsReplacement":False,"monitorState":"","monitorUpdated":0,"monitorAction":"","updated":time.time()}
     for k,v in defaults.items():
         if k not in t or t[k] is None:t[k]=copy.deepcopy(v)
     if t.get("evidencePolicy") not in ("required","optional"):t["evidencePolicy"]="optional"
@@ -59,7 +173,21 @@ def migrate(board):
             if t.get("assignee") and not any(x.get("kind")=="migrated_existing_owner" for x in t["ownerHistory"]):
                 t["ownerHistory"].append(owner_event("migrated_existing_owner",t["assignee"],"","system"))
         if t.get("ownerNeedsReplacement") is None:t["ownerNeedsReplacement"]=False;changed=True
-        before=json.dumps(t,sort_keys=True);normalize_task(t);changed |= before != json.dumps(t,sort_keys=True)
+        before=json.dumps(t,sort_keys=True);normalize_task(t)
+        # Older composer builds submitted every non-empty string as a link proof.
+        # Keep real URLs as evidence, but restore malformed relative entries to the
+        # comment stream so they remain readable and do not look like evidence.
+        comments=t.setdefault("comments",[]);proofs=[]
+        for proof in t.get("proofs",[]):
+            url=str(proof.get("url","") or "").strip()
+            if proof.get("kind")=="link" and not is_explicit_http_url(url):
+                body=str(proof.get("body","") or url).strip()
+                if body:
+                    comments.append({"id":proof.get("id",secrets.token_hex(8)),"by":proof.get("by",""),"kind":"comment","body":body,"ts":proof.get("ts",time.time())})
+                changed=True
+            else:proofs.append(proof)
+        t["proofs"]=proofs
+        changed |= before != json.dumps(t,sort_keys=True)
     board["order"]=[x for x in board["order"] if x in board["tasks"]]
     for x in board["tasks"]:
         if x not in board["order"]:board["order"].append(x);changed=True
@@ -112,18 +240,63 @@ def roster_map():
         rows=queue_get("/roster")
     except Exception:
         rows=load_roster()
-    return {r.get("agent_id"):r for r in rows if isinstance(r,dict)}
+    out={r.get("agent_id"):r for r in rows if isinstance(r,dict)}
+    try:
+        for live in queue_get("/agents"):
+            if isinstance(live,dict) and live.get("agent_id") in out:
+                out[live["agent_id"]]={**out[live["agent_id"]],**{k:live[k] for k in ("status","timestamp","activity_updated_at","activity_event","heartbeat_at") if k in live}}
+    except Exception:pass
+    return out
 def valid_owner(task,aid):
     r=roster_map().get(aid)
     return bool(r and r.get("state")=="alive" and not r.get("retired") and r.get("boss_id")==BOSS_FULL and r.get("lifecycle")=="owner" and r.get("owner_task_id")==task["id"])
+def queue_fleet(task,event):
+    if task.get("test"):return False
+    try:FLEET_EVENTS.put_nowait((task["id"],event));return True
+    except queue.Full:append_log(f"FLEET_MONITOR_QUEUE_FULL card={task.get('id','')} event={event}");return False
+def fleet_task_revision(task):
+    assignee=str(task.get("assignee") or "")
+    epochs=[float(item.get("ts",0)) for item in task.get("ownerHistory",[]) if item.get("agent_id")==assignee and item.get("action") in {"assign","replace","reopen","migrated_existing_owner"}]
+    return (task.get("updated"),task.get("state"),assignee,bool(task.get("ownerNeedsReplacement")),max(epochs) if epochs else None)
+def process_fleet_event(task_id,event):
+    with STORE_LOCK:
+        task=copy.deepcopy(load_board()["tasks"].get(task_id))
+    if not task or task.get("test"):return None
+    revision=fleet_task_revision(task);owner=roster_map().get(task.get("assignee",""));replacement=None
+    with STORE_LOCK:
+        board=load_board();current=board["tasks"].get(task_id)
+        if not current or current.get("test"):return None
+        if fleet_task_revision(current)!=revision:
+            replacement=copy.deepcopy(current);observation=None
+        else:
+            observation=FLEET.observe(current,owner,event)
+            if observation and observation.get("changed"):save_board(board)
+    if replacement:
+        queue_fleet(replacement,"task_changed")
+        return {"discarded":"task_changed","task_id":task_id}
+    if not observation:return None
+    delivery={"nightwatch":(NW_AGENT,message(observation)),"boss":(BOSS_FULL,"[fleet-monitor] "+observation["boss_action"]+" card="+observation["task_id"])}
+    for target in observation.get("pending",[]):
+        agent,payload=delivery[target]
+        if mp_send(agent,payload,label="FLEET_MONITOR")==0:FLEET.ack(task_id,observation["digest"],target)
+    return observation
+def fleet_worker():
+    while True:
+        task_id,event=FLEET_EVENTS.get()
+        try:process_fleet_event(task_id,event)
+        except Exception as error:append_log(f"FLEET_MONITOR_ERROR card={task_id} event={event} error={type(error).__name__}")
+        finally:FLEET_EVENTS.task_done()
 
 def classify_media(kind,url,filename="",ctype=""):
     probe=(filename or urllib.parse.urlparse(url or "").path).lower();ct=(ctype or "").lower()
     if ct.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp|svg)$",probe):return "image"
     if ct.startswith("video/") or re.search(r"\.(mp4|webm|mov|m4v)$",probe):return "video"
-    if url and (url.startswith("http://") or url.startswith("https://")) and not filename:return "link" if kind in ("","text",None) else kind
+    if url and is_explicit_http_url(url) and not filename:return "link" if kind in ("","text",None) else kind
     if filename or (url and url.startswith("/todo/proof")):return kind if kind in ("image","video") else "file"
-    return kind if kind in ("image","video","link","file") else "text"
+    return kind if kind in ("image","video","file") else "text"
+
+def is_explicit_http_url(value):
+    return bool(re.match(r"^https?://[^\s]+$",str(value or ""),re.IGNORECASE))
 
 def proof_metadata(content,filename,ctype,by=""):
     content=content or b""
@@ -150,6 +323,26 @@ def proof_file_path(task_id,filename):
 
 def queue_get(path):return http_json(path,base=ENV.get("QUEUE_URL","http://127.0.0.1:9900"))
 
+def build_live_operator_telemetry():
+    roster=load_roster()
+    health=read_health_receipts(
+        os.path.join(ROOT,"run"),
+        float(ENV.get("MYPEOPLE_PROVIDER_HEALTH_STALE_SEC","300")),
+    )
+    def usage_reader(record):
+        if record.get("backend")!="codex":return {}
+        profile=str(record.get("provider_profile") or "")
+        session_id=str(record.get("session_id") or "")
+        if not profile or not session_id:return {}
+        home=os.path.realpath(os.path.join(ROOT,"run","provider-homes","codex",profile))
+        root=os.path.realpath(os.path.join(ROOT,"run","provider-homes","codex"))
+        if os.path.commonpath((root,home))!=root:return {}
+        try:paths=session_files("codex",session_id,codex_home=home)
+        except SessionError:return {}
+        if len(paths)!=1:return {}
+        return provider_usage_snapshot(paths[0],"codex",session_id)
+    return build_operator_telemetry(roster,health,usage_reader=usage_reader)
+
 def geometry():
     out={}
     try:
@@ -159,19 +352,6 @@ def geometry():
     except Exception:pass
     return out
 
-def graph_role(agent_id,row):
-    if row.get("is_master"):return "boss"
-    if agent_id==NW_AGENT or agent_id.endswith(":Nightwatch"):return "nightwatch"
-    return "worker"
-
-def graph_card_kind(task):
-    state=task.get("state")
-    if state=="blocked":return "BLOCKED"
-    if state=="review":return "REVIEW"
-    if state=="done":return "DELIVERED"
-    if task.get("proofs"):return "EVIDENCE"
-    return "PRIORITY"
-
 def wall_data(graph=False):
     agents=queue_get("/agents");rr=roster_map();geo=geometry();rows=[]
     for a in agents:
@@ -180,26 +360,24 @@ def wall_data(graph=False):
         if a.get("host")==HOST_ID and a.get("tmux_target") not in geo:continue
         status=a.get("status","idle");display=status if status in ("starting","working","idle","blocked") else "idle"
         cols,lines=geo.get(a["tmux_target"],(120,36))
-        rows.append({"agent_id":a["agent_id"],"boss_id":a.get("boss_id",""),"is_master":bool(a.get("is_master")),"role":graph_role(a["agent_id"],a),"target":a["tmux_target"],"tmux_target":a["tmux_target"],"state":display,"status":status,"summary":a.get("summary","") or r.get("summary",""),"backend":a.get("backend","") or r.get("backend",""),"host":a.get("host"),"cols":cols,"rows":lines,"read_port":int(ENV.get("TTYD_RO_PORT","7682")),"write_port":int(ENV.get("TTYD_PORT","7681"))})
+        rows.append({"agent_id":a["agent_id"],"boss_id":a.get("boss_id",""),"is_master":bool(a.get("is_master")),"target":a["tmux_target"],"tmux_target":a["tmux_target"],"state":display,"host":a.get("host"),"cols":cols,"rows":lines,"read_port":int(ENV.get("TTYD_RO_PORT","7682")),"write_port":int(ENV.get("TTYD_PORT","7681"))})
     rows.sort(key=lambda x:(x["state"]!="working",not x["is_master"],x["agent_id"]))
     if not graph:return rows
-    live={x["agent_id"] for x in rows};roles={x["agent_id"]:x["role"] for x in rows};edges=[{"parent":x["boss_id"],"child":x["agent_id"],"kind":"OBSERVES" if roles.get(x["agent_id"])=="nightwatch" else "ASSIGNS"} for x in rows if x["boss_id"] in live]
+    live={x["agent_id"] for x in rows};edges=[{"parent":x["boss_id"],"child":x["agent_id"]} for x in rows if x["boss_id"] in live]
     b=load_board();tasks=[]
     for tid in ordered_ids(b):
-        t=b["tasks"][tid];owner=t.get("assignee","");tasks.append({"id":tid,"title":t.get("text",""),"state":t.get("state"),"card_kind":graph_card_kind(t),"assignee":owner,"owner_live":owner in live,"archived":t.get("state") in TERMINAL,"pinned":bool(t.get("pinned")),"updated":t.get("updated",0),"proof_count":len(t.get("proofs") or []),"evidence_policy":t.get("evidencePolicy","optional"),"done_condition":t.get("doneCondition",""),"project_slug":t.get("projectSlug",""),"href":"/terminal-graph?task="+urllib.parse.quote(tid)})
+        t=b["tasks"][tid];owner=t.get("assignee","");tasks.append({"id":tid,"title":t.get("text",""),"state":t.get("state"),"assignee":owner,"owner_live":owner in live,"archived":t.get("state") in TERMINAL,"pinned":bool(t.get("pinned")),"updated":t.get("updated",0),"href":"/terminal-graph?task="+urllib.parse.quote(tid)})
     return {"agents":rows,"edges":edges,"tasks":tasks,"states":sorted(VALID_STATES)}
 
 def idle_watch():
-    fired=set();minutes=float(ENV.get("NIGHTWATCH_IDLE_MIN","30"))
+    minutes=heartbeat_minutes()
     while True:
-        time.sleep(min(30,max(2,minutes*15)))
+        time.sleep(minutes*60)
         try:
-            b=load_board()
-            for tid,t in b["tasks"].items():
-                if t.get("test") or t.get("state") in TERMINAL:continue
-                if time.time()-float(t.get("updated",0))>=minutes*60 and tid not in fired:
-                    mp_send(NW_AGENT,f"[nightwatch] idle task {tid} \"{safe_title(t)}\"");fired.add(tid)
+            with STORE_LOCK:tasks=list(load_board()["tasks"].values())
+            for task in tasks:queue_fleet(task,"heartbeat")
         except Exception:pass
+threading.Thread(target=fleet_worker,daemon=True).start()
 threading.Thread(target=idle_watch,daemon=True).start()
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -233,6 +411,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:data=open(os.path.join(ROOT,"bin",name),"rb").read()
         except FileNotFoundError:return self.json({"error":"asset_missing"},404)
         self.send_bytes(data,200,ctype,head=head)
+    def redirect(self,location,head=False):
+        self.send_bytes(b"",302,"text/plain; charset=utf-8",headers=[("Location",location)],head=head)
     def proxy_hud(self,head=False):
         conn=http.client.HTTPConnection("127.0.0.1",HUD,timeout=20);headers={k:v for k,v in self.headers.items() if k.lower() not in ("host","content-length","connection")};headers["X-Queue-Secret"]=SECRET;body=None
         if self.command=="POST":body=self.rfile.read(int(self.headers.get("Content-Length","0") or 0));headers["Content-Length"]=str(len(body))
@@ -245,13 +425,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def route_get(self,head=False):
         u=urllib.parse.urlparse(self.path);p=u.path
         if p=="/favicon.ico":return self.send_bytes(b"",204,"image/x-icon",head=head)
-        if p=="/health":return self.json({"status":"ok","uptime":int(time.time()-START),"build":max((int(os.path.getmtime(os.path.join(ROOT,"bin",x))) for x in ("todos.html","mypeople-ui.css","graph-canvas.css","terminal-graph.html") if os.path.exists(os.path.join(ROOT,"bin",x))),default=0)},head=head)
+        if p=="/health":
+            identity=read_runtime_identity()
+            return self.json({"status":"ok","uptime":int(time.time()-START),"build":identity["build"],"runtimeIdentity":identity},head=head)
         if p=="/assets/mypeople-ui.css":return self.asset("mypeople-ui.css","text/css; charset=utf-8",head)
         if p=="/assets/graph-canvas.css":return self.asset("graph-canvas.css","text/css; charset=utf-8",head)
+        if p=="/assets/board-polling.js":return self.asset("board-polling.js","text/javascript; charset=utf-8",head)
+        if p=="/assets/visual-viewport.js":return self.asset("visual-viewport.js","text/javascript; charset=utf-8",head)
         if p in ("/","/todos"):return self.page("todos.html",head)
-        if p=="/wall":return self.page("wall.html",head)
+        if p=="/wall":return self.redirect("/",head)
         if p=="/terminal-graph":return self.page("terminal-graph.html",head)
-        if p=="/dashboard" or p.startswith("/dashboard/") or p in ("/agents","/roster","/clients"):return self.proxy_hud(head)
+        if p=="/dashboard" or p.startswith("/dashboard/") or p in ("/agents","/roster","/clients","/control-capabilities"):return self.proxy_hud(head)
         if not self.auth_kind():return self.json({"ok":False,"error":"unauthorized"},401,head=head)
         if p.startswith("/todo/proof-file/"):
             name=os.path.basename(urllib.parse.unquote(p.rsplit('/',1)[-1]));path=os.path.realpath(os.path.join(PROOFS_DIR,name));base=os.path.realpath(PROOFS_DIR)+os.sep
@@ -264,6 +448,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_bytes(open(path,"rb").read(),200,mimetypes.guess_type(path)[0] or "application/octet-stream",head=head)
         if p=="/todo/board":
             b=load_board();o=copy.deepcopy(b);o["displayOrder"]=ordered_ids(b);o["boardPath"]=BOARD_PATH;o["projectSlugs"]=available_project_slugs();return self.json(o,head=head)
+        if p=="/todo/operator-telemetry":
+            try:o=build_live_operator_telemetry()
+            except Exception:return self.json({"ok":False,"error":"telemetry_unavailable"},503,head=head)
+            if len(json.dumps(o,ensure_ascii=False).encode())>OPERATOR_TELEMETRY_MAX_BYTES:
+                return self.json({"ok":False,"error":"telemetry_too_large"},503,head=head)
+            return self.json(o,head=head)
+        if p=="/todo/provider-health":
+            rows=read_health_receipts(
+                os.path.join(ROOT,"run"),
+                float(ENV.get("MYPEOPLE_PROVIDER_HEALTH_STALE_SEC","300")),
+            )
+            return self.json({"ok":True,"health":rows},head=head)
+        if p=="/todo/publisher-health":
+            return self.json({"ok":True,**publisher_health_projection()},head=head)
+        if p=="/todo/publication-approvals":
+            return self.json({"ok":True,"approvals":publication_approval_projection()},head=head)
+        if p=="/todo/memory-canary":
+            task_id=urllib.parse.parse_qs(u.query).get("task_id",[""])[0]
+            if task_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",task_id):
+                return self.json({"ok":False,"error":"invalid_task_id"},400,head=head)
+            try:
+                runtime_dir=os.path.realpath(os.path.join(ROOT,"run"))
+                projection=get_memory_projection(runtime_dir,task_id)
+                attempt=memory_canary_receipt_projection(runtime_dir,task_id) if task_id else None
+            except MemoryCanaryError as error:
+                return self.json({"ok":False,"error":error.code},400,head=head)
+            return self.json({"ok":True,**projection,"control":{"enabled":projection["enabled"],"mode":projection["mode"],"revision":projection["controlRevision"]},"attempt":attempt},head=head)
         if p in ("/todo/attach","/todo/terminal","/terminal"):
             aid=urllib.parse.parse_qs(u.query).get("agent",[""])[0]
             try:
@@ -278,7 +489,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if p=="/todo/attach":return self.json({"ok":True,"target":target,"base":base,"direct":direct,"agent":aid})
                 return self.page("terminal.html",head)
             except Exception:return self.json({"ok":False,"error":"invalid_agent"},400)
-        if p=="/todo/wall":return self.json(wall_data(),head=head)
         if p=="/todo/terminal-graph":return self.json(wall_data(True),head=head)
         self.json({"error":"not_found"},404,head=head)
     def read_body(self):
@@ -294,7 +504,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return None
     def do_POST(self):
         p=urllib.parse.urlparse(self.path).path
-        if p in ("/agents","/roster","/clients","/revive") or p.startswith("/dashboard"):return self.proxy_hud(False)
+        if p in ("/agents","/roster","/clients","/kill","/revive","/switch") or p.startswith("/dashboard"):return self.proxy_hud(False)
         kind=self.auth_kind()
         if not kind:return self.json({"ok":False,"error":"unauthorized"},401)
         try:body,raw=self.read_body()
@@ -302,16 +512,181 @@ class Handler(http.server.BaseHTTPRequestHandler):
         guard=self.nw_guard(kind,body)
         if guard:return self.json(guard[1],guard[0])
         if p=="/todo/update":return self.update(kind,body)
+        if p=="/todo/memory-canary":return self.memory_canary(kind,body)
+        if p=="/todo/publication-approval":return self.publication_approval(kind,body)
+        if p=="/todo/memory-comparison":return self.memory_comparison(kind,body,self.client_address[0])
         if p=="/todo/comment":return self.comment(kind,body)
         if p=="/todo/status":return self.status(kind,body)
+        if p=="/todo/monitor-event":return self.monitor_event(kind,body)
         if p=="/todo/proof":return self.proof(kind,body,raw)
         if p=="/todo/owner":return self.owner(kind,body)
         if p=="/nightwatch/inbound":return self.inbound(kind,body)
         if p=="/nightwatch/outbound":return self.outbound(kind,body)
         self.json({"error":"not_found"},404)
+    def monitor_event(self,kind,d):
+        if kind!="machine":return self.json({"ok":False,"error":"machine_only"},403)
+        tid=str(d.get("task_id","") or ""); event=str(d.get("event","") or "")
+        if event not in {"complete","fail","stop","activity","heartbeat"}:return self.json({"ok":False,"error":"invalid_monitor_event"},400)
+        with STORE_LOCK:
+            b=load_board();t=b["tasks"].get(tid)
+            if not t:return self.json({"ok":False,"error":"unknown_task"},404)
+            if t.get("state") in TERMINAL or t.get("ownerNeedsReplacement"):return self.json({"ok":True,"ignored":"terminal_or_replacement"})
+            queued=queue_fleet(t,event)
+            return self.json({"ok":True,"queued":queued,"monitorState":t.get("monitorState"),"monitorAction":t.get("monitorAction")})
+    def publication_approval(self,kind,body):
+        if kind!="browser" or body.get("by")!="CEO":
+            return self.json({"ok":False,"error":"ceo_approval_required"},403)
+        if set(body)-{"op","approvalId","by"} or body.get("op") not in {"approve","reject"}:
+            return self.json({"ok":False,"error":"invalid_publication_approval"},400)
+        try:
+            fn=approve_publication_request if body["op"]=="approve" else reject_publication_request
+            record=fn(str(body["approvalId"]),"CEO")
+        except (PublisherError,ValueError) as error:
+            return self.json({"ok":False,"error":str(error)},400)
+        return self.json({"ok":True,"status":record.get("status"),"approvalId":record.get("approvalId")})
+    def memory_comparison(self,kind,d,client_host=None):
+        if not MEMORY_COMPARISON_ENABLED:
+            return self.json({"ok":False,"error":"memory_comparison_disabled"},403)
+        if kind!="machine":
+            return self.json({"ok":False,"error":"memory_comparison_internal_only"},403)
+        if str(client_host or "") not in {"127.0.0.1","::1","::ffff:127.0.0.1"}:
+            return self.json({"ok":False,"error":"memory_comparison_localhost_only"},403)
+        if not isinstance(d,dict):
+            return self.json({"ok":False,"error":"invalid_memory_comparison_request"},400)
+        op=str(d.get("op") or "")
+        schemas={
+            "initialize":({"op","run_id","cases","fixture_sha256","offline_digest"},{"op","run_id","cases","fixture_sha256","offline_digest"}),
+            "status":({"op","run_id"},{"op","run_id"}),
+            "abort":({"op","run_id","code"},{"op","run_id"}),
+            "start_arm":({"op","run_id","case_alias","arm","worker_id","card_id","conversation_id"},{"op","run_id","case_alias","arm","worker_id","card_id","conversation_id"}),
+            "submit_result":({"op","run_id","case_alias","arm","result"},{"op","run_id","case_alias","arm","result"}),
+            "cleanup":({"op","run_id","evidence"},{"op","run_id","evidence"}),
+            "complete_pair":({"op","run_id","case_alias"},{"op","run_id","case_alias"}),
+            "complete_run":({"op","run_id"},{"op","run_id"}),
+            "summary":({"op","run_id"},{"op","run_id"}),
+        }
+        schema=schemas.get(op)
+        if not schema or not schema[1].issubset(d) or not set(d).issubset(schema[0]):
+            return self.json({"ok":False,"error":"invalid_memory_comparison_request"},400)
+        runtime_dir=MEMORY_COMPARISON_RUNTIME_DIR
+        try:
+            if op=="initialize":
+                memory_comparison_runtime.start_run(
+                    runtime_dir,run_id=d["run_id"],cases=d["cases"],
+                    fixture_sha256=d["fixture_sha256"],
+                )
+                memory_comparison_runtime.record_offline_qualification(
+                    runtime_dir,run_id=d["run_id"],
+                    logical_digest=d["offline_digest"],passed=True,
+                )
+            elif op=="start_arm":
+                task=(load_board().get("tasks") or {}).get(str(d["card_id"]))
+                marker=((task or {}).get("experiment") or {}).get("memory_comparison") or {}
+                if (
+                    not isinstance(task,dict)
+                    or task.get("test") is not True
+                    or marker.get("experiment_id")!=d["run_id"]
+                    or marker.get("case_alias")!=d["case_alias"]
+                    or marker.get("arm")!=d["arm"]
+                ):
+                    return self.json({"ok":False,"error":"memory_comparison_card_required"},400)
+                memory_comparison_runtime.start_arm(
+                    runtime_dir,run_id=d["run_id"],case_alias=d["case_alias"],
+                    arm=d["arm"],worker_id=d["worker_id"],card_id=d["card_id"],
+                    conversation_id=d["conversation_id"],
+                )
+            elif op=="submit_result":
+                memory_comparison_runtime.record_arm_result(
+                    runtime_dir,run_id=d["run_id"],case_alias=d["case_alias"],
+                    arm=d["arm"],result=d["result"],
+                )
+            elif op=="cleanup":
+                memory_comparison_runtime.record_cleanup(
+                    runtime_dir,run_id=d["run_id"],evidence=d["evidence"],
+                )
+            elif op=="complete_pair":
+                memory_comparison_runtime.complete_pair(
+                    runtime_dir,run_id=d["run_id"],case_alias=d["case_alias"],
+                )
+            elif op=="complete_run":
+                memory_comparison_runtime.complete_run(runtime_dir,run_id=d["run_id"])
+            elif op=="abort":
+                memory_comparison_runtime.abort_run(
+                    runtime_dir,run_id=d["run_id"],
+                    code=d.get("code","operator_abort"),
+                )
+            summary=memory_comparison_runtime.build_public_summary(runtime_dir,d["run_id"])
+        except memory_comparison_runtime.MemoryComparisonError as error:
+            status=404 if error.code=="run_not_found" else 409 if error.code in {
+                "run_exists","run_aborted","run_completed","arm_already_active",
+                "cleanup_required","arm_order_violation","resource_reuse",
+                "pair_completion_order","run_completion_order",
+            } else 400
+            return self.json({"ok":False,"error":error.code},status)
+        key="summary" if op=="summary" else "status"
+        return self.json({"ok":True,key:summary})
+    def memory_canary(self,kind,d):
+        if kind not in ("browser","machine"):
+            return self.json({"ok":False,"error":"memory_canary_control_forbidden"},403)
+        op=str(d.get("op") or "")
+        runtime_dir=os.path.realpath(os.path.join(ROOT,"run"))
+        if op=="disable":
+            try:control=set_memory_canary_control(runtime_dir,enabled=False)
+            except MemoryCanaryError as error:
+                return self.json({"ok":False,"error":error.code},400)
+            return self.json({"ok":True,"control":{
+                "enabled":control.get("mode", "manual_canary" if control.get("enabled") else "off")!="off",
+                "mode":control.get("mode", "manual_canary" if control.get("enabled") else "off"),
+                "allowedProjects":control["allowedProjects"],
+                "revision":control["revision"],
+            }})
+        task_id=str(d.get("taskId") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",task_id):
+            return self.json({"ok":False,"error":"invalid_task_id"},400)
+        task=(load_board().get("tasks") or {}).get(task_id)
+        if not isinstance(task,dict) or task.get("memoryCanary") is not True:
+            return self.json({"ok":False,"error":"memory_canary_task_required"},400)
+        if op in ("run","retry_without_memory"):
+            suffix=" --without-memory" if op=="retry_without_memory" else ""
+            instruction=(
+                f"[memory canary:{op}] Dispatch the existing card through normal "
+                f"Codex owner routing. Use mp spawn <agent_id> --backend codex "
+                f"--boss {BOSS_FULL} --owner-task {task_id}{suffix}. Do not create "
+                "or replace the card."
+            )
+            if mp_send(BOSS_FULL,instruction,label="MEMORY_CANARY") != 0:
+                return self.json({"ok":False,"error":"boss_unavailable"},502)
+            return self.json({"ok":True,"operation":op,"taskId":task_id})
+        if op=="assess":
+            try:
+                assessment,rationale=validate_canary_assessment(
+                    d.get("assessment"),d.get("rationale")
+                )
+                receipt=latest_memory_canary_receipt(runtime_dir,task_id)
+                if not isinstance(receipt,dict):
+                    raise MemoryCanaryError("canary_attempt_missing")
+                append_memory_canary_receipt(runtime_dir,{
+                    "schemaVersion":1,
+                    "eventType":"assessment",
+                    "attemptId":receipt["attemptId"],
+                    "taskId":task_id,
+                    "assessment":assessment,
+                    "rationale":rationale,
+                    "assessedAt":time.time(),
+                })
+            except ValueError as error:
+                return self.json({"ok":False,"error":str(error)},400)
+            except (KeyError,MemoryCanaryError) as error:
+                code=getattr(error,"code","canary_attempt_missing")
+                return self.json({"ok":False,"error":code},400)
+            return self.json({"ok":True,"assessment":assessment})
+        return self.json({"ok":False,"error":"invalid_memory_canary_operation"},400)
     def update(self,kind,d):
         op=d.get("op")
         if any(k in d for k in ("parent","dependsOn","hardGate")) or op=="reorder":return self.json({"ok":False,"error":"unsupported_removed_feature"},400)
+        if "memoryComparison" in d:return self.json({"ok":False,"error":"invalid_memory_comparison"},400)
+        if "experiment" in d and op!="add":return self.json({"ok":False,"error":"memory_comparison_immutable"},400)
+        if "memoryCanary" in d and kind not in ("browser","machine"):return self.json({"ok":False,"error":"memory_canary_control_forbidden"},403)
         if kind=="nightwatch" and op=="add":
             token=d.get("token","");item=TOKENS.get(token)
             if not item or item["used"] or item["expires"]<time.time() or item["text"]!=d.get("text",""):return self.json({"ok":False,"error":"nightwatch_cannot_create"},403)
@@ -329,7 +704,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 title=str(d.get("text","")).strip();is_test=bool(d.get("test"));policy=d.get("evidencePolicy","optional" if is_test else "required")
                 if not title:return self.json({"ok":False,"error":"text_required"},400)
                 if policy not in ("required","optional"):return self.json({"ok":False,"error":"invalid_evidence_policy"},400)
-                tid=secrets.token_hex(8);t=normalize_task({"id":tid,"text":title,"state":"needs_brainstorm","projectSlug":project_slug,"contextQuestion":context_question,"evidencePolicy":policy,"test":is_test,"created":time.time(),"updated":time.time()});b["tasks"][tid]=t;b["order"].insert(0,tid)
+                try:memory_canary=validate_memory_canary(d.get("memoryCanary",False),project_slug,context_question)
+                except ValueError as e:return self.json({"ok":False,"error":str(e)},400)
+                try:experiment=validate_memory_comparison(d.get("experiment"),kind,project_slug,context_question,memory_canary,d.get("test"))
+                except MemoryComparisonAccessError as e:return self.json({"ok":False,"error":str(e)},403)
+                except ValueError as e:return self.json({"ok":False,"error":str(e)},400)
+                if experiment:
+                    marker=experiment["memory_comparison"];identity=(marker["experiment_id"],marker["case_alias"],marker["arm"])
+                    for existing in b["tasks"].values():
+                        prior=(existing.get("experiment") or {}).get("memory_comparison") or {}
+                        if (prior.get("experiment_id"),prior.get("case_alias"),prior.get("arm"))==identity:return self.json({"ok":False,"error":"duplicate_memory_comparison_card"},409)
+                tid=secrets.token_hex(8);payload={"id":tid,"text":title,"state":"needs_brainstorm","projectSlug":project_slug,"contextQuestion":context_question,"memoryCanary":memory_canary,"evidencePolicy":policy,"test":is_test,"created":time.time(),"updated":time.time()}
+                if experiment:payload["experiment"]=experiment
+                t=normalize_task(payload);b["tasks"][tid]=t;b["order"].insert(0,tid)
                 if not t["test"]:fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": added",d.get("by",d.get("actor","CEO")))
             elif tid not in b["tasks"]:return self.json({"ok":False,"error":"unknown_task"},404)
             elif op=="del":b["tasks"].pop(tid);b["order"]=[x for x in b["order"] if x!=tid]
@@ -348,15 +735,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 verified=transition_verified(old,desired,d.get("verified"),t.get("verified",False))
                 probe={**t,"evidencePolicy":policy};err=done_transition_error(probe,desired,verified)
                 if err:return self.json({"ok":False,"error":err},409)
+                next_project=project_slug if project_slug is not None else t.get("projectSlug","")
+                next_question=context_question if context_question is not None else t.get("contextQuestion","")
+                next_memory=d.get("memoryCanary",t.get("memoryCanary",False))
+                try:next_memory=validate_memory_canary(next_memory,next_project,next_question)
+                except ValueError as e:return self.json({"ok":False,"error":str(e)},400)
                 t["state"]=desired;t["evidencePolicy"]=policy
                 for k in ("text","doneCondition","workToDone"):
                     if k in d:t[k]=d[k]
                 if project_slug is not None:t["projectSlug"]=project_slug
                 if context_question is not None:t["contextQuestion"]=context_question
+                t["memoryCanary"]=next_memory
                 t["verified"]=verified
                 t["updated"]=time.time();self.close_reopen(t,old,desired,d.get("by",d.get("actor","")))
                 if old!=desired and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {desired}",d.get("by",d.get("actor","")))
             else:return self.json({"ok":False,"error":"invalid_op"},400)
+            if op=="set":queue_fleet(t,"card_state")
             if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
             return self.json({"ok":True,"id":tid})
     def close_reopen(self,t,old,new,by):
@@ -381,7 +775,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if by=="CEO" and t.get("assignee") and not t.get("ownerNeedsReplacement"):
                     # The Boss remains authoritative; this explicit owner detail makes same-owner routing deterministic.
                     append_log(f"OWNER_ROUTE {tid} -> {t['assignee']}")
-            save_board(b);return self.json({"ok":True,"comment":c})
+            queue_fleet(t,"worker_handoff" if text.startswith("Worker handoff") else "comment");save_board(b);return self.json({"ok":True,"comment":c})
     def status(self,kind,d):
         if kind=="nightwatch" and d.get("state")=="done":return self.json({"ok":False,"error":"nightwatch_cannot_done"},403)
         tid=d.get("task_id",d.get("id",""));state=d.get("state")
@@ -393,8 +787,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.json({"ok":False,"error":"stale_task_version"},409)
             old=t["state"];verified=transition_verified(old,state,d.get("verified"),t.get("verified",False));err=done_transition_error(t,state,verified)
             if err:return self.json({"ok":False,"error":err},409)
-            t["state"]=state;t["verified"]=verified;t["updated"]=time.time();self.close_reopen(t,old,state,d.get("by",d.get("actor","")));save_board(b)
+            t["state"]=state;t["verified"]=verified;t["updated"]=time.time();self.close_reopen(t,old,state,d.get("by",d.get("actor","")))
             if old!=state and not t.get("test"):fanout(t,f"[todo] task {tid} \"{safe_title(t)}\": {old} -> {state}",d.get("by",d.get("actor","")))
+            queue_fleet(t,"card_state")
+            save_board(b)
             return self.json({"ok":True})
     def proof(self,kind,d,raw):
         filename="";ctype="";content=None
@@ -404,6 +800,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if item is not None and getattr(item,"file",None):filename=os.path.basename(item.filename or "upload");ctype=item.type or "";content=item.file.read()
         tid=str(d.get("task_id","") or "");url=str(d.get("url","") or "");body=str(d.get("body","") or "");by=str(d.get("by","") or "")
         if content is None and not body.strip() and not url.strip():return self.json({"ok":False,"error":"evidence_required"},400)
+        if content is None and url.strip():
+            validation=validate_evidence_url(url)
+            if not validation.get("ok"):return self.json(validation,400)
         with STORE_LOCK:
             b=load_board();t=b["tasks"].get(tid)
             if not t:return self.json({"ok":False,"error":"unknown_task"},404)
@@ -411,6 +810,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 ext=os.path.splitext(filename)[1].lower() or mimetypes.guess_extension(ctype) or ".bin";name=secrets.token_hex(10)+ext;directory=os.path.join(PROOFS_DIR,tid);os.makedirs(directory,exist_ok=True)
                 with open(os.path.join(directory,name),"wb") as handle:handle.write(content)
                 url=f"/todo/proof/{urllib.parse.quote(tid)}/{urllib.parse.quote(name)}"
+            if not content and not body and url and not is_explicit_http_url(url):body=url;url=""
             k=classify_media(d.get("kind"),url,filename,ctype);audit=content if content is not None else (body or url).encode()
             label=filename or (os.path.basename(urllib.parse.urlparse(url).path) if url else ("evidence.txt" if k=="text" else "reference.url"))
             meta=proof_metadata(audit,label,ctype or ("text/plain" if k=="text" else "text/uri-list" if k=="link" else "application/octet-stream"),by)
@@ -437,6 +837,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if t.get("state") in ("needs_brainstorm","review"):
                 t["state"]="working";t["verified"]=False
             t["ownerHistory"].append(owner_event(action,aid,prev if prev!=aid else "",BOSS_FULL));t["updated"]=time.time()
+            queue_fleet(t,"owner_assigned")
             if not save_board(b):return self.json({"ok":False,"error":"catastrophic_shrink_quarantined"},409)
             return self.json({"ok":True,"assignee":aid,"previous":prev,"state":t["state"]})
     def inbound(self,kind,d):

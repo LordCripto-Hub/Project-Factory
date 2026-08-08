@@ -11,13 +11,15 @@
   <!--
   THESIS: This is a live command canvas, not a generic dashboard; operational truth appears before decoration.
   OWN-WORLD: Obsidian and charcoal surfaces, brass actions, jade health, ember risk, and terminal evidence with quiet depth.
-  STORY: Rafa can identify ownership, health, evidence, and the next terminal action in one glance.
+  STORY: The operator can identify ownership, health, evidence, and the next terminal action in one glance.
   FIRST VIEWPORT: Identity and health sit in the top bar; Boss/Nightwatch and their terminal previews own the canvas; tools remain discoverable.
   FORM: Established-world refinement, chosen for clarity and low operational risk; seed key: impeccable-graph-polish.
   FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
   -->
   <header class="graph-topbar">
     <a class="graph-brand" href="/">MyPeople</a>
+    <a class="graph-nav-link" href="/terminal-graph">Graph</a>
+    <a class="graph-nav-link" href="/dashboard">HUD</a>
     <nav class="graph-views" aria-label="Graph views">
       <button class="active" data-view="graph">Graph</button>
       <button data-view="mission">Mission</button>
@@ -227,5 +229,6 @@
   applyWorld();setInterval(poll,2500);poll().then(()=>{fit();const id=new URL(location.href).searchParams.get('task');if(id)openCard(id,false)});
   window.__graph={agentNodes,taskNodes,get graph(){return graph},get transform(){return transform},poll,fit,centerBoss};
   </script>
+  <script src="/assets/visual-viewport.js"></script>
 </body>
 </html>

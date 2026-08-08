@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static regression contract for active MyPeople visual surfaces."""
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,13 +24,13 @@ class ActiveSurfaceVisualContract(unittest.TestCase):
         self.assertIn("canvasToolbar", html)
 
     def test_shared_theme_has_keyboard_focus_and_reduced_motion_guards(self):
-        compact = self.css.replace(" ", "")
+        compact = re.sub(r"\s+", "", self.css)
         self.assertIn("button:focus-visible", compact)
         self.assertIn("@media(prefers-reduced-motion:reduce)", compact)
         self.assertIn("scroll-behavior:auto", compact)
 
     def test_semantic_surface_and_state_contract_is_present(self):
-        compact = self.css.replace(" ", "")
+        compact = re.sub(r"\s+", "", self.css)
         for marker in ("--surface-0:var(--soot)", "--text-primary:var(--bone)", "--state-working:var(--ember)", "--state-done:var(--jade)"):
             self.assertIn(marker, compact)
 
