@@ -159,6 +159,19 @@ def geometry():
     except Exception:pass
     return out
 
+def graph_role(agent_id,row):
+    if row.get("is_master"):return "boss"
+    if agent_id==NW_AGENT or agent_id.endswith(":Nightwatch"):return "nightwatch"
+    return "worker"
+
+def graph_card_kind(task):
+    state=task.get("state")
+    if state=="blocked":return "BLOCKED"
+    if state=="review":return "REVIEW"
+    if state=="done":return "DELIVERED"
+    if task.get("proofs"):return "EVIDENCE"
+    return "PRIORITY"
+
 def wall_data(graph=False):
     agents=queue_get("/agents");rr=roster_map();geo=geometry();rows=[]
     for a in agents:
@@ -167,13 +180,13 @@ def wall_data(graph=False):
         if a.get("host")==HOST_ID and a.get("tmux_target") not in geo:continue
         status=a.get("status","idle");display=status if status in ("starting","working","idle","blocked") else "idle"
         cols,lines=geo.get(a["tmux_target"],(120,36))
-        rows.append({"agent_id":a["agent_id"],"boss_id":a.get("boss_id",""),"is_master":bool(a.get("is_master")),"target":a["tmux_target"],"tmux_target":a["tmux_target"],"state":display,"host":a.get("host"),"cols":cols,"rows":lines,"read_port":int(ENV.get("TTYD_RO_PORT","7682")),"write_port":int(ENV.get("TTYD_PORT","7681"))})
+        rows.append({"agent_id":a["agent_id"],"boss_id":a.get("boss_id",""),"is_master":bool(a.get("is_master")),"role":graph_role(a["agent_id"],a),"target":a["tmux_target"],"tmux_target":a["tmux_target"],"state":display,"status":status,"summary":a.get("summary","") or r.get("summary",""),"backend":a.get("backend","") or r.get("backend",""),"host":a.get("host"),"cols":cols,"rows":lines,"read_port":int(ENV.get("TTYD_RO_PORT","7682")),"write_port":int(ENV.get("TTYD_PORT","7681"))})
     rows.sort(key=lambda x:(x["state"]!="working",not x["is_master"],x["agent_id"]))
     if not graph:return rows
-    live={x["agent_id"] for x in rows};edges=[{"parent":x["boss_id"],"child":x["agent_id"]} for x in rows if x["boss_id"] in live]
+    live={x["agent_id"] for x in rows};roles={x["agent_id"]:x["role"] for x in rows};edges=[{"parent":x["boss_id"],"child":x["agent_id"],"kind":"OBSERVES" if roles.get(x["agent_id"])=="nightwatch" else "ASSIGNS"} for x in rows if x["boss_id"] in live]
     b=load_board();tasks=[]
     for tid in ordered_ids(b):
-        t=b["tasks"][tid];owner=t.get("assignee","");tasks.append({"id":tid,"title":t.get("text",""),"state":t.get("state"),"assignee":owner,"owner_live":owner in live,"archived":t.get("state") in TERMINAL,"pinned":bool(t.get("pinned")),"updated":t.get("updated",0),"href":"/terminal-graph?task="+urllib.parse.quote(tid)})
+        t=b["tasks"][tid];owner=t.get("assignee","");tasks.append({"id":tid,"title":t.get("text",""),"state":t.get("state"),"card_kind":graph_card_kind(t),"assignee":owner,"owner_live":owner in live,"archived":t.get("state") in TERMINAL,"pinned":bool(t.get("pinned")),"updated":t.get("updated",0),"proof_count":len(t.get("proofs") or []),"evidence_policy":t.get("evidencePolicy","optional"),"done_condition":t.get("doneCondition",""),"project_slug":t.get("projectSlug",""),"href":"/terminal-graph?task="+urllib.parse.quote(tid)})
     return {"agents":rows,"edges":edges,"tasks":tasks,"states":sorted(VALID_STATES)}
 
 def idle_watch():
@@ -232,8 +245,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def route_get(self,head=False):
         u=urllib.parse.urlparse(self.path);p=u.path
         if p=="/favicon.ico":return self.send_bytes(b"",204,"image/x-icon",head=head)
-        if p=="/health":return self.json({"status":"ok","uptime":int(time.time()-START),"build":max((int(os.path.getmtime(os.path.join(ROOT,"bin",x))) for x in ("todos.html","mypeople-ui.css") if os.path.exists(os.path.join(ROOT,"bin",x))),default=0)},head=head)
+        if p=="/health":return self.json({"status":"ok","uptime":int(time.time()-START),"build":max((int(os.path.getmtime(os.path.join(ROOT,"bin",x))) for x in ("todos.html","mypeople-ui.css","graph-canvas.css","terminal-graph.html") if os.path.exists(os.path.join(ROOT,"bin",x))),default=0)},head=head)
         if p=="/assets/mypeople-ui.css":return self.asset("mypeople-ui.css","text/css; charset=utf-8",head)
+        if p=="/assets/graph-canvas.css":return self.asset("graph-canvas.css","text/css; charset=utf-8",head)
         if p in ("/","/todos"):return self.page("todos.html",head)
         if p=="/wall":return self.page("wall.html",head)
         if p=="/terminal-graph":return self.page("terminal-graph.html",head)

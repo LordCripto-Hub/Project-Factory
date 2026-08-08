@@ -6,6 +6,8 @@ MyPeople remains an execution and coordination plane. It does not duplicate a kn
 
 The rule is simple: one capability, one owner.
 
+The Terminal Graph Command Canvas is a projection/controller over that same state. It derives roles, typed ownership edges, task card categories, and evidence counts from the roster and board endpoints. Canvas positions, layer filters, and camera state are local UI preferences only. The canvas deliberately does not introduce a graph database, collaboration runtime, rooms, invitations, presence, chat, or external agents.
+
 | Capability | Owner |
 |---|---|
 | Project source and configuration | Git |

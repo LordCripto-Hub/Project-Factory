@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MyPeople · Runtime Design Contract</title>
+  <link rel="stylesheet" href="../../bin/mypeople-ui.css">
+  <style>
+    /* Documentation-only layout. Palette and component styling come from the runtime stylesheet. */
+    body{margin:0;padding:32px;min-width:320px}
+    .catalog{max-width:1180px;margin:0 auto}
+    .catalog-head{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:28px}
+    .catalog-kicker{font:700 11px var(--font-code);letter-spacing:.16em;text-transform:uppercase;color:var(--gold)}
+    .catalog-subtitle{max-width:640px;color:var(--text-secondary);line-height:1.55}
+    .catalog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+    .catalog-section{padding:20px;border:1px solid var(--border-subtle);background:var(--surface-1);border-radius:var(--radius-lg)}
+    .catalog-section h2{margin:0 0 16px;color:var(--text-primary);font:700 18px var(--font-display)}
+    .token-row{display:flex;flex-wrap:wrap;gap:10px}
+    .swatch{display:grid;gap:6px;min-width:112px;font:10px var(--font-code);color:var(--text-secondary)}
+    .swatch i{display:block;height:34px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);background:var(--surface-2)}
+    .swatch .soot{background:var(--surface-0)}.swatch .armor{background:var(--surface-2)}.swatch .gold{background:var(--gold)}.swatch .ember{background:var(--state-working)}.swatch .jade{background:var(--state-done)}.swatch .crimson{background:var(--state-blocked)}
+    .component-stack{display:grid;gap:12px}
+    .agent-tile{padding:14px;border:1px solid var(--border-strong);background:var(--surface-2);border-radius:var(--radius-md)}
+    .agent-head{display:flex;justify-content:space-between;gap:12px;font:700 12px var(--font-code)}
+    .agent-meta{margin-top:8px;color:var(--text-secondary);font:11px var(--font-code)}
+    .catalog-note{margin-top:18px;padding:12px 14px;border-left:2px solid var(--border-focus);color:var(--text-secondary);font:12px var(--font-code);line-height:1.5}
+    @media(max-width:760px){body{padding:16px}.catalog-head{display:block}.catalog-grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <main class="catalog">
+    <header class="catalog-head">
+      <div>
+        <div class="catalog-kicker">MyPeople · Runtime contract</div>
+        <h1>Scorpion component catalog</h1>
+      </div>
+      <p class="catalog-subtitle">This page is documentation rendered with the same stylesheet used by Priorities, HUD and Graph. It is not a new runtime, design framework or data source.</p>
+    </header>
+
+    <div class="catalog-grid">
+      <section class="catalog-section">
+        <h2>Foundation tokens</h2>
+        <div class="token-row">
+          <span class="swatch"><i class="soot"></i>surface-0</span>
+          <span class="swatch"><i class="armor"></i>surface-2</span>
+          <span class="swatch"><i class="gold"></i>gold / focus</span>
+          <span class="swatch"><i class="ember"></i>working</span>
+          <span class="swatch"><i class="jade"></i>done</span>
+          <span class="swatch"><i class="crimson"></i>blocked</span>
+        </div>
+      </section>
+
+      <section class="catalog-section">
+        <h2>Status badges</h2>
+        <div class="token-row">
+          <span class="status working">working</span>
+          <span class="status ready">authenticated</span>
+          <span class="status blocked">blocked</span>
+          <span class="status idle">idle</span>
+        </div>
+      </section>
+
+      <section class="catalog-section">
+        <h2>Task card</h2>
+        <div class="component-stack">
+          <article class="task" data-state="working">
+            <div class="task-top"><button class="check" aria-label="task incomplete"></button><div class="task-main"><div class="task-text">Consolidate shared design tokens across active surfaces</div><div class="meta"><span class="status working">working</span><span class="asg-tag">PROJECT-FACTORY</span><span class="ping">Boss · 2 comments</span></div></div><button class="pin" aria-label="pin task">☆</button></div>
+          </article>
+          <div class="viewbar"><span class="vb-label">show</span><button class="vbtn active">all</button><button class="vbtn">review</button><button class="vbtn">done</button></div>
+        </div>
+      </section>
+
+      <section class="catalog-section">
+        <h2>Evidence card</h2>
+        <article class="evidence-card">
+          <div class="evidence-meta"><span>proof-file</span><span>sha256 verified</span><span>image</span></div>
+          <a class="evidence-file" href="#"><strong>terminal-graph.png</strong><span>visual smoke evidence</span></a>
+          <div class="evidence-tools"><button type="button">Open</button><button type="button">Copy proof path</button></div>
+        </article>
+      </section>
+
+      <section class="catalog-section">
+        <h2>Agent tile / HUD</h2>
+        <article class="agent-tile">
+          <div class="agent-head"><span><span class="live-dot"></span> node-1/main:Boss</span><span class="status ready">authenticated</span></div>
+          <div class="agent-meta">backend codex · model gpt-5.6-sol · session active</div>
+          <div class="evidence-tools"><a class="attach" href="#">Attach terminal</a><button class="copy" type="button">Copy spawn</button></div>
+        </article>
+      </section>
+
+      <section class="catalog-section">
+        <h2>Navigation / actions</h2>
+        <div class="component-stack">
+          <div class="catalog-note">Board is the source of truth. HUD observes agents. Graph visualizes relationships. Terminal opens the existing tmux session. These surfaces share tokens but do not duplicate state.</div>
+          <div class="evidence-tools"><a class="btn-volt" href="#">Create priority</a><button class="revive" type="button">Revive</button><button class="copy" type="button">Copy</button></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
