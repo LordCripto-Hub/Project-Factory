@@ -1,54 +1,61 @@
-# MyPeople Command Canvas — Estado y handoff
+# MyPeople Command Canvas — Status and Handoff
 
-Fecha: 2026-08-02  
-Rama: `codex/graph-command-canvas`  
-Base: `main` en `18996bc`  
-Remoto: `https://github.com/LordCripto-Hub/Project-Factory.git`
+Date: 2026-08-02
+Branch: `codex/graph-command-canvas`
+Base: `main` at `18996bc`
+Remote: `https://github.com/LordCripto-Hub/Project-Factory.git`
 
-## Resumen ejecutivo
+## Executive summary
 
-El Command Canvas está implementado como una evolución de `/terminal-graph` dentro del modelo actual de MyPeople. No introduce usuarios externos, agentes externos, rooms, chat, presencia, una base de datos de grafos ni un runtime paralelo.
+The Command Canvas is an evolution of `/terminal-graph` within the current
+MyPeople model. It introduces no external users, external agents, rooms, chat,
+presence, graph database, or parallel runtime.
 
-Estado actual: **listo para revisión e integración controlada; no declarado todavía como release de producción**.
+Current status: **ready for controlled review and integration; not yet a
+production release**.
 
-La implementación mantiene las fuentes de verdad existentes:
+Existing sources of truth remain authoritative:
 
-- roster y estado de agentes de MyPeople;
-- board/tareas, comentarios, proofs y TaskSpec;
-- terminales y rutas same-origin existentes;
-- preferencias locales del navegador únicamente para cámara, capas y posiciones.
+- MyPeople agent roster and runtime state;
+- board tasks, comments, proofs, and TaskSpec;
+- existing same-origin terminal routes and wrappers;
+- browser-local preferences for camera, layers, and positions only.
 
-## Qué se construyó
+## What was built
 
-### Proyección semántica
+### Semantic projection
 
-`bin/todo-server.py` enriquece la respuesta del grafo sin romper los campos existentes:
+`bin/todo-server.py` enriches the graph response without breaking existing
+fields:
 
-- roles derivados: `boss`, `nightwatch`, `worker`;
-- telemetría de agente: `summary`, `backend`, `status`;
-- edges tipados: `ASSIGNS` y `OBSERVES`;
-- categorías visuales de tarea: `PRIORITY`, `EVIDENCE`, `REVIEW`, `BLOCKED`, `DELIVERED`;
-- `proof_count`, `evidence_policy`, `done_condition` y `project_slug`.
+- derived roles: `boss`, `nightwatch`, and `worker`;
+- agent telemetry: `summary`, `backend`, and `status`;
+- typed edges: `ASSIGNS` and `OBSERVES`;
+- visual task categories: `PRIORITY`, `EVIDENCE`, `REVIEW`, `BLOCKED`, and
+  `DELIVERED`;
+- `proof_count`, `evidence_policy`, `done_condition`, and `project_slug`.
 
 ### Canvas
 
-`bin/terminal-graph.html` ahora contiene:
+`bin/terminal-graph.html` now contains:
 
-- rail superior con vistas `Graph`, `Mission`, `Fleet`, `Attention` y `Execution`;
-- jerarquía visual Boss → Nightwatch → workers → tareas/evidencia;
-- conectores SVG con tipo semántico;
-- inspector de agente/tarea;
-- filtros `Agents`, `Tasks`, `Evidence`, `Decisions` y `Terminals`;
-- minimapa;
-- cámara y layout local persistentes;
-- creación y edición de tareas mediante las rutas canónicas existentes;
-- previews de terminal conservando los enlaces y wrappers anteriores.
+- a top rail with `Graph`, `Mission`, `Fleet`, `Attention`, and `Execution`
+  views;
+- a Boss → Nightwatch → workers → tasks/evidence hierarchy;
+- semantic SVG connectors;
+- an agent/task inspector;
+- `Agents`, `Tasks`, `Evidence`, `Decisions`, and `Terminals` filters;
+- a minimap;
+- locally persistent camera and layout preferences;
+- task creation and editing through existing canonical routes;
+- terminal previews that preserve the previous links and wrappers.
 
-`bin/graph-canvas.css` concentra el tratamiento visual del canvas y reutiliza los tokens de `bin/mypeople-ui.css`.
+`bin/graph-canvas.css` centralizes the canvas treatment and reuses the tokens
+from `bin/mypeople-ui.css`.
 
-## Evidencia verificada
+## Verified evidence
 
-Ejecutado en el worktree aislado:
+Executed in the isolated worktree:
 
 ```text
 python -m unittest verify.test_graph_projection verify.test_graph_command_canvas verify.test_priorities_terminal_popup verify.test_scorpion_theme -v
@@ -61,41 +68,55 @@ Graph stable: 267.357421875x249.4859619140625x262.49639892578125x157.49780273437
 
 git diff --check
 clean
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\\verify\\Invoke-IsolatedVerify.ps1 -Image mypeople-node:command-canvas-228cc76
+Isolated MyPeople verification passed.
 ```
 
-También se verificó que el script embebido del grafo parsea correctamente y que la inspección visual contiene Boss, Nightwatch, worker, tarea, inspector, capas, minimapa y toolbar.
+The embedded graph script parses correctly, and the visual contract contains
+Boss, Nightwatch, worker, task, inspector, layers, minimap, and toolbar.
 
-## Límites conocidos
+## Known limits
 
-1. El verificador aislado completo depende de Docker y todavía no se ejecutó en esta máquina porque Docker Desktop no estaba disponible.
-2. No se validó todavía un ciclo live de migración, backup, restore y rollback del contenedor.
-3. El botón `Connect` es una interacción visual de selección; no persiste relaciones nuevas porque MyPeople no tiene una mutación canónica de edges.
-4. Cámara, capas y posiciones son preferencias locales y no forman parte del estado operativo.
-5. La prueba de navegador protege contratos y geometría estable, pero falta una matriz larga con 0, 1 y muchos workers bajo polling continuo.
-6. El canvas no contiene conceptos de colaboración multiusuario ni agentes externos por decisión de alcance.
+1. The complete isolated verifier now passes against the reviewed candidate
+   image `mypeople-node:command-canvas-228cc76`; it must never target the live
+   container.
+2. A live migration, backup, restore, and rollback cycle has not been performed
+   for this branch.
+3. `Connect` is a visual selection interaction; it does not persist new
+   relationships because MyPeople has no canonical edge-mutation route.
+4. Camera, layers, and positions are browser-local preferences, not operational
+   state.
+5. The browser test protects contracts and stable geometry, but a longer matrix
+   with zero, one, and many workers under continuous polling remains required.
+6. The canvas deliberately contains no multi-user collaboration concepts or
+   external agents.
 
-## Handoff para el agente supervisor de `main`
+## Handoff for the `main` supervisor
 
-### Estado de Git
+### Git state
 
-Commits de esta rama:
+Commits on this branch:
 
 - `21aece7 feat: build mypeople command canvas`
 - `ca17b46 chore: clean canvas docs whitespace`
 
-El worktree está limpio. `main` no fue modificado.
+The worktree is clean. `main` has not been modified.
 
-### Orden recomendado de integración
+### Recommended integration order
 
-1. Revisar este documento, `docs/superpowers/specs/2026-08-02-mypeople-graph-command-canvas-design.md` y `docs/superpowers/plans/2026-08-02-mypeople-graph-command-canvas.md`.
-2. Ejecutar los tests focalizados y el test Node desde el worktree.
-3. Levantar una instancia de verificación aislada con una imagen revisada; no probar contra el contenedor live.
-4. Revisar manualmente `/terminal-graph` en estados de cero, uno y varios workers.
-5. Verificar que el modal de tarea, comentarios, proofs, estado y terminales siguen usando las rutas existentes.
-6. Crear PR desde `codex/graph-command-canvas` hacia `main`.
-7. Hacer merge solo después de la revisión del agente supervisor y de la suite aislada.
+1. Review this document, the Command Canvas design specification, and its
+   implementation plan.
+2. Run the focused tests and the Node test from this worktree.
+3. Start an isolated verification instance with a reviewed image; do not test
+   against the live `mypeople` container.
+4. Manually review `/terminal-graph` with zero, one, and multiple workers.
+5. Verify that the task modal, comments, proofs, status, and terminals still
+   use existing routes.
+6. Open a pull request from `codex/graph-command-canvas` to `main`.
+7. Merge only after supervisor review and the isolated suite pass.
 
-### Comandos sugeridos
+### Suggested commands
 
 ```bash
 python -m unittest verify.test_graph_projection verify.test_graph_command_canvas verify.test_priorities_terminal_popup verify.test_scorpion_theme -v
@@ -104,20 +125,26 @@ node verify/test_terminal_views.js
 git diff --check
 ```
 
-Para la validación completa, seguir el flujo documentado en `verify/Invoke-IsolatedVerify.ps1` o `verify/verify.sh` con una imagen local revisada. No ejecutar `docker compose down -v` ni apuntar el verificador al estado live.
+For complete validation, follow `verify/Invoke-IsolatedVerify.ps1` or
+`verify/verify.sh` with a reviewed local image. Do not run `docker compose down
+-v` or point the verifier at live state.
 
-## Criterio de aceptación para integrar
+## Integration acceptance criteria
 
-El agente supervisor puede integrar cuando se cumplan estas condiciones:
+The supervisor may integrate when:
 
-- los tests focalizados y la suite aislada pasan;
-- no aparecen errores de consola ni regresiones en Wall, Priorities, Dashboard o Terminal;
-- los terminales mantienen su geometría durante polling;
-- la tarea seleccionada muestra owner, estado, done condition, proyecto y proofs;
-- las capas solo filtran la proyección y no mutan board/roster;
-- no se introduce un segundo store de grafo ni conceptos de Colmeia;
-- la revisión visual confirma legibilidad con 0, 1 y muchos workers.
+- focused tests and the isolated suite pass;
+- no console errors or regressions appear in Wall, Priorities, Dashboard, or
+  Terminal;
+- terminals preserve their geometry during polling;
+- the selected task shows owner, status, done condition, project, and proofs;
+- layers only filter the projection and do not mutate the board or roster;
+- no second graph store or Colmeia runtime is introduced;
+- visual review confirms legibility with zero, one, and many workers.
 
-## Decisión de release
+## Release decision
 
-El Command Canvas puede entrar en una **alpha privada** después de la verificación aislada y el PR. No debe presentarse todavía como una capacidad multiusuario ni como un producto Colmeia independiente: es una superficie visual avanzada sobre el runtime local de MyPeople.
+After isolated verification and the pull request, the Command Canvas may enter
+a **private alpha**. It must not yet be presented as a multi-user capability or
+as an independent Colmeia product: it is an advanced visual surface over the
+local MyPeople runtime.

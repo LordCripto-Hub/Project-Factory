@@ -21,6 +21,7 @@ class PublicRepositoryContract(unittest.TestCase):
         self.assertEqual(
             names,
             {
+                "COMMAND-CANVAS-STATUS.md",
                 "MINIMAL-ARCHITECTURE.md",
                 "UPSTREAM-MYPEOPLE-REVIEW.md",
                 "USER-MANUAL.md",
