@@ -75,6 +75,29 @@ class GraphCommandCanvasContract(unittest.TestCase):
         self.assertIn('p=="/assets/graph-canvas.css"', self.server)
         self.assertIn('graph-canvas.css', self.server)
 
+    def test_impeccable_direction_contract_is_embedded_in_the_surface(self):
+        for marker in (
+            "THESIS:",
+            "OWN-WORLD:",
+            "FIRST VIEWPORT:",
+            "impeccable-graph-polish",
+            "unreviewed and undocumented is unfinished",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.html)
+
+    def test_graph_polish_uses_thin_rules_and_scoped_depth_tokens(self):
+        self.assertNotIn("border-left:4px", self.graph_css)
+        self.assertNotIn("border-left:4px", self.graph_css.replace(" ", ""))
+        for marker in (
+            "--graph-panel",
+            "--graph-shadow",
+            "border-radius:12px",
+            "prefers-reduced-motion",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.graph_css)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
