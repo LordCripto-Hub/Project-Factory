@@ -29,9 +29,15 @@ aliases while they are being migrated, but new UI should use the semantic names.
 | --- | --- | --- |
 | Task card | `todos.html` / Priorities | state changes, comments, evidence, CEO review |
 | Evidence card | task modal and proof viewer | uploads, hashes, metadata, proof links |
-| Agent tile | `dashboard.html`, `wall.html`, Graph nodes | readiness, provider health, attach and terminal actions |
+| Agent tile | `dashboard.html`, Graph nodes | readiness, provider health, attach and terminal actions |
 | Viewbar | shared page navigation | Board, Graph, HUD, Fleet and terminal links |
 | Buttons and badges | shared controls | focus behavior, action endpoints and status semantics |
+
+`wall.html` is retained only as a legacy compatibility route for existing
+links and smoke tests. It is not an active product surface and is explicitly
+out of scope for the next visual migration. Its eventual removal requires a
+separate deprecation pass that updates the server, navigation, tests, and
+manual together.
 
 The external static gallery may be copied here in a later documentation phase,
 but it must consume this stylesheet instead of defining another palette inline.
