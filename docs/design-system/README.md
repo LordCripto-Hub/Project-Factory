@@ -43,3 +43,10 @@ The external static gallery may be copied here in a later documentation phase,
 but it must consume this stylesheet instead of defining another palette inline.
 It must never replace the task server, the Graph canvas, or the existing evidence
 and agent behavior.
+
+## Local catalog
+
+Open [`catalog.html`](./catalog.html) to inspect the runtime component contract.
+The catalog uses `../../bin/mypeople-ui.css` directly and keeps only layout rules
+local to the documentation page. Its examples are representative markup, not
+mock state and not an alternate implementation.
