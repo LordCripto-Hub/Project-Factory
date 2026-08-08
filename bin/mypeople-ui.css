@@ -11,3 +11,16 @@
 
 /* Design-system contract: semantic names map to the existing Scorpion palette. */
 html{--surface-0:var(--soot);--surface-1:var(--charcoal);--surface-2:var(--armor);--surface-3:rgba(244,240,223,.09);--text-primary:var(--bone);--text-secondary:var(--ash);--text-tertiary:rgba(157,151,136,.74);--text-inverse:var(--soot);--border-subtle:var(--panel-line);--border-strong:var(--gold-line);--border-focus:var(--gold);--control-bg:var(--armor);--control-bg-hover:var(--surface-3);--state-brainstorm:var(--info);--state-working:var(--ember);--state-review:var(--iris);--state-blocked:var(--crimson);--state-done:var(--jade);--state-cancelled:var(--ash);--font-display:var(--serif);--font-body:var(--sans);--font-code:var(--mono);--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--space-6:32px;--radius-sm:4px;--radius-md:10px;--radius-lg:16px;--shadow-panel:0 14px 34px rgba(0,0,0,.28);--shadow-focus:0 0 0 3px var(--gold-dim)}
+
+/* Active-surface migration: Board and HUD consume semantic tokens first. */
+body{background:var(--surface-0)!important;color:var(--text-primary)!important;font-family:var(--font-body)!important}
+h1,h2,.task-text,.modal-title{font-family:var(--font-display)!important}
+.brand,.top{border-left-color:var(--border-focus)!important}
+.subt,.meta,.vb-label,th,.cmd,.empty,.owner-line{color:var(--text-secondary)!important}
+.task,.tile,.panel,section{background-color:var(--surface-1)!important;border-color:var(--border-subtle)!important}
+.task:hover{border-color:var(--border-strong)!important}
+.addbar input,.composer textarea,.details input,.details select,.iconbtn,.thread-wrap{background:var(--control-bg)!important;border-color:var(--border-subtle)!important}
+button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline-color:var(--border-focus)!important;box-shadow:var(--shadow-focus)!important}
+.status.working,.st-working{color:var(--state-working)!important}.status.blocked,.st-blocked{color:var(--state-blocked)!important}.status.ready,.st-done,.check.on{color:var(--state-done)!important}.st-review{color:var(--state-review)!important}.st-cancelled{color:var(--state-cancelled)!important}
+.status.working{background:rgba(255,138,31,.16)!important}.status.blocked{background:rgba(220,73,63,.16)!important}.status.ready,.st-done{background:rgba(103,178,121,.16)!important}
+.status.idle{color:var(--text-secondary)!important;background:var(--surface-3)!important}

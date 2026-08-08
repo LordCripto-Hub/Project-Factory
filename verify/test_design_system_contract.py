@@ -34,6 +34,19 @@ class DesignSystemContract(unittest.TestCase):
         self.assertIn("not a second runtime", self.docs)
         self.assertIn("external static gallery", self.docs)
 
+    def test_active_surfaces_consume_semantic_tokens(self):
+        for marker in (
+            "body{background:var(--surface-0)",
+            ".task,.tile,.panel,section{background-color:var(--surface-1)",
+            ".status.working,.st-working{color:var(--state-working)",
+            ".status.blocked,.st-blocked{color:var(--state-blocked)",
+        ):
+            self.assertIn(marker, self.css.replace(" ", ""))
+
+    def test_wall_is_not_part_of_the_active_component_map(self):
+        self.assertNotIn("`wall.html` |", self.docs)
+        self.assertIn("legacy compatibility route", self.docs)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
